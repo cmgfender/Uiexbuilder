@@ -44,7 +44,7 @@ function mockClient(opts: { start?: DeployClient['start']; statuses?: Array<Depl
   const queue = [...(opts.statuses ?? [])];
   const client = {
     start: vi.fn(opts.start ?? (async () => status('building', 1))),
-    status: vi.fn(async () => {
+    status: vi.fn(async (_deployId: string) => {
       const next = queue.shift();
       if (!next) throw new Error('no more statuses');
       if (next instanceof Error) throw next;

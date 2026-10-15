@@ -6,6 +6,8 @@
 import { useEffect, type ReactNode } from 'react';
 import { selectActiveExtension, useEditor } from '../model/store';
 import { RuntimeProvider } from '../runtime';
+import { useConnection } from '../connect';
+import { useLiveAdapter } from '../connect/live';
 import { Canvas } from '../canvas';
 import { CommandPalette } from '../power';
 import { AppSettingsDialog, ExportDialog, ExtensionsDialog, FunctionsDialog, ProjectsDialog } from '../panels';
@@ -30,8 +32,10 @@ function WorkspaceRuntime({ children }: { children: ReactNode }) {
   const extension = useEditor((s) => selectActiveExtension(s));
   const mode = useEditor((s) => s.mode);
   const resetKey = useEditor((s) => s.previewResetKey);
+  // Real HubSpot data for the preview (null = mock data).
+  const live = useLiveAdapter();
   return (
-    <RuntimeProvider project={project} extension={extension} mode={mode} resetKey={resetKey}>
+    <RuntimeProvider project={project} extension={extension} mode={mode} resetKey={resetKey} live={live}>
       {children}
     </RuntimeProvider>
   );
@@ -86,6 +90,10 @@ function ShellServices() {
   useBootSettled();
   useProblemsSync();
   useEffect(() => watchCompactLayout(), []);
+  // Is a HubSpot connector available here, and is the user signed in? (once per page)
+  useEffect(() => {
+    void useConnection.getState().init();
+  }, []);
   return null;
 }
 

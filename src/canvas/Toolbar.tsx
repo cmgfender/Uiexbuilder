@@ -9,6 +9,7 @@ import { selectActiveExtension, useEditor, type EditorState } from '../model/sto
 import { useRuntime } from '../runtime';
 import { getComponent } from '../registry';
 import { Button, IconButton, Menu, Switch, cx, useMenu } from '../ui';
+import { PreviewDataNote, RecordPicker } from '../connect/ui';
 import { ancestorChain, displayLabel } from './nodeActions';
 import { MAX_ZOOM, MIN_ZOOM, ZOOM_PRESETS, nextZoom, useCanvasView } from './stores';
 
@@ -103,7 +104,7 @@ function PreviewBanner() {
     <div className="ub-cv-preview-banner">
       <span className="ub-cv-preview-banner__text" role="status">
         <span className="ub-cv-live-dot" aria-hidden />
-        <strong>Preview</strong> — interactions run with mock data
+        <strong>Preview</strong> — <PreviewDataNote />
       </span>
       <Button
         size="sm"
@@ -189,6 +190,7 @@ export const CanvasToolbar = memo(function CanvasToolbar() {
     <div className={cx('ub-cv-toolbar', mode === 'preview' && 'ub-cv-toolbar--preview')} role="toolbar" aria-label="Canvas toolbar">
       {mode === 'preview' ? <PreviewBanner /> : <Breadcrumbs />}
       <div className="ub-cv-toolbar__right">
+        <RecordPicker />
         <ChromeToggle />
         <span className="ub-cv-toolbar__divider" aria-hidden />
         <ZoomControl />

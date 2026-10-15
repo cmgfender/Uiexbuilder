@@ -54,6 +54,7 @@ import { useProblems } from './problems';
 import { isLeftCollapsed, openBottomTab, setLeftSidebarOpen, toggleBottomPanel, useShell } from './shellStore';
 import { saveNow, shortcutLabel } from './shortcuts';
 import { openCommandPalette as openPowerPalette } from '../power/uiStore';
+import { ConnectButton } from '../connect/ui';
 
 export function LogoMark({ size = 24 }: { size?: number }) {
   return (
@@ -95,6 +96,7 @@ export function TopBar() {
         <ProjectMenu />
         <HelpMenu />
         <PanelToggles />
+        <ConnectButton />
         <Button variant="primary" icon={<Package size={14} />} onClick={() => useDialogs.getState().open('export')} title={`Export HubSpot project (${shortcutLabel('export')})`}>
           Export
         </Button>
