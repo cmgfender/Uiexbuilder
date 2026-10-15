@@ -1,3 +1,287 @@
+/*
+ * Layout group previews: Flex, Box, Inline, AutoGrid, Tile, Divider, Spacer, Accordion, Tabs, Tab.
+ * Tokens come from src/preview/hubspot.css (--hsp-*). Every selector is scoped to an hsp- class.
+ */
+
+/* ---- Flex / Box / Inline / AutoGrid ---------------------------------------------------------- */
 .hsp-flex {
   min-width: 0;
+}
+
+.hsp-box {
+  min-width: 0;
+}
+
+/* Note: `.hsp-inline` is a Text modifier (text.css); the Inline component uses `.hsp-inline-row`. */
+.hsp-inline-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.hsp-autogrid {
+  display: grid;
+  min-width: 0;
+}
+
+/* ---- Tile ------------------------------------------------------------------------------------ */
+.hsp-tile {
+  min-width: 0;
+  padding: 20px;
+  background: var(--hsp-bg);
+  border: 1px solid var(--hsp-border);
+  border-radius: var(--hsp-radius);
+}
+.hsp-tile.hsp-tile--compact {
+  padding: 12px;
+}
+.hsp-tile.hsp-tile--flush {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* ---- Divider / Spacer ------------------------------------------------------------------------ */
+.hsp-divider {
+  width: 100%;
+}
+.hsp-divider-line {
+  height: 0;
+  border-top: 1px solid var(--hsp-border);
+}
+
+.hsp-spacer {
+  width: 100%;
+  flex-shrink: 0;
+}
+/* Designer-only hint so an otherwise invisible spacer can be seen and selected. */
+.hsp-spacer.hsp-spacer--design {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(124, 152, 182, 0.18) 0,
+    rgba(124, 152, 182, 0.18) 2px,
+    transparent 2px,
+    transparent 6px
+  );
+}
+
+/* ---- Accordion ------------------------------------------------------------------------------- */
+.hsp-accordion {
+  min-width: 0;
+}
+.hsp-accordion-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 0;
+  color: var(--hsp-link);
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  border-radius: var(--hsp-radius);
+  outline: none;
+}
+.hsp-accordion-header:hover {
+  color: var(--hsp-link-hover);
+}
+.hsp-accordion-header:focus-visible {
+  box-shadow: 0 0 0 2px rgba(0, 164, 189, 0.35);
+}
+.hsp-accordion-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: var(--hsp-radius);
+  transition: transform 0.15s ease;
+}
+.hsp-accordion--open .hsp-accordion-caret {
+  transform: rotate(90deg);
+}
+.hsp-accordion-caret.hsp-accordion-caret--toggle {
+  cursor: pointer;
+}
+.hsp-accordion-caret.hsp-accordion-caret--toggle:hover {
+  background: var(--hsp-bg-medium);
+}
+.hsp-accordion-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hsp-accordion-title.hsp-accordion-title--empty {
+  color: var(--hsp-text-light);
+  font-style: italic;
+}
+.hsp-accordion--extra-small .hsp-accordion-header {
+  font-size: 12px;
+  line-height: 18px;
+}
+.hsp-accordion--small .hsp-accordion-header {
+  font-size: 14px;
+  line-height: 22px;
+}
+.hsp-accordion--medium .hsp-accordion-header {
+  font-size: 16px;
+  line-height: 24px;
+}
+.hsp-accordion--disabled .hsp-accordion-header {
+  color: var(--hsp-text-light);
+  cursor: not-allowed;
+}
+.hsp-accordion-body {
+  padding: 8px 0 4px 20px;
+}
+.hsp-accordion--extra-small .hsp-accordion-body {
+  padding-left: 18px;
+}
+.hsp-accordion--medium .hsp-accordion-body {
+  padding-left: 22px;
+}
+.hsp-accordion-body[hidden] {
+  display: none !important;
+}
+
+/* ---- Tabs ------------------------------------------------------------------------------------ */
+.hsp-tabs {
+  min-width: 0;
+}
+.hsp-tabs-list {
+  display: flex;
+  align-items: flex-end;
+  min-width: 0;
+  border-bottom: 1px solid var(--hsp-border-light);
+}
+.hsp-tabs-trigger {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 8px 16px;
+  margin-bottom: -1px;
+  color: var(--hsp-text-muted);
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 20px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 3px solid transparent;
+  outline: none;
+  transition: color 0.15s, border-color 0.15s, background-color 0.15s;
+}
+.hsp-tabs-trigger:hover {
+  color: var(--hsp-text);
+}
+.hsp-tabs-trigger:focus-visible {
+  box-shadow: inset 0 0 0 2px rgba(0, 164, 189, 0.35);
+}
+.hsp-tabs-trigger.hsp-tabs-trigger--active {
+  color: var(--hsp-text);
+  border-bottom-color: var(--hsp-text);
+}
+.hsp-tabs-trigger.hsp-tabs-trigger--disabled {
+  color: var(--hsp-text-light);
+  cursor: not-allowed;
+}
+.hsp-tabs-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hsp-tabs-label.hsp-tabs-label--untitled {
+  font-style: italic;
+  font-weight: 400;
+}
+.hsp-tabs--fill .hsp-tabs-trigger {
+  flex: 1 1 0;
+}
+.hsp-tabs--default .hsp-tabs-panels {
+  padding-top: var(--hsp-space-md);
+}
+
+/* Enclosed variant: tabs are boxes; the selected one merges into the bordered content panel. */
+.hsp-tabs--enclosed .hsp-tabs-list {
+  gap: 4px;
+  border-bottom: 1px solid var(--hsp-border);
+}
+.hsp-tabs--enclosed .hsp-tabs-trigger {
+  padding: 8px 16px;
+  background: var(--hsp-bg-medium);
+  border: 1px solid var(--hsp-border);
+  border-bottom: 1px solid transparent;
+  border-radius: var(--hsp-radius) var(--hsp-radius) 0 0;
+}
+.hsp-tabs--enclosed .hsp-tabs-trigger:hover {
+  background: var(--hsp-bg-light);
+}
+.hsp-tabs--enclosed .hsp-tabs-trigger.hsp-tabs-trigger--active {
+  z-index: 1;
+  background: var(--hsp-bg);
+  border-bottom-color: var(--hsp-bg);
+}
+.hsp-tabs--enclosed .hsp-tabs-trigger.hsp-tabs-trigger--disabled {
+  background: var(--hsp-bg-light);
+}
+.hsp-tabs--enclosed .hsp-tabs-panels {
+  padding: var(--hsp-space-md);
+  background: var(--hsp-bg);
+  border: 1px solid var(--hsp-border);
+  border-top: none;
+  border-radius: 0 0 var(--hsp-radius) var(--hsp-radius);
+}
+
+/* Tab tooltip (shown on hover / keyboard focus of the tab). */
+.hsp-tabs-tip {
+  position: absolute;
+  z-index: 5;
+  padding: 4px 8px;
+  max-width: 240px;
+  width: max-content;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  white-space: normal;
+  text-align: center;
+  color: #ffffff;
+  background: var(--hsp-text);
+  border-radius: var(--hsp-radius);
+  box-shadow: var(--hsp-shadow);
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.hsp-tabs-trigger:hover > .hsp-tabs-tip,
+.hsp-tabs-trigger:focus-visible > .hsp-tabs-tip {
+  visibility: visible;
+  opacity: 1;
+}
+.hsp-tabs-tip.hsp-tabs-tip--top {
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+.hsp-tabs-tip.hsp-tabs-tip--bottom {
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+.hsp-tabs-tip.hsp-tabs-tip--left {
+  right: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+.hsp-tabs-tip.hsp-tabs-tip--right {
+  left: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.hsp-tab-panel {
+  min-width: 0;
+}
+.hsp-tab-panel[hidden] {
+  display: none !important;
 }

@@ -1,26 +1,14 @@
 /**
- * Code generation public API (implementation in this folder).
+ * Code generation public API.
  *
  * generateExtensionSource(project, ext) -> TSX source of one extension (card/settings/home)
  * generateProjectFiles(project)          -> every file of the HubSpot project (paths relative to project root)
- * buildProjectZip(project)               -> zip Blob of generateProjectFiles + builder document
+ * buildProjectZip(project)               -> zip Blob of generateProjectFiles (includes the builder document)
+ * deriveRequirements(project)            -> scopes / permitted URLs the extensions need
+ * formatSource(code, filePath)           -> prettier-formatted code (lazy-loaded), for export / code view
  */
-import type { Extension, Project } from '../model/types';
-
-export interface GeneratedFile {
-  /** POSIX path relative to the project root, e.g. "src/app/cards/MyCard.tsx". */
-  path: string;
-  contents: string;
-}
-
-export function generateExtensionSource(_project: Project, _ext: Extension): string {
-  throw new Error('codegen not implemented yet');
-}
-
-export function generateProjectFiles(_project: Project): GeneratedFile[] {
-  throw new Error('codegen not implemented yet');
-}
-
-export async function buildProjectZip(_project: Project): Promise<Blob> {
-  throw new Error('codegen not implemented yet');
-}
+export { generateExtensionSource } from './extension';
+export { generateProjectFiles, planExtensionFiles, type GeneratedFile, type ExtensionFiles } from './project';
+export { buildProjectZip, formattedProjectFiles, zipRootFolder, type ZipOptions } from './zip';
+export { deriveRequirements, scopeForObjectType, staticOrigin, type ProjectRequirements } from './requirements';
+export { formatSource, parserForPath } from './format';

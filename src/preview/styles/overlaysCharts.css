@@ -1,0 +1,403 @@
+/*
+ * Overlays & charts previews (src/registry/components/overlaysCharts.tsx): Modal, ModalBody,
+ * ModalFooter, Panel, PanelBody, PanelSection, PanelFooter, BarChart, LineChart.
+ *
+ * Overlays have two presentations:
+ *   .hsp-overlay-inline  static dialog / sheet in normal flow (designer storyboard)
+ *   .hsp-overlay-open    real overlay inside .hsp-overlay-host (.hsp-overlay-layer fills the host
+ *                        with position:absolute; inset:0 — never position:fixed)
+ */
+
+/* ------------------------------------------------------------------ Shared overlay chrome */
+.hsp-modal,
+.hsp-panel {
+  --hsp-overlay-header-bg: #00a4bd;
+  --hsp-overlay-header-text: #ffffff;
+
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
+  background: var(--hsp-bg);
+  color: var(--hsp-text);
+  outline: none;
+}
+.hsp-modal.hsp-modal-danger {
+  --hsp-overlay-header-bg: var(--hsp-danger);
+}
+
+.hsp-overlay-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: none;
+  min-height: 64px;
+  padding: 16px 20px 16px 24px;
+  background: var(--hsp-overlay-header-bg);
+  color: var(--hsp-overlay-header-text);
+}
+.hsp-overlay-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 500;
+  color: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hsp-panel .hsp-overlay-title {
+  font-size: 18px;
+  line-height: 26px;
+}
+.hsp-overlay-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: var(--hsp-radius);
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+button.hsp-overlay-close:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+button.hsp-overlay-close:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 1px;
+}
+
+/* Scrollable content area holding body + footer (or a Form that wraps them). */
+.hsp-overlay-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.hsp-overlay-open .hsp-overlay-content {
+  overflow: auto;
+}
+/* HubSpot's "form in an overlay" pattern: Form > Body + Footer keeps the sticky footer layout. */
+.hsp-overlay-content > [data-node-type='Form'] {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+  min-height: 0;
+}
+
+/* Vertical rhythm between stacked children of bodies / sections. */
+.hsp-overlay-stack.hsp-overlay-stack > * + * {
+  margin-top: 12px;
+}
+
+/* Footer: actions in a row, left aligned (HubSpot: primary first, then secondary). */
+.hsp-overlay-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  margin-top: auto;
+  padding: 16px 24px;
+  background: var(--hsp-bg-light);
+  border-top: 1px solid var(--hsp-border-light);
+}
+.hsp-overlay-open .hsp-overlay-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+}
+
+/* ---------------------------------------------------------------------------- Modal */
+.hsp-modal {
+  width: 500px;
+  border-radius: var(--hsp-radius-lg);
+  box-shadow: var(--hsp-shadow-lg);
+  overflow: hidden;
+}
+.hsp-modal.hsp-modal-medium {
+  width: 700px;
+}
+.hsp-modal.hsp-modal-large {
+  width: 900px;
+}
+.hsp-modal-body {
+  flex: 1 0 auto;
+  min-width: 0;
+  padding: 24px;
+}
+
+/* ---------------------------------------------------------------------------- Panel */
+.hsp-panel {
+  width: 400px;
+  box-shadow: var(--hsp-shadow-lg);
+}
+.hsp-panel.hsp-panel-medium {
+  width: 560px;
+}
+.hsp-panel.hsp-panel-large {
+  width: 760px;
+}
+.hsp-panel.hsp-overlay-inline {
+  min-height: 240px;
+  border: 1px solid var(--hsp-border-light);
+  border-radius: var(--hsp-radius-lg) 0 0 var(--hsp-radius-lg);
+  overflow: hidden;
+}
+.hsp-panel-body {
+  flex: 1 0 auto;
+  min-width: 0;
+  padding: 24px;
+}
+.hsp-panel-section {
+  min-width: 0;
+  margin-bottom: 24px;
+}
+.hsp-panel-section.hsp-panel-section-flush,
+.hsp-panel-section:last-child {
+  margin-bottom: 0;
+}
+
+/* ------------------------------------------------------------------ Open overlays */
+.hsp-overlay-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  overflow: hidden;
+}
+.hsp-overlay-layer.hsp-overlay-backdrop {
+  background: rgba(45, 62, 80, 0.65);
+  animation: hsp-overlay-fade 0.18s ease-out;
+}
+.hsp-modal-layer {
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+}
+.hsp-modal.hsp-overlay-open {
+  max-height: 100%;
+  animation: hsp-modal-in 0.18s ease-out;
+}
+/* A default (non-modal) panel leaves the page usable: only the sheet catches pointer events. */
+.hsp-panel-layer {
+  justify-content: flex-end;
+  pointer-events: none;
+}
+.hsp-panel-layer.hsp-overlay-backdrop {
+  pointer-events: auto;
+}
+.hsp-panel.hsp-overlay-open {
+  height: 100%;
+  pointer-events: auto;
+  border-left: 1px solid var(--hsp-border-light);
+  animation: hsp-panel-in 0.18s ease-out;
+}
+
+@keyframes hsp-overlay-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes hsp-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes hsp-panel-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hsp-overlay-layer.hsp-overlay-backdrop,
+  .hsp-modal.hsp-overlay-open,
+  .hsp-panel.hsp-overlay-open {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------- Charts */
+.hsp-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+.hsp-chart-title {
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+  color: var(--hsp-text);
+}
+.hsp-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--hsp-text);
+}
+.hsp-chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.hsp-chart-swatch {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+.hsp-chart-swatch.hsp-chart-swatch-line {
+  width: 16px;
+  height: 3px;
+  border-radius: 2px;
+}
+/*
+ * The SVG is drawn at the plot's measured pixel width. Inline-size containment keeps that SVG from
+ * feeding back into the container's intrinsic width (so charts shrink inside flex / grid layouts).
+ */
+.hsp-chart-plot {
+  position: relative;
+  width: 100%;
+  min-width: 200px;
+  contain: inline-size;
+}
+.hsp-chart-svg {
+  display: block;
+  overflow: visible;
+  font-family: var(--hsp-font);
+}
+.hsp-chart-grid line {
+  stroke: var(--hsp-border-light);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+.hsp-chart-grid line.hsp-chart-zero,
+.hsp-chart-baseline {
+  stroke: var(--hsp-border);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+.hsp-chart-axis-labels text {
+  font-size: 12px;
+  fill: var(--hsp-text-muted);
+}
+.hsp-chart-axis-titles text {
+  font-size: 12px;
+  font-weight: 600;
+  fill: var(--hsp-text);
+}
+.hsp-chart-bar {
+  transition: opacity 0.12s;
+}
+.hsp-chart-plot:has(.hsp-chart-bar:hover) .hsp-chart-bar:not(:hover) {
+  opacity: 0.75;
+}
+.hsp-chart-line {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.hsp-chart-area {
+  opacity: 0.18;
+}
+.hsp-chart-point {
+  stroke: #ffffff;
+  stroke-width: 1.5;
+}
+.hsp-chart-hit {
+  fill: transparent;
+  cursor: pointer;
+}
+.hsp-chart-data-label {
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--hsp-text);
+  pointer-events: none;
+}
+.hsp-chart-tooltip {
+  position: absolute;
+  z-index: 2;
+  min-width: 120px;
+  max-width: 240px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--hsp-text);
+  background: var(--hsp-bg);
+  border: 1px solid var(--hsp-border);
+  border-radius: var(--hsp-radius);
+  box-shadow: var(--hsp-shadow);
+  transform: translate(-50%, calc(-100% - 10px));
+  pointer-events: none;
+  white-space: nowrap;
+}
+.hsp-chart-tooltip-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hsp-chart-tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.hsp-chart-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px;
+  text-align: center;
+  background: var(--hsp-bg-light);
+  border: 1px dashed var(--hsp-border);
+  border-radius: var(--hsp-radius);
+}
+.hsp-chart-empty-art {
+  margin-bottom: 4px;
+}
+.hsp-chart-empty-art line {
+  stroke: var(--hsp-border);
+  stroke-width: 2;
+}
+.hsp-chart-empty-art rect {
+  fill: var(--hsp-border-light);
+}
+.hsp-chart-empty-title {
+  font-weight: 600;
+  color: var(--hsp-text);
+}
+.hsp-chart-empty-detail {
+  max-width: 420px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--hsp-text-muted);
+}

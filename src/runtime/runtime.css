@@ -1,0 +1,246 @@
+/*
+ * Preview runtime chrome (src/runtime): overlay host layer, alerts, iframe modal, tooltip bubble,
+ * design-mode drop placeholders and node error boxes. All classes use the `hsp-rt-` prefix and the
+ * --hsp-* tokens from src/preview/hubspot.css (with fallbacks when rendered outside .hsp-root).
+ */
+
+/* ------------------------------------------------------------------ Overlay host layer */
+.hsp-overlay-host.hsp-rt-host {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  overflow: hidden;
+  /* The layer never blocks the card; interactive children opt back in below. */
+  pointer-events: none;
+}
+/* Open Modals (and backdrop Panels) block the card like in HubSpot; default Panels manage their
+   own pointer events (overlaysCharts.css). */
+.hsp-rt-host > .hsp-modal-layer,
+.hsp-rt-host > .hsp-overlay-backdrop {
+  pointer-events: auto;
+}
+
+/* ------------------------------------------------------------------ Alerts */
+.hsp-rt-alerts {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+.hsp-rt-alert {
+  --hsp-rt-alert-accent: var(--hsp-info, #00a4bd);
+  --hsp-rt-alert-bg: var(--hsp-info-bg, #e5f5f8);
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px 10px 14px;
+  border: 1px solid var(--hsp-rt-alert-accent);
+  border-left-width: 4px;
+  border-radius: var(--hsp-radius, 3px);
+  background: var(--hsp-rt-alert-bg);
+  color: var(--hsp-text, #33475b);
+  font-family: var(--hsp-font, 'Lexend Deca', Helvetica, Arial, sans-serif);
+  font-size: 14px;
+  line-height: 20px;
+  box-shadow: var(--hsp-shadow, 0 1px 5px rgba(45, 62, 80, 0.12));
+  pointer-events: auto;
+  animation: hsp-rt-alert-in 0.16s ease-out;
+}
+.hsp-rt-alert-success {
+  --hsp-rt-alert-accent: var(--hsp-success, #00bda5);
+  --hsp-rt-alert-bg: var(--hsp-success-bg, #e5f8f6);
+}
+.hsp-rt-alert-warning {
+  --hsp-rt-alert-accent: var(--hsp-warning, #f5c26b);
+  --hsp-rt-alert-bg: var(--hsp-warning-bg, #fef8f0);
+}
+.hsp-rt-alert-danger {
+  --hsp-rt-alert-accent: var(--hsp-danger, #f2545b);
+  --hsp-rt-alert-bg: var(--hsp-danger-bg, #fde8e9);
+}
+.hsp-rt-alert-tip {
+  --hsp-rt-alert-accent: var(--hsp-tip, #7c4dbd);
+  --hsp-rt-alert-bg: var(--hsp-tip-bg, #f6effd);
+}
+.hsp-rt-alert-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.hsp-rt-alert-title {
+  font-weight: 600;
+}
+.hsp-rt-alert-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin: -1px -4px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--hsp-radius, 3px);
+  background: transparent;
+  color: var(--hsp-text-muted, #516f90);
+  cursor: pointer;
+}
+.hsp-rt-alert-dismiss:hover {
+  background: rgba(45, 62, 80, 0.08);
+  color: var(--hsp-text, #33475b);
+}
+@keyframes hsp-rt-alert-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ------------------------------------------------------------------ Iframe modal */
+.hsp-rt-iframe-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(45, 62, 80, 0.65);
+  pointer-events: auto;
+}
+.hsp-rt-iframe-dialog {
+  display: flex;
+  flex-direction: column;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--hsp-radius, 3px);
+  background: var(--hsp-bg, #fff);
+  box-shadow: var(--hsp-shadow-lg, 0 8px 24px rgba(45, 62, 80, 0.2));
+  overflow: hidden;
+  outline: none;
+}
+.hsp-rt-iframe-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  height: 48px;
+  padding: 0 12px 0 20px;
+  background: var(--hsp-info, #00a4bd);
+  color: #fff;
+}
+.hsp-rt-iframe-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+  font-weight: 600;
+}
+.hsp-rt-iframe-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--hsp-radius, 3px);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.hsp-rt-iframe-close:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+.hsp-rt-iframe-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 16px;
+}
+.hsp-rt-iframe-flush .hsp-rt-iframe-body {
+  padding: 0;
+}
+.hsp-rt-iframe {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.hsp-rt-iframe-invalid {
+  margin: auto;
+  max-width: 360px;
+  color: var(--hsp-text-muted, #516f90);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* ------------------------------------------------------------------ Tooltip bubble */
+.hsp-rt-tooltip {
+  position: absolute;
+  z-index: 80;
+  /* Size to the bubble (the Tooltip preview caps its own width) even near the host's edge. */
+  width: max-content;
+  pointer-events: none;
+}
+.hsp-rt-tooltip-top {
+  transform: translate(-50%, -100%);
+}
+.hsp-rt-tooltip-bottom {
+  transform: translate(-50%, 0);
+}
+.hsp-rt-tooltip-left {
+  transform: translate(-100%, -50%);
+}
+.hsp-rt-tooltip-right {
+  transform: translate(0, -50%);
+}
+
+/* ------------------------------------------------------------------ Design-mode helpers */
+.hsp-rt-drop-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px dashed var(--hsp-border, #cbd6e2);
+  border-radius: var(--hsp-radius, 3px);
+  background: rgba(245, 248, 250, 0.6);
+  color: var(--hsp-text-light, #7c98b6);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.hsp-rt-error {
+  padding: 6px 10px;
+  border: 1px solid var(--hsp-danger, #f2545b);
+  border-radius: var(--hsp-radius, 3px);
+  background: var(--hsp-danger-bg, #fde8e9);
+  color: #b3093c;
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+.hsp-rt-error-title {
+  font-weight: 600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hsp-rt-alert {
+    animation: none;
+  }
+}

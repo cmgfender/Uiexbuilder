@@ -1,0 +1,361 @@
+/*
+ * Buttons & links group: Button, LoadingButton, ButtonRow, Dropdown, Dropdown.ButtonItem, Link.
+ * Approximates HubSpot's Canvas buttons: primary = orange fill, secondary = orange outline,
+ * destructive = red fill, transparent = link-like; three sizes (xs 24px, sm 32px, md 40px).
+ */
+
+/* ------------------------------------------------------------------------------------------ */
+/* Button face (shared by Button, LoadingButton, Dropdown button, ButtonRow "More" button)     */
+/* ------------------------------------------------------------------------------------------ */
+
+.hsp-button {
+  --hsp-button-disabled-text: #b0c1d4;
+  --hsp-button-secondary-hover: #fff8f6;
+  --hsp-button-secondary-active: #ffebe6;
+  --hsp-button-destructive-hover: #f47378;
+  --hsp-button-destructive-active: #d94c53;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 11px 24px;
+  font-family: var(--hsp-font);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 16px;
+  text-align: center;
+  text-decoration: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  vertical-align: middle;
+  color: var(--hsp-primary);
+  background: var(--hsp-bg);
+  border: 1px solid transparent;
+  border-radius: var(--hsp-radius);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s;
+}
+.hsp-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 4px 1px rgba(0, 208, 228, 0.3), 0 0 0 1px var(--hsp-info);
+}
+
+/* Sizes: 1px border + vertical padding + line height = 40 / 32 / 24 px. */
+.hsp-button--medium {
+  padding: 11px 24px;
+  font-size: 14px;
+  line-height: 16px;
+}
+.hsp-button--small {
+  padding: 8px 16px;
+  font-size: 12px;
+  line-height: 14px;
+}
+.hsp-button--extra-small {
+  padding: 4px 12px;
+  font-size: 12px;
+  line-height: 14px;
+}
+
+/* Variants */
+.hsp-button--primary {
+  color: #fff;
+  background: var(--hsp-primary);
+  border-color: var(--hsp-primary);
+}
+.hsp-button--interactive.hsp-button--primary:hover {
+  background: var(--hsp-primary-hover);
+  border-color: var(--hsp-primary-hover);
+}
+.hsp-button--interactive.hsp-button--primary:active {
+  background: var(--hsp-primary-active);
+  border-color: var(--hsp-primary-active);
+}
+
+.hsp-button--secondary {
+  color: var(--hsp-primary);
+  background: var(--hsp-bg);
+  border-color: var(--hsp-secondary-border);
+}
+.hsp-button--interactive.hsp-button--secondary:hover {
+  color: var(--hsp-primary-active);
+  background: var(--hsp-button-secondary-hover);
+}
+.hsp-button--interactive.hsp-button--secondary:active {
+  background: var(--hsp-button-secondary-active);
+}
+
+.hsp-button--destructive {
+  color: #fff;
+  background: var(--hsp-danger);
+  border-color: var(--hsp-danger);
+}
+.hsp-button--interactive.hsp-button--destructive:hover {
+  background: var(--hsp-button-destructive-hover);
+  border-color: var(--hsp-button-destructive-hover);
+}
+.hsp-button--interactive.hsp-button--destructive:active {
+  background: var(--hsp-button-destructive-active);
+  border-color: var(--hsp-button-destructive-active);
+}
+
+/* Transparent: renders like a link (no fill, no border, tighter horizontal padding). */
+.hsp-button--transparent {
+  color: var(--hsp-link);
+  background: transparent;
+  border-color: transparent;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+.hsp-button--interactive.hsp-button--transparent:hover {
+  color: var(--hsp-link-hover);
+  text-decoration: underline;
+}
+
+/* Disabled (all variants) */
+.hsp-button--disabled,
+.hsp-button--disabled:hover,
+.hsp-button--disabled:active {
+  color: var(--hsp-button-disabled-text);
+  background: var(--hsp-bg-medium);
+  border-color: var(--hsp-border);
+  cursor: not-allowed;
+  text-decoration: none;
+}
+.hsp-button--transparent.hsp-button--disabled {
+  background: transparent;
+  border-color: transparent;
+}
+
+/* LoadingButton */
+.hsp-button--loading {
+  cursor: progress;
+  opacity: 0.85;
+}
+.hsp-button-spinner {
+  flex: none;
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: hsp-button-spin 0.7s linear infinite;
+}
+@keyframes hsp-button-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.hsp-button-result {
+  flex: none;
+}
+
+/* Label, caret and icons */
+.hsp-button-label {
+  min-width: 0;
+}
+.hsp-button--truncate .hsp-button-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hsp-button-caret {
+  flex: none;
+  margin-right: -4px;
+}
+.hsp-link-external {
+  flex: none;
+  display: inline-block;
+  margin-left: 4px;
+  vertical-align: -1px;
+}
+.hsp-button .hsp-link-external {
+  margin-left: 0;
+}
+
+/* ------------------------------------------------------------------------------------------ */
+/* ButtonRow                                                                                  */
+/* ------------------------------------------------------------------------------------------ */
+
+.hsp-button-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px; /* ROW_GAP in buttons.tsx */
+  width: 100%;
+  min-width: 0;
+}
+.hsp-button-row--wrap {
+  flex-wrap: wrap;
+}
+.hsp-button-row-item {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+.hsp-button-row-more {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+}
+
+/* ------------------------------------------------------------------------------------------ */
+/* Dropdown menus (Dropdown and the ButtonRow overflow menu)                                  */
+/* ------------------------------------------------------------------------------------------ */
+
+.hsp-dropdown {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.hsp-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: max(100%, 160px);
+  max-width: 320px;
+  padding: 4px 0;
+  background: var(--hsp-bg);
+  border: 1px solid var(--hsp-border-light);
+  border-radius: var(--hsp-radius);
+  box-shadow: var(--hsp-shadow-lg);
+}
+.hsp-dropdown-menu[hidden] {
+  display: none;
+}
+.hsp-dropdown-menu--left {
+  left: 0;
+}
+.hsp-dropdown-menu--right {
+  right: 0;
+}
+
+/* Design mode: the menu is drawn in flow under the button, framed, so items can be edited. */
+.hsp-dropdown-menu--design {
+  position: static;
+  min-width: 180px;
+  margin-top: 4px;
+  background: var(--hsp-bg-light);
+  border: 1px dashed var(--hsp-border);
+  box-shadow: none;
+}
+.hsp-dropdown-caption {
+  padding: 0 12px 2px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--hsp-text-light);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+
+/* Dropdown.ButtonItem */
+.hsp-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: 0;
+  padding: 8px 16px;
+  font-family: var(--hsp-font);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+  color: var(--hsp-text);
+  text-align: left;
+  text-decoration: none;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+}
+.hsp-dropdown-item--interactive:hover,
+.hsp-dropdown-item--interactive:focus-visible {
+  outline: none;
+  background: var(--hsp-bg-medium);
+}
+
+/* Buttons collapsed into the ButtonRow overflow menu render as plain menu items. */
+.hsp-button-row-menu-item {
+  display: flex;
+}
+.hsp-button-row-menu-item > .hsp-dropdown {
+  flex: 1 1 auto;
+  align-items: stretch;
+}
+.hsp-button-row-menu .hsp-button-row-menu-item .hsp-button {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+  text-align: left;
+  color: var(--hsp-text);
+  background: transparent;
+  border-color: transparent;
+  border-radius: 0;
+  text-decoration: none;
+}
+.hsp-button-row-menu .hsp-button-row-menu-item .hsp-button--interactive:hover {
+  color: var(--hsp-text);
+  background: var(--hsp-bg-medium);
+}
+.hsp-button-row-menu .hsp-button-row-menu-item .hsp-button--disabled {
+  color: var(--hsp-button-disabled-text);
+}
+
+/* ------------------------------------------------------------------------------------------ */
+/* Link                                                                                       */
+/* ------------------------------------------------------------------------------------------ */
+
+.hsp-link {
+  color: var(--hsp-link);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.hsp-link--interactive:hover,
+.hsp-link--interactive:focus-visible {
+  color: var(--hsp-link-hover);
+  text-decoration: underline;
+  outline: none;
+}
+.hsp-link--destructive,
+.hsp-link--interactive.hsp-link--destructive:hover {
+  color: var(--hsp-danger);
+}
+.hsp-link--light,
+.hsp-link--interactive.hsp-link--light:hover {
+  color: #fff;
+}
+/* White text is meant for dark backgrounds; give it a dark chip in the designer so it stays visible. */
+.hsp-link--design.hsp-link--light {
+  background: var(--hsp-text-muted);
+  box-shadow: 0 0 0 2px var(--hsp-text-muted);
+  border-radius: 2px;
+}
+.hsp-link--dark,
+.hsp-link--interactive.hsp-link--dark:hover {
+  color: var(--hsp-text);
+}
+
+/* Design-mode placeholder for empty text (Link, Dropdown.ButtonItem). */
+.hsp-buttons-placeholder {
+  color: var(--hsp-text-light);
+  font-style: italic;
+}

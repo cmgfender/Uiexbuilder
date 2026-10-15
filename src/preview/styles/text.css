@@ -1,13 +1,362 @@
+/*
+ * Text & content previews: Text, Heading, Image, Icon, Illustration, List, Tag, StatusTag, Tooltip.
+ * Uses the --hsp-* tokens from src/preview/hubspot.css. Every selector is scoped to an hsp- class.
+ */
+
+/* ---- Text ---------------------------------------------------------------- */
 .hsp-text {
   margin: 0;
+  font-size: 14px;
+  line-height: 24px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+.hsp-text.hsp-microcopy {
+  font-size: 12px;
+  line-height: 18px;
 }
 .hsp-text.hsp-inline {
   display: inline;
 }
 .hsp-text.hsp-truncate {
+  display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.hsp-text.hsp-inline.hsp-truncate {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: bottom;
+}
+
+/* ---- Heading ------------------------------------------------------------- */
+.hsp-heading {
+  margin: 0;
+  font-size: 18px;
+  line-height: 26px;
+  font-weight: 600;
+  color: var(--hsp-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.hsp-heading.hsp-inline {
+  display: inline;
+}
+
+/* ---- Image --------------------------------------------------------------- */
+.hsp-image {
+  display: inline-block;
+  max-width: 100%;
+  line-height: 0;
+  vertical-align: top;
+  color: inherit;
+  text-decoration: none;
+}
+.hsp-image.hsp-clickable {
+  cursor: pointer;
+}
+.hsp-image.hsp-clickable:hover .hsp-image-img {
+  opacity: 0.9;
+}
+.hsp-image-img {
+  display: block;
+  max-width: 100%;
+  border: 0;
+}
+.hsp-image-placeholder {
+  flex-direction: column;
+  gap: 4px;
+  max-width: 100%;
+  padding: 8px;
+  line-height: 18px;
+  text-align: center;
+  overflow: hidden;
+}
+
+/* ---- Icon ---------------------------------------------------------------- */
+.hsp-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 1;
+  vertical-align: -0.125em;
+}
+.hsp-icon > svg {
+  display: block;
+  width: 1em;
+  height: 1em;
+}
+.hsp-icon-inherit {
+  color: inherit;
+}
+.hsp-icon-alert {
+  color: var(--hsp-danger);
+}
+.hsp-icon-warning {
+  color: var(--hsp-warning);
+}
+.hsp-icon-success {
+  color: var(--hsp-success);
+}
+
+/* ---- Illustration -------------------------------------------------------- */
+.hsp-illustration {
+  display: inline-block;
+  max-width: 100%;
+  line-height: 0;
+  vertical-align: top;
+}
+.hsp-illustration > svg {
+  display: block;
+  max-width: 100%;
+}
+
+/* ---- List ----------------------------------------------------------------
+ * Children are the list items (see ListPreview). Markers are drawn with ::before on each child so
+ * that repeated/conditional children each get their own bullet or number. The design-mode drop
+ * placeholder is never treated as an item.
+ */
+.hsp-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: hsp-list-item;
+}
+.hsp-list > * {
+  position: relative;
+}
+.hsp-list-unordered-styled,
+.hsp-list-ordered-styled {
+  gap: 4px;
+  padding-left: 24px;
+}
+.hsp-list-unordered-styled > :not([data-drop-placeholder-for])::before {
+  content: '\2022';
+  position: absolute;
+  top: 0;
+  left: -16px;
+  color: var(--hsp-text);
+  font-weight: 400;
+  font-style: normal;
+}
+.hsp-list-ordered-styled > :not([data-drop-placeholder-for]) {
+  counter-increment: hsp-list-item;
+}
+.hsp-list-ordered-styled > :not([data-drop-placeholder-for])::before {
+  content: counter(hsp-list-item) '.';
+  position: absolute;
+  top: 0;
+  right: 100%;
+  margin-right: 6px;
+  color: var(--hsp-text);
+  font-weight: 400;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  /* Absolutely positioned with right:100% => min-content width; keep "10." on one line. */
+  white-space: nowrap;
+}
+.hsp-list-inline,
+.hsp-list-inline-divided {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.hsp-list-inline {
+  gap: 4px 16px;
+}
+.hsp-list-inline-divided {
+  gap: 4px 25px;
+}
+.hsp-list-inline-divided > :not(:first-child):not([data-drop-placeholder-for])::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: -13px;
+  height: 16px;
+  margin-top: -8px;
+  border-left: 1px solid var(--hsp-border);
+}
+
+/* ---- Tag ----------------------------------------------------------------- */
+.hsp-tag {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 22px;
+  font-weight: 500;
+  color: var(--hsp-text);
+  background: var(--hsp-bg-medium);
+  border: 1px solid var(--hsp-border);
+  border-radius: var(--hsp-radius);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hsp-tag-inline {
+  display: inline-block;
+  vertical-align: middle;
+}
+.hsp-tag-info {
+  background: var(--hsp-info-bg);
+  border-color: var(--hsp-info);
+}
+.hsp-tag-success {
+  background: var(--hsp-success-bg);
+  border-color: var(--hsp-success);
+}
+.hsp-tag-warning {
+  background: var(--hsp-warning-bg);
+  border-color: var(--hsp-warning);
+}
+.hsp-tag-error {
+  background: var(--hsp-danger-bg);
+  border-color: var(--hsp-danger);
+}
+.hsp-tag.hsp-clickable {
+  cursor: pointer;
+}
+.hsp-tag.hsp-clickable:hover {
+  text-decoration: underline;
+  filter: brightness(0.97);
+}
+.hsp-tag.hsp-clickable:focus-visible {
+  outline: 2px solid var(--hsp-info);
+  outline-offset: 1px;
+}
+
+/* ---- StatusTag ----------------------------------------------------------- */
+.hsp-status-tag {
+  --hsp-status-color: var(--hsp-text-light);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--hsp-text);
+  vertical-align: middle;
+}
+.hsp-status-success {
+  --hsp-status-color: var(--hsp-success);
+}
+.hsp-status-info {
+  --hsp-status-color: var(--hsp-info);
+}
+.hsp-status-warning {
+  --hsp-status-color: var(--hsp-warning);
+}
+.hsp-status-danger {
+  --hsp-status-color: var(--hsp-danger);
+}
+.hsp-status-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--hsp-status-color);
+  border: 2px solid var(--hsp-status-color);
+}
+.hsp-status-hollow .hsp-status-dot {
+  background: transparent;
+}
+.hsp-status-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hsp-status-tag.hsp-clickable {
+  cursor: pointer;
+}
+.hsp-status-tag.hsp-clickable .hsp-status-label {
+  color: var(--hsp-link);
+}
+.hsp-status-tag.hsp-clickable:hover .hsp-status-label {
+  color: var(--hsp-link-hover);
+  text-decoration: underline;
+}
+.hsp-status-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-left: -4px;
+  padding: 0;
+  color: var(--hsp-text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.hsp-status-remove:hover {
+  color: var(--hsp-text);
+  background: var(--hsp-bg-medium);
+}
+
+/* ---- Tooltip ------------------------------------------------------------- */
+.hsp-tooltip {
+  position: relative;
+  display: inline-block;
+  max-width: 280px;
+  padding: 6px 12px;
+  font-size: 12px;
+  line-height: 18px;
+  color: #ffffff;
+  background: var(--hsp-text);
+  border-radius: var(--hsp-radius);
+  box-shadow: var(--hsp-shadow);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.hsp-tooltip::after {
+  content: '';
+  position: absolute;
+  width: 0;
+  height: 0;
+  border: 6px solid transparent;
+}
+.hsp-tooltip-top {
+  margin-bottom: 6px;
+}
+.hsp-tooltip-top::after {
+  top: 100%;
+  left: 50%;
+  margin-left: -6px;
+  border-top-color: var(--hsp-text);
+}
+.hsp-tooltip-bottom {
+  margin-top: 6px;
+}
+.hsp-tooltip-bottom::after {
+  bottom: 100%;
+  left: 50%;
+  margin-left: -6px;
+  border-bottom-color: var(--hsp-text);
+}
+.hsp-tooltip-left {
+  margin-right: 6px;
+}
+.hsp-tooltip-left::after {
+  top: 50%;
+  left: 100%;
+  margin-top: -6px;
+  border-left-color: var(--hsp-text);
+}
+.hsp-tooltip-right {
+  margin-left: 6px;
+}
+.hsp-tooltip-right::after {
+  top: 50%;
+  right: 100%;
+  margin-top: -6px;
+  border-right-color: var(--hsp-text);
 }

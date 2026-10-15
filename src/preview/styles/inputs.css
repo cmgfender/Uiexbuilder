@@ -1,0 +1,751 @@
+/*
+ * Forms & inputs previews (src/registry/components/inputs.tsx): Form, Input, TextArea,
+ * NumberInput, CurrencyInput, StepperInput, DateInput, TimeInput, Select, MultiSelect,
+ * SearchInput, Checkbox, RadioButton, Toggle, ToggleGroup.
+ * Shared field chrome (.hsp-field, .hsp-field-label, .hsp-control, ...) lives in ../hubspot.css.
+ * Popovers are absolutely positioned inside their field (never position: fixed).
+ */
+
+/* ------------------------------------------------------------------------ Form */
+.hsp-form {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+/* ------------------------------------------------------------- Field chrome */
+.hsp-input {
+  position: relative;
+  min-width: 0;
+}
+.hsp-input-label-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 20px;
+}
+.hsp-input .hsp-field-label {
+  cursor: default;
+}
+.hsp-field-success {
+  font-size: 12px;
+  line-height: 18px;
+  color: #00826e;
+}
+.hsp-input .hsp-control::placeholder,
+.hsp-input-bare::placeholder {
+  color: var(--hsp-text-light);
+  opacity: 1;
+}
+
+/* Tooltip icon next to a label; the bubble shows on hover / keyboard focus. */
+.hsp-input-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  color: var(--hsp-text-light);
+  cursor: help;
+  border-radius: 50%;
+  outline: none;
+}
+.hsp-input-tip:hover,
+.hsp-input-tip:focus-visible {
+  color: var(--hsp-text-muted);
+}
+.hsp-input-tip:focus-visible {
+  box-shadow: 0 0 0 2px rgba(0, 164, 189, 0.4);
+}
+.hsp-input-tip-bubble {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  z-index: 30;
+  width: max-content;
+  max-width: 240px;
+  padding: 8px 12px;
+  transform: translateX(-50%);
+  background: var(--hsp-text);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  text-align: left;
+  white-space: normal;
+  border-radius: var(--hsp-radius);
+  box-shadow: var(--hsp-shadow);
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+.hsp-input-tip-bubble::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-left: -5px;
+  border: 5px solid transparent;
+  border-top-color: var(--hsp-text);
+}
+.hsp-input-tip:hover .hsp-input-tip-bubble,
+.hsp-input-tip:focus-visible .hsp-input-tip-bubble {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* ------------------------------------------------------- Text area / input */
+.hsp-textarea {
+  display: block;
+  line-height: 20px;
+  min-height: 40px;
+}
+
+/* --------------------------------------------- Shell (input + adornments) */
+.hsp-input-shell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 40px;
+  background: var(--hsp-bg-light);
+  border: 1px solid var(--hsp-border);
+  border-radius: var(--hsp-radius);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.hsp-input-shell:focus-within {
+  background: var(--hsp-bg);
+  border-color: var(--hsp-info);
+  box-shadow: 0 0 4px 1px rgba(0, 208, 228, 0.3), 0 0 0 1px var(--hsp-info);
+}
+.hsp-input-shell.hsp-invalid {
+  border-color: var(--hsp-danger);
+}
+.hsp-input-shell.hsp-invalid:focus-within {
+  box-shadow: 0 0 4px 1px rgba(242, 84, 91, 0.25), 0 0 0 1px var(--hsp-danger);
+}
+.hsp-input-shell.hsp-input-readonly,
+.hsp-input-shell.hsp-input-readonly:focus-within {
+  background: var(--hsp-bg-medium);
+}
+.hsp-input-bare {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 38px;
+  padding: 8px 12px;
+  font: inherit;
+  color: var(--hsp-text);
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+.hsp-input-prefix,
+.hsp-input-suffix {
+  flex: none;
+  color: var(--hsp-text-muted);
+  white-space: nowrap;
+  user-select: none;
+}
+.hsp-input-prefix {
+  padding-left: 12px;
+}
+.hsp-input-prefix + .hsp-input-bare {
+  padding-left: 6px;
+}
+.hsp-input-suffix {
+  padding-right: 12px;
+}
+.hsp-input-icon {
+  flex: none;
+  margin-right: 12px;
+  color: var(--hsp-text-muted);
+}
+.hsp-input-icon-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 4px;
+  padding: 0;
+  color: var(--hsp-text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.hsp-input-icon-button:hover {
+  color: var(--hsp-text);
+  background: var(--hsp-bg-medium);
+}
+
+/* --------------------------------------------------------------- Stepper */
+.hsp-stepper {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+.hsp-stepper .hsp-input-shell {
+  flex: 1 1 auto;
+  min-width: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.hsp-stepper-step {
+  display: flex;
+}
+.hsp-stepper-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  min-height: 40px;
+  padding: 0;
+  color: var(--hsp-link);
+  background: var(--hsp-bg);
+  border: 1px solid var(--hsp-border);
+  border-left: 0;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.hsp-stepper-step:last-child .hsp-stepper-button {
+  border-top-right-radius: var(--hsp-radius);
+  border-bottom-right-radius: var(--hsp-radius);
+}
+.hsp-stepper-button:hover:not(:disabled) {
+  background: var(--hsp-bg-light);
+}
+.hsp-stepper-button:focus-visible {
+  outline: 2px solid var(--hsp-info);
+  outline-offset: -2px;
+}
+.hsp-stepper-button:disabled {
+  color: var(--hsp-border);
+  background: var(--hsp-bg-light);
+  cursor: not-allowed;
+}
+
+/* -------------------------------------------------------------- Popovers */
+.hsp-input-anchor {
+  position: relative;
+  width: 100%;
+}
+.hsp-input-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  min-width: 100%;
+  background: var(--hsp-bg);
+  border: 1px solid var(--hsp-border-light);
+  border-radius: var(--hsp-radius);
+  box-shadow: var(--hsp-shadow-lg);
+}
+
+/* ------------------------------------------------------- Select triggers */
+.hsp-select-trigger,
+.hsp-ms-trigger {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 36px;
+  text-align: left;
+  cursor: pointer;
+}
+.hsp-select-trigger.hsp-input-readonly,
+.hsp-ms-trigger.hsp-input-readonly {
+  background: var(--hsp-bg-medium);
+  cursor: default;
+}
+.hsp-select-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.hsp-select-placeholder {
+  color: var(--hsp-text-light);
+}
+.hsp-select-caret {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  color: var(--hsp-text-muted);
+  transform: translateY(-50%);
+  transition: transform 0.15s;
+  pointer-events: none;
+}
+.hsp-select-trigger[aria-expanded='true'] .hsp-select-caret,
+.hsp-ms-trigger[aria-expanded='true'] .hsp-select-caret {
+  transform: translateY(-50%) rotate(180deg);
+}
+.hsp-ms-trigger:focus-visible {
+  border-color: var(--hsp-info);
+  box-shadow: 0 0 4px 1px rgba(0, 208, 228, 0.3), 0 0 0 1px var(--hsp-info);
+  background: var(--hsp-bg);
+}
+
+/* Transparent variant: borderless, link-coloured dropdown text. */
+.hsp-select-transparent .hsp-select-trigger,
+.hsp-select-transparent .hsp-ms-trigger {
+  width: auto;
+  max-width: 100%;
+  min-height: 32px;
+  padding-left: 0;
+  color: var(--hsp-link);
+  font-weight: 600;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+.hsp-select-transparent .hsp-select-caret {
+  color: var(--hsp-link);
+}
+.hsp-select-transparent .hsp-input-anchor {
+  width: auto;
+  display: inline-block;
+  max-width: 100%;
+}
+
+/* MultiSelect: selected values as removable tags inside the field. */
+.hsp-ms-trigger {
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  padding-left: 8px;
+}
+.hsp-ms-trigger > .hsp-select-placeholder {
+  padding-left: 4px;
+}
+.hsp-ms-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  height: 26px;
+  padding: 0 2px 0 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--hsp-text);
+  background: var(--hsp-bg-medium);
+  border: 1px solid var(--hsp-border);
+  border-radius: var(--hsp-radius);
+}
+.hsp-ms-tag-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.hsp-ms-tag-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: var(--hsp-text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.hsp-ms-tag-remove:hover {
+  color: var(--hsp-text);
+  background: var(--hsp-border-light);
+}
+
+/* ------------------------------------------------------------ Option menus */
+.hsp-select-menu,
+.hsp-time-menu {
+  padding: 4px 0;
+}
+.hsp-select-search {
+  position: relative;
+  padding: 4px 8px 8px;
+  border-bottom: 1px solid var(--hsp-border-light);
+  margin-bottom: 4px;
+}
+.hsp-select-search .hsp-control {
+  min-height: 32px;
+  padding: 4px 8px 4px 30px;
+}
+.hsp-select-search-icon {
+  position: absolute;
+  top: 13px;
+  left: 18px;
+  color: var(--hsp-text-muted);
+  pointer-events: none;
+}
+.hsp-select-options {
+  max-height: 240px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.hsp-select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  line-height: 20px;
+  color: var(--hsp-text);
+  cursor: pointer;
+}
+.hsp-select-option:hover,
+.hsp-select-option.is-active {
+  background: var(--hsp-info-bg);
+}
+.hsp-select-option.is-selected {
+  font-weight: 600;
+}
+.hsp-select-option-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.hsp-select-option-check {
+  flex: none;
+  color: var(--hsp-info);
+}
+.hsp-select-empty {
+  padding: 8px 16px;
+  color: var(--hsp-text-muted);
+  font-style: italic;
+}
+.hsp-time-menu {
+  width: 100%;
+}
+
+/* -------------------------------------------------------------- Calendar */
+.hsp-calendar {
+  width: 272px;
+  min-width: 0;
+  padding: 12px;
+}
+.hsp-calendar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.hsp-calendar-title {
+  font-weight: 600;
+}
+.hsp-calendar-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--hsp-link);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.hsp-calendar-nav:hover {
+  background: var(--hsp-bg-medium);
+}
+.hsp-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  text-align: center;
+}
+.hsp-calendar-weekday {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 24px;
+  color: var(--hsp-text-muted);
+}
+.hsp-calendar-day {
+  height: 32px;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--hsp-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--hsp-radius);
+  cursor: pointer;
+}
+.hsp-calendar-day:hover {
+  background: var(--hsp-bg-medium);
+}
+.hsp-calendar-day.is-today {
+  border-color: var(--hsp-info);
+}
+.hsp-calendar-day.is-selected,
+.hsp-calendar-day.is-selected:hover {
+  font-weight: 600;
+  color: #fff;
+  background: var(--hsp-info);
+  border-color: var(--hsp-info);
+}
+.hsp-calendar-day.is-blocked,
+.hsp-calendar-day.is-blocked:hover {
+  color: var(--hsp-border);
+  background: transparent;
+  cursor: not-allowed;
+}
+.hsp-calendar-footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hsp-border-light);
+}
+.hsp-calendar-link {
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--hsp-link);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.hsp-calendar-link:hover {
+  color: var(--hsp-link-hover);
+  text-decoration: underline;
+}
+.hsp-calendar-link[aria-disabled='true'] {
+  color: var(--hsp-text-light);
+  text-decoration: none;
+  cursor: not-allowed;
+}
+
+/* ---------------------------------------------- Checkbox / radio button */
+.hsp-check {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--hsp-text);
+  cursor: pointer;
+}
+.hsp-check-inline {
+  display: inline-flex;
+  margin-right: 16px;
+  vertical-align: top;
+}
+/* The native input stays in place (keyboard, forms, a11y) but is invisible over the drawn box. */
+.hsp-check-input {
+  position: absolute;
+  top: 1px;
+  left: 0;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+.hsp-check-box {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  color: #fff;
+  background: var(--hsp-bg-light);
+  border: 1px solid var(--hsp-border);
+  border-radius: var(--hsp-radius);
+  transition: background 0.12s, border-color 0.12s;
+}
+.hsp-check-radio .hsp-check-box {
+  border-radius: 50%;
+}
+.hsp-check-mark {
+  opacity: 0;
+}
+.hsp-check-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--hsp-info);
+  border-radius: 50%;
+  opacity: 0;
+}
+.hsp-check:hover .hsp-check-box {
+  border-color: var(--hsp-info);
+}
+.hsp-check-input:checked + .hsp-check-box,
+.hsp-check-box.is-checked {
+  background: var(--hsp-info);
+  border-color: var(--hsp-info);
+}
+.hsp-check-input:checked + .hsp-check-box .hsp-check-mark,
+.hsp-check-box.is-checked .hsp-check-mark {
+  opacity: 1;
+}
+.hsp-check-radio .hsp-check-input:checked + .hsp-check-box {
+  background: var(--hsp-bg);
+}
+.hsp-check-radio .hsp-check-input:checked + .hsp-check-box .hsp-check-dot {
+  opacity: 1;
+}
+.hsp-check-input:focus-visible + .hsp-check-box {
+  box-shadow: 0 0 0 2px rgba(0, 164, 189, 0.4);
+}
+.hsp-check-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.hsp-check-small {
+  font-size: 12px;
+  line-height: 18px;
+}
+.hsp-check-small .hsp-check-box,
+.hsp-check-small .hsp-check-input {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+}
+.hsp-check-small .hsp-check-input {
+  top: 2px;
+  margin-top: 0;
+}
+.hsp-check-small .hsp-check-mark {
+  width: 10px;
+  height: 10px;
+}
+.hsp-check-small .hsp-check-dot {
+  width: 6px;
+  height: 6px;
+}
+.hsp-check-readonly {
+  cursor: default;
+}
+.hsp-check-readonly:hover .hsp-check-box {
+  border-color: var(--hsp-border);
+}
+.hsp-check-readonly .hsp-check-box {
+  background: var(--hsp-bg-medium);
+}
+.hsp-check-readonly .hsp-check-input:checked + .hsp-check-box {
+  background: var(--hsp-text-light);
+  border-color: var(--hsp-text-light);
+}
+.hsp-check-readonly.hsp-check-radio .hsp-check-input:checked + .hsp-check-box {
+  background: var(--hsp-bg-medium);
+}
+.hsp-check-readonly .hsp-check-dot {
+  background: var(--hsp-text-light);
+}
+/* MultiSelect menu rows reuse the box at a fixed position. */
+.hsp-select-option .hsp-check-box {
+  margin-top: 0;
+}
+
+/* ----------------------------------------------------------- Toggle group */
+.hsp-toggle-group-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hsp-toggle-group-inline {
+  flex-direction: row;
+  flex-wrap: wrap;
+  column-gap: 24px;
+}
+
+/* ----------------------------------------------------------------- Toggle */
+.hsp-switch {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+}
+.hsp-switch-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.hsp-switch-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+}
+.hsp-switch-track {
+  --hsp-switch-w: 52px;
+  --hsp-switch-h: 26px;
+  position: relative;
+  flex: none;
+  display: inline-block;
+  width: var(--hsp-switch-w);
+  height: var(--hsp-switch-h);
+  background: var(--hsp-border);
+  border-radius: calc(var(--hsp-switch-h) / 2);
+  transition: background 0.15s;
+}
+.hsp-switch-track.is-checked {
+  background: var(--hsp-success);
+}
+.hsp-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(var(--hsp-switch-h) - 4px);
+  height: calc(var(--hsp-switch-h) - 4px);
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(45, 62, 80, 0.3);
+  transition: transform 0.15s;
+}
+.hsp-switch-track.is-checked .hsp-switch-thumb {
+  transform: translateX(calc(var(--hsp-switch-w) - var(--hsp-switch-h)));
+}
+.hsp-switch-text {
+  position: absolute;
+  top: 0;
+  right: 7px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: var(--hsp-switch-h);
+  letter-spacing: 0.4px;
+  color: #fff;
+  user-select: none;
+}
+.hsp-switch-track.is-checked .hsp-switch-text {
+  right: auto;
+  left: 8px;
+}
+.hsp-switch-input:focus-visible + .hsp-switch-track {
+  box-shadow: 0 0 0 2px rgba(0, 164, 189, 0.45);
+}
+.hsp-switch-small .hsp-switch-track {
+  --hsp-switch-w: 36px;
+  --hsp-switch-h: 20px;
+}
+.hsp-switch-extra-small .hsp-switch-track {
+  --hsp-switch-w: 28px;
+  --hsp-switch-h: 16px;
+}
+.hsp-switch-small .hsp-switch-label,
+.hsp-switch-extra-small .hsp-switch-label {
+  font-size: 12px;
+}
+.hsp-switch-readonly .hsp-switch-control {
+  cursor: default;
+}
+.hsp-switch-readonly .hsp-switch-track {
+  opacity: 0.55;
+}

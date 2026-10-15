@@ -52,8 +52,14 @@ export type PropType =
   | { kind: 'url' }
   /** One of the HubSpot icon names (see ICON_NAMES in ./constants). */
   | { kind: 'icon' }
-  /** Array of { label, value, description? } used by Select / MultiSelect / ToggleGroup. */
-  | { kind: 'options' }
+  /**
+   * Array of { label, value, description? } used by Select / MultiSelect / ToggleGroup.
+   * `optionFields` lists the per-option keys the HubSpot option type accepts besides label/value
+   * (Select/MultiSelect: none; ToggleGroup: description, initialIsChecked, readOnly). Option
+   * literals are type-checked in generated code, so editors must not add other keys. When omitted,
+   * editors offer label/value plus `description`.
+   */
+  | { kind: 'options'; optionFields?: Array<'description' | 'initialIsChecked' | 'readOnly'> }
   /** string[] */
   | { kind: 'stringList'; placeholder?: string }
   /** { year, month, date } — month is 0-based as in @hubspot/ui-extensions BaseDate. */
@@ -84,6 +90,12 @@ export interface PropDef {
   defaultValue?: JsonValue;
   /** The TS type requires this prop. Codegen/validation will flag missing values. */
   required?: boolean;
+  /**
+   * The TS type requires this prop only in some variants of a discriminated union, selected by the
+   * node's literal props (e.g. Table `pageCount` when `paginated` is true). Validation can flag a
+   * missing value when the predicate passes. `required` stays unset for such props.
+   */
+  requiredWhen?: (props: Record<string, unknown>) => boolean;
   /** Allow switching to an expression ({ $expr }). Defaults to true. */
   bindable?: boolean;
   /** Hide this prop in the inspector unless the predicate passes (given the node's literal props). */
@@ -108,6 +120,13 @@ export interface EventDef {
    * Form onSubmit -> [{ name: 'event' }] with `event.targetValue` holding the form values.
    */
   params: EventParam[];
+  /**
+   * The TS type requires a handler in some variants of a discriminated union, selected by the
+   * node's literal props (e.g. Table `onPageChange` when `paginated` is true, TableHeader
+   * `onSortChange` when `sortDirection` is set). Codegen emits a no-op handler when the predicate
+   * passes and no actions/binding are configured, so the output still type-checks.
+   */
+  requiredWhen?: (props: Record<string, unknown>) => boolean;
 }
 
 export interface SlotDef {
@@ -169,6 +188,8 @@ export interface PreviewRootProps {
   'data-node-type': string;
   'data-uiex-clone'?: string;
   'data-uiex-cond'?: string;
+  /** Design mode: the node repeats over an empty/invalid array and is drawn once as a stand-in. */
+  'data-uiex-repeat-empty'?: string;
   className?: string;
   title?: string;
   onMouseEnter?: (e: React.MouseEvent<HTMLElement>) => void;
@@ -204,7 +225,11 @@ export interface PreviewProps {
    * Inputs: call trigger('onChange', newValue) — bound state updates automatically.
    */
   trigger: (eventName: string, ...args: unknown[]) => void;
-  /** For overlay components (Modal/Panel) only. */
+  /**
+   * For overlay components (Modal/Panel) only. While presentation is 'open', the Modal/Panel
+   * previews fire their own `onOpen` (once the open transition has finished) and `onClose` (when
+   * they unmount after having opened) through `trigger`; the runtime must not fire these itself.
+   */
   overlay?: {
     /** 'inline': draw as a static block in the designer storyboard. 'open': draw as a real overlay. */
     presentation: 'inline' | 'open';

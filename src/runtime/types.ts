@@ -21,7 +21,13 @@
  *   - Each rendered node's outermost element carries data-node-id="<id>" and data-node-type="<type>".
  *   - Repeat clones after the first carry data-uiex-clone="<index>".
  *   - Nodes whose `condition` evaluates falsy in design mode carry data-uiex-cond="false".
- *   - A design-mode empty container renders <div data-drop-placeholder-for="<parentId>">.
+ *     (A repeated node's condition is evaluated per copy, with the repeat item/index in scope.)
+ *   - A design-mode node repeating over an empty/invalid array renders one stand-in copy with
+ *     data-uiex-repeat-empty="true" (item undefined, index 0). Preview mode renders nothing.
+ *   - A design-mode empty container renders <div data-drop-placeholder-for="<parentId>">
+ *     (plus data-drop-slot="<slot>" when the placeholder targets a slot).
+ *   - A node whose preview throws renders <div class="hsp-rt-error" data-node-id data-node-type>.
+ *   - PreviewHost renders <div class="hsp-overlay-host hsp-rt-host"> (absolute, inset 0).
  *   - Overlay storyboard items are rendered by the canvas via <NodeRenderer nodeId={overlayId}
  *     overlayPresentation="inline" />.
  */
@@ -64,10 +70,13 @@ export interface RuntimeApi {
   extension: Extension;
   /** Base scope: state values, setters (set<Name>), data sources (+Loading/+Error), context. */
   scope: Scope;
+  /** Current state values keyed by state variable name. */
   stateValues: Record<string, unknown>;
+  /** Sets a state variable by name (unknown names are ignored). A function value is an updater. */
   setStateValue: (name: string, value: unknown) => void;
+  /** Data source values + status keyed by data source id. */
   dataSources: Record<string, DataSourceState>;
-  /** Re-runs a data source (simulated latency, mock data). */
+  /** Re-runs a data source by id (or name): simulated latency, then fresh mock data. */
   runDataSource: (dataSourceId: string) => Promise<void>;
   /** Executes event action steps. `local` adds handler params / repeat items to the scope. */
   runActions: (steps: ActionStep[], local?: Scope) => Promise<void>;
