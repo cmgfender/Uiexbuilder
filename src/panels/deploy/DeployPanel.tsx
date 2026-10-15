@@ -625,7 +625,8 @@ function FailureView({
   onBack: () => void;
   onShowCli?: () => void;
 }) {
-  const offline = code === 'network' || code === 'connector_unavailable';
+  // The builder's server can't deploy at all (unreachable, or not set up for it): the CLI still can.
+  const offline = code === 'network' || code === 'connector_unavailable' || code === 'not_configured';
   return (
     <div className="ub-pn-form ub-dp">
       <Stepper current={failedStep} failed />

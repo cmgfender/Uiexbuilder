@@ -395,6 +395,21 @@ describe('<DeployToHubSpotPanel> deploying', () => {
     expect(screen.getByLabelText('Paste your key')).toHaveValue('CiRuYTEtZmFrZS1rZXktZm9yLXRlc3Rz');
   });
 
+  it('offers the CLI when the builder server is not set up to deploy', async () => {
+    const onShowCli = vi.fn();
+    const client = mockClient({
+      start: async () => {
+        throw new DeployClientError(503, 'not_configured', 'Deploying from the builder needs SESSION_SECRET on the server.');
+      },
+    });
+    renderPanel(client, { onShowCli });
+    typeKey();
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy to HubSpot' }));
+    expect(await screen.findByText(/needs SESSION_SECRET/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Use the HubSpot CLI instead' }));
+    expect(onShowCli).toHaveBeenCalled();
+  });
+
   it('stops polling when closed', async () => {
     const client = mockClient({ statuses: [status('building', 2), status('building', 3), status('building', 4)] });
     const view = renderPanel(client);
