@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "id": "p_uiex_builder_connector",
+  "name": "uiex-builder-connector",
+  "platformVersion": "2026.03",
+  "app": {
+    "uid": "uiex_builder_connector",
+    "name": "UI Extension Builder",
+    "description": "Lets UI Extension Builder show your real CRM records, properties and pipelines while you design cards. Read-only: it never changes your data.",
+    "distribution": "marketplace",
+    "authType": "oauth",
+    "redirectUrls": [
+      "https://YOUR-DOMAIN/api/auth/callback",
+      "http://localhost:5173/api/auth/callback"
+    ],
+    "requiredScopes": [
+      "oauth",
+      "crm.objects.contacts.read",
+      "crm.objects.companies.read",
+      "crm.objects.deals.read",
+      "crm.schemas.contacts.read",
+      "crm.schemas.companies.read",
+      "crm.schemas.deals.read"
+    ],
+    "optionalScopes": [
+      "tickets",
+      "crm.objects.custom.read",
+      "crm.schemas.custom.read",
+      "crm.objects.owners.read",
+      "crm.objects.line_items.read",
+      "crm.objects.products.read",
+      "crm.objects.quotes.read"
+    ],
+    "conditionallyRequiredScopes": [],
+    "permittedUrls": {
+      "fetch": [],
+      "iframe": [],
+      "img": []
+    },
+    "support": {
+      "supportEmail": "support@example.com",
+      "documentationUrl": "https://example.com/docs",
+      "supportUrl": "https://example.com/support",
+      "supportPhone": "+18005555555"
+    }
+  },
+  "extensions": [
+    {
+      "id": "e_npgtvl9j8c",
+      "kind": "settings",
+      "uid": "uiex_builder_settings",
+      "name": "UI Extension Builder",
+      "description": "",
+      "fileName": "BuilderSettings",
+      "location": "crm.record.tab",
+      "objectTypes": [
+        "contacts"
+      ],
+      "state": [],
+      "dataSources": [],
+      "rootId": "n_5ci6p100co",
+      "nodes": {
+        "n_5ci6p100co": {
+          "id": "n_5ci6p100co",
+          "type": "__root__",
+          "props": {},
+          "children": [
+            "n_xtl92ad6qg"
+          ]
+        },
+        "n_xtl92ad6qg": {
+          "id": "n_xtl92ad6qg",
+          "type": "Flex",
+          "props": {
+            "direction": "column",
+            "gap": "medium"
+          },
+          "children": [
+            "n_71f734ytot",
+            "n_gw1x80p8un",
+            "n_udtkk93hr3",
+            "n_t6ft0icrti"
+          ]
+        },
+        "n_71f734ytot": {
+          "id": "n_71f734ytot",
+          "type": "Heading",
+          "props": {},
+          "children": [],
+          "text": "UI Extension Builder"
+        },
+        "n_gw1x80p8un": {
+          "id": "n_gw1x80p8un",
+          "type": "Text",
+          "props": {},
+          "children": [],
+          "text": "This app lets your team preview HubSpot cards in UI Extension Builder with your real CRM records, properties and pipelines."
+        },
+        "n_udtkk93hr3": {
+          "id": "n_udtkk93hr3",
+          "type": "Text",
+          "props": {},
+          "children": [],
+          "text": "It only reads data. It never creates, changes or deletes anything in HubSpot."
+        },
+        "n_t6ft0icrti": {
+          "id": "n_t6ft0icrti",
+          "type": "Text",
+          "props": {},
+          "children": [],
+          "text": "To turn it off for this account, uninstall the app: Settings > Integrations > Connected apps."
+        }
+      },
+      "mock": {
+        "context": {
+          "user": {
+            "id": 1001,
+            "email": "jordan.lee@example.com",
+            "firstName": "Jordan",
+            "lastName": "Lee",
+            "locale": "en-us"
+          },
+          "portal": {
+            "id": 12345678,
+            "timezone": "America/New_York"
+          },
+          "crm": {
+            "objectId": 51,
+            "objectTypeId": "0-1"
+          }
+        },
+        "properties": {
+          "hs_object_id": "51",
+          "firstname": "Ada",
+          "lastname": "Lovelace",
+          "email": "ada@analytical.example",
+          "phone": "+1 (555) 010-2030",
+          "company": "Analytical Engines Ltd",
+          "jobtitle": "Head of Computation",
+          "lifecyclestage": "customer",
+          "hs_lead_status": "OPEN",
+          "city": "London",
+          "country": "United Kingdom",
+          "createdate": "2026-01-14T10:00:00.000Z",
+          "dealname": "Difference Engine Expansion",
+          "amount": "125000",
+          "dealstage": "contractsent",
+          "closedate": "2026-12-01T00:00:00.000Z",
+          "name": "Analytical Engines Ltd",
+          "domain": "analytical.example",
+          "industry": "COMPUTER_SOFTWARE",
+          "numberofemployees": "120",
+          "subject": "Calibration issue on unit #12",
+          "hs_pipeline_stage": "1",
+          "hs_ticket_priority": "HIGH"
+        },
+        "dataSources": {},
+        "functions": {}
+      }
+    }
+  ],
+  "functions": [],
+  "createdAt": "2026-10-15T00:00:00.000Z",
+  "updatedAt": "2026-10-15T00:00:00.000Z"
+}

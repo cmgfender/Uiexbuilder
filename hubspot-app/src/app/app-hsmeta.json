@@ -1,0 +1,46 @@
+{
+  "uid": "uiex_builder_connector",
+  "type": "app",
+  "config": {
+    "description": "Lets UI Extension Builder show your real CRM records, properties and pipelines while you design cards. Read-only: it never changes your data.",
+    "name": "UI Extension Builder",
+    "distribution": "marketplace",
+    "auth": {
+      "type": "oauth",
+      "redirectUrls": [
+        "https://YOUR-DOMAIN/api/auth/callback",
+        "http://localhost:5173/api/auth/callback"
+      ],
+      "requiredScopes": [
+        "oauth",
+        "crm.objects.contacts.read",
+        "crm.objects.companies.read",
+        "crm.objects.deals.read",
+        "crm.schemas.contacts.read",
+        "crm.schemas.companies.read",
+        "crm.schemas.deals.read"
+      ],
+      "optionalScopes": [
+        "tickets",
+        "crm.objects.custom.read",
+        "crm.schemas.custom.read",
+        "crm.objects.owners.read",
+        "crm.objects.line_items.read",
+        "crm.objects.products.read",
+        "crm.objects.quotes.read"
+      ],
+      "conditionallyRequiredScopes": []
+    },
+    "permittedUrls": {
+      "fetch": [],
+      "iframe": [],
+      "img": []
+    },
+    "support": {
+      "supportEmail": "support@example.com",
+      "documentationUrl": "https://example.com/docs",
+      "supportUrl": "https://example.com/support",
+      "supportPhone": "+18005555555"
+    }
+  }
+}

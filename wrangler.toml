@@ -1,0 +1,37 @@
+# Cloudflare Workers deployment for UI Extension Builder (builder + HubSpot connector in one Worker).
+# Guide: docs/HOSTING.md → "Cloudflare Workers".
+#
+#   npx wrangler deploy                      # builds (npm run build:app) and deploys
+#   npx wrangler secret put HUBSPOT_CLIENT_ID
+#   npx wrangler secret put HUBSPOT_CLIENT_SECRET
+#   npx wrangler secret put SESSION_SECRET
+#
+# Or connect the GitHub repo in the Cloudflare dashboard (Workers & Pages → Create → Import a
+# repository) and add the three secrets under Settings → Variables and Secrets.
+
+name = "uiex-builder"
+main = "server/cloudflare.ts"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+[build]
+command = "npm run build:app"
+watch_dir = ["server", "src"]
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+# The Worker sees every request: /api goes to the connector, the rest gets security headers.
+run_worker_first = true
+
+[vars]
+# The address people open (no trailing slash). Leave empty to use the address requests arrive on.
+APP_URL = ""
+# EU accounts: if sign-in fails, use https://app-eu1.hubspot.com
+# HUBSPOT_APP_BASE = "https://app.hubspot.com"
+# ENABLE_FETCH_PROXY = "true"
+# ENABLE_DEPLOY = "true"
+
+[observability]
+enabled = true

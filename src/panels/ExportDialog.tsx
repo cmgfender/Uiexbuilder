@@ -25,11 +25,12 @@ import type { DialogComponentProps } from './dialogTypes';
 import { ExtensionIcon } from './icons';
 import { buildTree, deploySteps, exportAdditions, languageOf, type TreeDir } from './exportModel';
 import { CARD_LOCATIONS } from './locations';
+import { DeployToHubSpotPanel } from './deploy';
 
-type Tab = 'download' | 'files' | 'deploy';
+type Tab = 'download' | 'hubspot' | 'files' | 'deploy';
 
 function tabFromArg(arg: string | null | undefined): Tab {
-  return arg === 'files' || arg === 'deploy' ? arg : 'download';
+  return arg === 'files' || arg === 'deploy' || arg === 'hubspot' ? arg : 'download';
 }
 
 export function ExportDialog({ open, onClose, arg }: DialogComponentProps) {
@@ -48,12 +49,14 @@ export function ExportDialog({ open, onClose, arg }: DialogComponentProps) {
         onChange={setTab}
         tabs={[
           { value: 'download', label: 'Download' },
+          { value: 'hubspot', label: 'Deploy to HubSpot' },
           { value: 'files', label: 'Files' },
-          { value: 'deploy', label: 'Deploy' },
+          { value: 'deploy', label: 'Deploy with CLI' },
         ]}
       />
       <div className="ub-pn-dialog-pane" {...tabPanelProps('ub-pn-export', tab)}>
         {tab === 'download' && <DownloadTab onClose={onClose} onShowDeploy={() => setTab('deploy')} />}
+        {tab === 'hubspot' && <DeployToHubSpotPanel cliFallback={<DeployTab />} onShowCli={() => setTab('deploy')} onClose={onClose} />}
         {tab === 'files' && <FilesTab />}
         {tab === 'deploy' && <DeployTab />}
       </div>

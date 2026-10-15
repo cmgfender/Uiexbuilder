@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <meta name="referrer" content="no-referrer" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Set up Connect HubSpot · UI Extension Builder</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f5f8fa;
+        --panel: #ffffff;
+        --text: #33475b;
+        --muted: #516f90;
+        --border: #cbd6e2;
+        --accent: #0091ae;
+        --accent-text: #ffffff;
+        --good: #00826b;
+        --warn: #b35900;
+        --bad: #c93700;
+        --code-bg: #eaf0f6;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1b1f24;
+          --panel: #232a31;
+          --text: #e6edf3;
+          --muted: #a9b8c6;
+          --border: #3b4652;
+          --accent: #4fc3dc;
+          --accent-text: #0b1a1f;
+          --good: #5fd3b5;
+          --warn: #ffb35c;
+          --bad: #ff8a65;
+          --code-bg: #2c353e;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 15px/1.55 system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      }
+      main { max-width: 760px; margin: 40px auto; padding: 0 16px 48px; }
+      h1 { font-size: 24px; margin: 0 0 4px; }
+      .lead { color: var(--muted); margin: 0 0 24px; }
+      section {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 20px 24px;
+        margin: 0 0 16px;
+      }
+      h2 { font-size: 17px; margin: 0 0 8px; }
+      .step { color: var(--muted); font-weight: 600; margin-right: 6px; }
+      .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      input.copy {
+        flex: 1 1 320px;
+        min-width: 0;
+        font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        padding: 9px 12px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--code-bg);
+        color: var(--text);
+      }
+      button, a.button {
+        font: inherit;
+        font-weight: 600;
+        padding: 8px 14px;
+        border-radius: 6px;
+        border: 1px solid var(--accent);
+        cursor: pointer;
+        text-decoration: none;
+        display: inline-block;
+      }
+      .primary { background: var(--accent); color: var(--accent-text); }
+      .secondary { background: transparent; color: var(--accent); }
+      button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+      .status { font-weight: 600; }
+      .status.good { color: var(--good); }
+      .status.warn { color: var(--warn); }
+      .status.bad { color: var(--bad); }
+      .note { color: var(--muted); font-size: 14px; }
+      .live { min-height: 1.5em; margin: 8px 0 0; font-weight: 600; color: var(--good); }
+      code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+      ol, ul { padding-left: 22px; margin: 8px 0; }
+      li { margin: 4px 0; }
+      a { color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Set up Connect HubSpot</h1>
+      <p class="lead">
+        For the person who hosts this builder. Admins who use the builder never need this page. Full guide:
+        <a href="https://github.com/cmgfender/Uiexbuilder/blob/main/docs/HOSTING.md">hosting guide</a>.
+      </p>
+
+      <section aria-labelledby="status-title">
+        <h2 id="status-title"><span class="step">1</span>Is sign-in ready?</h2>
+        <p id="status" class="status" role="status" aria-live="polite">Checking…</p>
+        <div id="status-detail"></div>
+        <div class="row">
+          <button type="button" class="secondary" id="recheck">Check again</button>
+          <a class="button secondary" href="/">Open the builder</a>
+        </div>
+      </section>
+
+      <section aria-labelledby="redirect-title">
+        <h2 id="redirect-title"><span class="step">2</span>Your redirect URL</h2>
+        <p>HubSpot sends people back to this exact address after they approve. Put it in your HubSpot app's redirect URLs.</p>
+        <div class="row">
+          <input class="copy" id="redirect" type="text" readonly aria-label="Redirect URL" />
+          <button type="button" class="primary" id="copy-redirect">Copy</button>
+        </div>
+        <p id="copy-status" class="live" role="status" aria-live="polite"></p>
+        <p class="note">
+          If you set <code>APP_URL</code> to a different address (for example your own domain), open this page on that address
+          instead - the redirect URL must match <code>APP_URL</code>.
+        </p>
+      </section>
+
+      <section aria-labelledby="app-title">
+        <h2 id="app-title"><span class="step">3</span>Create the HubSpot app (once)</h2>
+        <p>
+          This file is the HubSpot app people approve when they click <em>Connect HubSpot</em>. It is already filled in with your
+          redirect URL and asks only for <strong>read</strong> access.
+        </p>
+        <div class="row">
+          <button type="button" class="primary" id="download-app">Download the app file</button>
+        </div>
+        <p id="download-status" class="live" role="status" aria-live="polite"></p>
+        <ol>
+          <li>
+            In HubSpot, create a personal access key:
+            <a href="https://app.hubspot.com/l/personal-access-key" target="_blank" rel="noopener noreferrer">open the personal access key page</a>
+            and copy the key.
+          </li>
+          <li><a href="/">Open the builder</a> → <strong>Project</strong> → <strong>Import .uiex.json…</strong> → choose the file you downloaded.</li>
+          <li>Click <strong>Deploy to HubSpot</strong>, paste the personal access key and deploy.</li>
+          <li>
+            In HubSpot open <strong>Development → Projects → uiex-builder-connector → UI Extension Builder → Auth</strong> and copy
+            the <strong>Client ID</strong> and <strong>Client secret</strong>.
+          </li>
+        </ol>
+        <p class="note">Prefer the HubSpot CLI? Use the <code>hubspot-app/</code> folder of the project instead (see the guide).</p>
+      </section>
+
+      <section aria-labelledby="settings-title">
+        <h2 id="settings-title"><span class="step">4</span>Add the settings to your hosting</h2>
+        <p>In your hosting provider's <em>Environment variables</em> screen, set:</p>
+        <ul>
+          <li><code>HUBSPOT_CLIENT_ID</code> - the Client ID from step 3</li>
+          <li><code>HUBSPOT_CLIENT_SECRET</code> - the Client secret from step 3</li>
+          <li><code>SESSION_SECRET</code> - 48 random characters: <a href="/secret.html">make one here</a> (Render makes one for you)</li>
+          <li><code>APP_URL</code> - <span id="app-url-hint">this address</span> (optional on Render and Vercel)</li>
+        </ul>
+        <p>Save, redeploy or restart, then click <strong>Check again</strong> in step 1.</p>
+      </section>
+    </main>
+    <script>
+      (function () {
+        var origin = window.location.origin;
+        var redirectUrl = origin + '/api/auth/callback';
+        document.getElementById('redirect').value = redirectUrl;
+        document.getElementById('app-url-hint').textContent = origin;
+
+        var copyStatus = document.getElementById('copy-status');
+        document.getElementById('copy-redirect').addEventListener('click', function () {
+          var field = document.getElementById('redirect');
+          field.focus();
+          field.select();
+          var manual = function () {
+            copyStatus.textContent = 'The address is selected - press Ctrl+C (Cmd+C on a Mac) to copy it.';
+          };
+          if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(field.value).then(function () {
+              copyStatus.textContent = 'Copied. Paste it into your HubSpot app\'s redirect URLs.';
+            }, manual);
+          } else {
+            var ok = false;
+            try {
+              ok = document.execCommand('copy');
+            } catch (e) {
+              ok = false;
+            }
+            if (ok) copyStatus.textContent = 'Copied. Paste it into your HubSpot app\'s redirect URLs.';
+            else manual();
+          }
+        });
+
+        var statusEl = document.getElementById('status');
+        var detailEl = document.getElementById('status-detail');
+        function show(kind, text, detailHtml) {
+          statusEl.className = 'status ' + kind;
+          statusEl.textContent = text;
+          detailEl.innerHTML = detailHtml || '';
+        }
+        function check() {
+          show('', 'Checking…');
+          fetch('/api/health', { headers: { 'X-UIEX-Request': '1', Accept: 'application/json' }, cache: 'no-store' })
+            .then(function (res) {
+              var type = res.headers.get('content-type') || '';
+              if (type.indexOf('application/json') === -1) throw new Error('not json');
+              return res.json().then(function (body) {
+                return { ok: res.ok, body: body };
+              });
+            })
+            .then(function (r) {
+              if (!r.ok || !r.body || r.body.ok !== true) {
+                show('bad', 'The connector answered with an error.', '<p class="note">Check your hosting logs, then try again.</p>');
+              } else if (r.body.oauthConfigured) {
+                show(
+                  'good',
+                  'Ready. Admins can open the builder and click Connect HubSpot.',
+                  '<p class="note">Share this address with them: <code>' + origin.replace(/</g, '&lt;') + '</code></p>'
+                );
+              } else {
+                show(
+                  'warn',
+                  'Almost there: HubSpot sign-in is not set up yet.',
+                  '<p class="note">The builder already works. Finish steps 3 and 4 below, then check again.</p>'
+                );
+              }
+            })
+            .catch(function () {
+              show(
+                'bad',
+                'This copy of the builder has no HubSpot connector.',
+                '<p class="note">It is probably hosted as plain files. Connect HubSpot needs one of the hosting options in the guide (Render, Vercel, Cloudflare, Docker).</p>'
+              );
+            });
+        }
+        document.getElementById('recheck').addEventListener('click', check);
+        check();
+
+        var downloadStatus = document.getElementById('download-status');
+        document.getElementById('download-app').addEventListener('click', function () {
+          downloadStatus.textContent = 'Preparing…';
+          fetch('/hubspot-connector-app.uiex.json', { cache: 'no-store' })
+            .then(function (res) {
+              if (!res.ok) throw new Error('missing');
+              return res.json();
+            })
+            .then(function (doc) {
+              var urls = [redirectUrl];
+              var existing = (doc.app && doc.app.redirectUrls) || [];
+              for (var j = 0; j < existing.length; j++) {
+                if (existing[j].indexOf('YOUR-DOMAIN') === -1 && urls.indexOf(existing[j]) === -1) urls.push(existing[j]);
+              }
+              doc.app.redirectUrls = urls;
+              var blob = new Blob([JSON.stringify(doc, null, 2) + '\n'], { type: 'application/json' });
+              var link = document.createElement('a');
+              link.href = URL.createObjectURL(blob);
+              link.download = 'hubspot-connector-app.uiex.json';
+              document.body.appendChild(link);
+              link.click();
+              setTimeout(function () {
+                URL.revokeObjectURL(link.href);
+                link.remove();
+              }, 1000);
+              downloadStatus.textContent = 'Downloaded hubspot-connector-app.uiex.json (redirect URL: ' + redirectUrl + ').';
+            })
+            .catch(function () {
+              downloadStatus.textContent = 'Could not prepare the file. Use the hubspot-app folder from the project instead.';
+            });
+        });
+      })();
+    </script>
+  </body>
+</html>

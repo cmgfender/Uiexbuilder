@@ -1,0 +1,29 @@
+# Render Blueprint: one web service that serves the builder and the HubSpot connector.
+# "Deploy to Render" button: https://render.com/deploy?repo=https://github.com/cmgfender/Uiexbuilder
+# Guide: docs/HOSTING.md → "Render".
+services:
+  - type: web
+    name: uiex-builder
+    runtime: node
+    plan: free # "starter" keeps it awake (free services sleep after 15 minutes without visitors)
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      # From your HubSpot app's Auth tab. You can leave them empty for the first deploy and add
+      # them later (Environment tab) - the builder works, only "Connect HubSpot" waits for them.
+      - key: HUBSPOT_CLIENT_ID
+        sync: false
+      - key: HUBSPOT_CLIENT_SECRET
+        sync: false
+      # Render generates a strong random value for you.
+      - key: SESSION_SECRET
+        generateValue: true
+      # Optional: only needed with a custom domain. Empty = your https://<name>.onrender.com address.
+      - key: APP_URL
+        sync: false

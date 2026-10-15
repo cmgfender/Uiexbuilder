@@ -1,0 +1,187 @@
+/* Deploy to HubSpot (beta) — Export dialog section. Prefix: ub-dp- */
+
+.ub-dp-p {
+  margin: 0;
+  line-height: 1.5;
+}
+.ub-dp-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ub-dp-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--ub-text);
+  font-weight: 500;
+}
+.ub-dp-spin {
+  animation: ub-dp-spin 0.9s linear infinite;
+}
+@keyframes ub-dp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ub-dp-spin {
+    animation: none;
+  }
+}
+
+/* Key field */
+.ub-dp-key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ub-dp-key .ub-input {
+  flex: 1;
+  min-width: 0;
+}
+.ub-dp-saved {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ub-dp-remember {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+.ub-dp-guide-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+}
+.ub-dp-guide {
+  padding: 4px 12px;
+  border-radius: var(--ub-radius);
+  background: var(--ub-surface-2);
+  border: 1px solid var(--ub-border);
+}
+.ub-dp-guide .ub-dp-p {
+  padding: 8px 0;
+}
+.ub-dp-linkbtn {
+  text-decoration: none;
+  align-self: flex-start;
+}
+
+/* Stepper */
+.ub-dp-stepper {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ub-dp-stepper__step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border-radius: var(--ub-radius);
+  border: 1px solid var(--ub-border);
+  background: var(--ub-surface);
+  color: var(--ub-text-3);
+  min-width: 0;
+}
+.ub-dp-stepper__icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--ub-surface-3);
+  color: var(--ub-text-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+.ub-dp-stepper__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ub-dp-stepper__label {
+  font-weight: 600;
+  color: var(--ub-text);
+}
+.ub-dp-stepper__hint {
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+.ub-dp-stepper__step--current {
+  border-color: var(--ub-select);
+  background: var(--ub-select-soft);
+}
+.ub-dp-stepper__step--current .ub-dp-stepper__icon {
+  background: var(--ub-select);
+  color: #fff;
+}
+.ub-dp-stepper__step--done .ub-dp-stepper__icon {
+  background: var(--ub-success);
+  color: #fff;
+}
+.ub-dp-stepper__step--failed {
+  border-color: var(--ub-danger);
+  background: var(--ub-danger-soft);
+}
+.ub-dp-stepper__step--failed .ub-dp-stepper__icon {
+  background: var(--ub-danger);
+  color: #fff;
+}
+@media (max-width: 640px) {
+  .ub-dp-stepper {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Log */
+.ub-dp-log {
+  max-height: 200px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: var(--ub-radius);
+  border: 1px solid var(--ub-border);
+  background: var(--ub-surface-2);
+  font-family: var(--ub-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ub-text-2);
+}
+.ub-dp-log:focus-visible {
+  outline: none;
+  box-shadow: var(--ub-focus);
+}
+.ub-dp-log ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ub-dp-log li {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ub-dp-log__warn {
+  color: var(--ub-warning);
+}
+.ub-dp-log__error {
+  color: var(--ub-danger);
+}
+.ub-dp-logwrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

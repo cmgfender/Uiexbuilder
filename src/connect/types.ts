@@ -29,6 +29,7 @@ export const CONNECTOR_ROUTES = {
   proxyFetch: '/api/proxy/fetch', // POST ProxyFetchRequest -> ProxyFetchResponse (preview of hubspot.fetch)
   deployStart: '/api/deploy', // POST DeployRequest -> DeployStatus (beta)
   deployStatus: '/api/deploy/:deployId', // GET -> DeployStatus
+  deployKey: '/api/deploy/key', // GET -> DeployKeyInfo; DELETE -> forget the remembered key -> DeployKeyInfo
 } as const;
 
 export const CSRF_HEADER = 'X-UIEX-Request';
@@ -218,6 +219,18 @@ export interface DeployStatus {
   /** Deep link to the project in HubSpot once uploaded. */
   projectUrl?: string;
   error?: string;
+  /**
+   * Once deployed: a link that installs the app in the account (static-auth apps), when HubSpot
+   * reported the app id. Otherwise install from the project page (Distribution).
+   */
+  installUrl?: string;
+}
+
+/** GET/DELETE /api/deploy/key — whether a personal access key is remembered in this browser's session. */
+export interface DeployKeyInfo {
+  remembered: boolean;
+  /** Portal the remembered key belongs to. */
+  portalId?: number;
 }
 
 export interface ConnectorErrorBody {
@@ -230,5 +243,7 @@ export interface ConnectorErrorBody {
     correlationId?: string;
     /** For 'missing_scope': the scope(s) needed. */
     requiredScopes?: string[];
+    /** For 'portal_mismatch' (deploy): the HubSpot account the personal access key belongs to. */
+    portalId?: number;
   };
 }

@@ -5,8 +5,15 @@
   "description": "Visual drag-and-drop builder for HubSpot UI extensions (app cards, settings pages, app home).",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
+    "dev": "node scripts/dev.mjs",
+    "dev:full": "node scripts/dev.mjs --fake",
+    "dev:vite": "vite",
+    "build": "tsc -b && vite build && node scripts/build-server.mjs",
+    "build:app": "tsc -b && vite build",
+    "build:server": "node scripts/build-server.mjs",
+    "start": "node --enable-source-maps dist-server/node.mjs",
+    "start:demo": "node scripts/dev.mjs --fake --prod",
+    "secret": "node scripts/generate-secret.mjs",
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "test": "vitest run",
@@ -40,5 +47,8 @@
     "typescript": "~5.9.3",
     "vite": "^8.3.4",
     "vitest": "^5.0.4"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
   }
 }

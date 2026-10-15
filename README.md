@@ -45,13 +45,17 @@ data, then export a **ready-to-deploy HubSpot developer project**.
 ```bash
 npm install
 npm run dev        # http://localhost:5173
+npm run dev:full   # same, plus a fake HubSpot with demo data to try "Connect HubSpot" offline
 ```
 
 Other scripts:
 
 | Command | What it does |
 | --- | --- |
-| `npm run build` | Type-check and build the static app into `dist/` |
+| `npm run build` | Type-check and build the static app into `dist/` and the server into `dist-server/` |
+| `npm start` | Production server: the builder + the HubSpot connector on `$PORT` (default 3000) |
+| `npm run start:demo` | Production build with a fake HubSpot on http://localhost:4174 (demos, end-to-end tests) |
+| `npm run secret` | Print a random `SESSION_SECRET` |
 | `npm test` | Unit/integration tests (Vitest), incl. type-checking generated cards against `@hubspot/ui-extensions` |
 | `npm run e2e` | End-to-end tests (Playwright) |
 
@@ -71,17 +75,73 @@ Other scripts:
 The exported README repeats these steps for your project (its secrets, functions, endpoints and
 where each card goes) and lists the scopes and permitted URLs it needs.
 
+## Connect to HubSpot
+
+When the builder is hosted with its small **connector** (any option under [Hosting](#hosting)),
+admins can sign in with HubSpot - no terminal, no install:
+
+1. Click **Connect HubSpot**, approve in the HubSpot window, and the builder shows
+   **Connected to** your account.
+2. Pick a real **sample record**: the preview shows its real properties, associations, CRM search
+   results and record context. Switch back to mock data any time.
+3. Property, object-type and pipeline pickers list your account's real schema: custom properties,
+   labels and dropdown options.
+4. **Deploy to HubSpot** (beta) uploads the generated project with a personal access key you
+   create in HubSpot - instead of the CLI steps above.
+
+Access is **read-only**. HubSpot's tokens never reach the browser: the connector keeps them in an
+encrypted, `HttpOnly` cookie (there is no database) and refreshes them automatically. To remove
+access, click **Disconnect**, or uninstall the app in HubSpot (**Settings → Integrations →
+Connected apps**). Without a connector (e.g. plain static hosting or `npm run dev:vite`) the builder
+works exactly as before, with mock data.
+
+## Hosting
+
+Put the builder online with sign-in in a few clicks - step-by-step guide for non-developers:
+**[docs/HOSTING.md](docs/HOSTING.md)**.
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/cmgfender/Uiexbuilder)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fcmgfender%2FUiexbuilder&project-name=uiex-builder&repository-name=uiex-builder&env=APP_URL,HUBSPOT_CLIENT_ID,HUBSPOT_CLIENT_SECRET,SESSION_SECRET&envDescription=Type%20%22later%22%20in%20each%20box%20if%20you%20do%20not%20have%20the%20values%20yet.%20The%20builder%20works%20without%20them%3B%20only%20Connect%20HubSpot%20waits.&envLink=https%3A%2F%2Fgithub.com%2Fcmgfender%2FUiexbuilder%2Fblob%2Fmain%2Fdocs%2FHOSTING.md%23step-3---add-the-hubspot-settings-to-your-host)
+
+In short:
+
+1. Deploy (Render, Vercel, Cloudflare Workers via `wrangler.toml`, Docker via `Dockerfile`, or any
+   Node.js host with `npm run build && npm start`).
+2. Create the HubSpot app that people approve when they connect - from the builder itself
+   (`/setup.html` → **Download the app file** → **Project › Import .uiex.json…** → **Deploy to
+   HubSpot**) or with the HubSpot CLI from [`hubspot-app/`](hubspot-app).
+3. Set `HUBSPOT_CLIENT_ID`, `HUBSPOT_CLIENT_SECRET` and `SESSION_SECRET` (plus `APP_URL` on
+   Docker or with your own domain) - see [`.env.example`](.env.example).
+4. Open `/setup.html` on your builder to check that sign-in is ready, then share the address.
+
+| Platform | Files |
+| --- | --- |
+| Render | `render.yaml` (Blueprint, health check `/api/health`) |
+| Vercel | `vercel.json`, `api/[...path].ts` (Edge Function) |
+| Cloudflare Workers | `wrangler.toml`, `server/cloudflare.ts` |
+| Docker | `Dockerfile`, `.dockerignore` |
+| Node.js | `server/node.ts` → `dist-server/node.mjs` |
+
+All of them run the same connector core (`server/core`, standard Web `Request`/`Response`).
+
 ## Project layout
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for module contracts.
 
 ```
+server/
+  core/       HubSpot connector: OAuth sign-in, encrypted cookie sessions, read-only CRM API
+  node.ts     production Node server (static files + /api); cloudflare.ts: Workers adapter
+  fake-hubspot/  in-memory HubSpot for tests and `npm run dev:full`
+api/          Vercel adapter
+hubspot-app/  the HubSpot app behind "Connect HubSpot" (developer project)
 src/
   model/      document model, tree ops, placement rules, store (undo/redo), persistence, validation
   registry/   HubSpot component definitions (props, events, slots, previews)
   preview/    HubSpot-like preview styles
   runtime/    expression engine + interactive preview runtime
   codegen/    TSX + project generation, zip export
+  connect/    HubSpot connection client: sign-in, live preview data, portal schema for pickers
   canvas/     design surface, selection, drag & drop
   inspector/  property / events / advanced editors
   panels/     data, app settings, functions, export, projects
