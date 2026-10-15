@@ -358,6 +358,20 @@ export interface PreviewMockData {
   functions: Record<string, JsonValue>;
 }
 
+/**
+ * A derived value recomputed on every render: `const <name> = (<expr>);` placed after state and
+ * data hooks. Computed values may reference state, data sources, context, helpers and computed
+ * values declared before them.
+ */
+export interface ComputedValue {
+  id: string;
+  /** Valid JS identifier. */
+  name: string;
+  /** JavaScript expression. */
+  expr: string;
+  description?: string;
+}
+
 export interface Extension {
   id: string;
   kind: ExtensionKind;
@@ -374,6 +388,14 @@ export interface Extension {
   objectTypes: string[];
   state: StateVar[];
   dataSources: DataSource[];
+  /** Derived values (power feature). Optional for backwards compatibility. */
+  computed?: ComputedValue[];
+  /**
+   * Module-level helper code (power feature): plain JavaScript/TypeScript function declarations
+   * (e.g. `function formatMoney(v) { ... }`) emitted above the component and callable from any
+   * expression. Must not reference component state (pass values as arguments).
+   */
+  helpers?: string;
   rootId: NodeId;
   nodes: Record<NodeId, UINode>;
   mock: PreviewMockData;
