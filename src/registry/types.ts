@@ -159,6 +159,22 @@ export interface OverlayDef {
   idProp: string;
 }
 
+/**
+ * Attributes the renderer asks a preview to put on its outermost DOM element. Spread them as-is
+ * (merge `className` with your own). In preview mode the runtime may add hover handlers / title to
+ * show a Tooltip overlay attached to the component.
+ */
+export interface PreviewRootProps {
+  'data-node-id': string;
+  'data-node-type': string;
+  'data-uiex-clone'?: string;
+  'data-uiex-cond'?: string;
+  className?: string;
+  title?: string;
+  onMouseEnter?: (e: React.MouseEvent<HTMLElement>) => void;
+  onMouseLeave?: (e: React.MouseEvent<HTMLElement>) => void;
+}
+
 /** Props passed by the renderer to a component's designer preview. */
 export interface PreviewProps {
   node: UINode;
@@ -181,7 +197,7 @@ export interface PreviewProps {
    * MUST be spread onto the outermost DOM element the preview renders. Carries `data-node-id`
    * (used for selection, hover outlines and drag & drop) plus className hooks.
    */
-  rootProps: { 'data-node-id': string; 'data-node-type': string; className?: string };
+  rootProps: PreviewRootProps;
   /**
    * Fire one of the node's events (preview mode only; a no-op in design mode). For triggers with
    * an `overlay` slot, firing 'onClick' also opens the overlay.
