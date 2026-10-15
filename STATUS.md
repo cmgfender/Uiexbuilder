@@ -109,3 +109,44 @@ Resumed. The build phase is still running.
 - **"Publish to HubSpot" wizard:** a direct link to the HubSpot personal access key page, a progress bar, an install-app link, and a link to the record page with a checklist for adding the card.
 - **Fix-it buttons on errors** (missing scope → Reconnect) and a "Waking up…" screen for free-plan cold starts.
 - **Usability test:** an agent role-plays a first-time admin end to end with screenshots; iterate until smooth.
+
+## Log — paused again at the user's request (2026-10-15 ~23:50 UTC)
+
+### Connector build workflow: stopped during the Integrate phase
+
+| Phase | State |
+| --- | --- |
+| Build: server core, hosting, Publish to HubSpot (beta), client Connect UI, live data in the runtime, real-portal pickers | Done. All 6 agents finished and each module's own tests passed. |
+| Integrate: wiring, connector end-to-end tests against the fake HubSpot, docs | Started, then stopped. No connector end-to-end suite exists yet (only the original `e2e/`). |
+| Security + first-time-admin reviews, fixes, full gate | Not started |
+| First-run experience (welcome, guided setup, tour, publish wizard) | Not started (plan above) |
+
+**Code state** (everything committed and pushed; latest commit `5b8a5b4`):
+
+- `npx tsc -b` reports 7 errors, all in `src/registry/index.ts` and all the same cause. The server tsconfig compiles UI modules (`.tsx`) but has no `jsx` option. **Fix:** add `"jsx": "react-jsx"` to `tsconfig.server.json`, or stop server code from importing UI modules.
+- The unit tests, build and Playwright suites have **not** been run on the combined code since the build agents finished.
+
+**Render:**
+
+- Service `srv-db8llg3bc2fs73frmrb0`, https://uiex-builder.onrender.com. Nothing is live yet. Both builds so far failed on the typecheck errors above.
+- **Pushes do NOT auto-deploy.** The service was created from a public repo URL, so Render receives no push webhooks. After pushing, trigger a deploy manually (Render MCP `trigger_deploy`, or "Manual Deploy" in the dashboard), or connect the repo through Render's GitHub app.
+
+### Resume checklist
+
+1. Fix the `tsconfig.server.json` jsx issue, then run `npx tsc -b` and `npx vitest run` and fix any failures.
+2. Finish integration:
+   - wire the modules together
+   - add the connector end-to-end suite (`e2e:connect`) against the fake HubSpot: sign in, pick a record, live data, custom property picker, disconnect, publish (success and failure)
+   - keep `npx playwright test` green
+   - `npm run build` then `npm start` must serve the app and `/api/health`
+3. Run the security review and first-time-admin review, then fix what they find.
+4. Build the first-run experience and run an agent usability test.
+5. Push, trigger the Render deploy, and verify https://uiex-builder.onrender.com and `/api/health`.
+6. HubSpot sign-in app, with the user. Redirect URL: `https://uiex-builder.onrender.com/api/auth/callback`. Then set `HUBSPOT_CLIENT_ID` and `HUBSPOT_CLIENT_SECRET` on Render.
+
+To restart the stopped workflow in this session (Build replays from cache; Integrate onward re-runs):
+
+```
+Workflow({ scriptPath: "/root/.claude/projects/-home-user-Uiexbuilder/b04d6910-2b0e-5666-9061-79969b6019f7/workflows/scripts/hubspot-connector-wf_f350576c-7d9.js",
+           resumeFromRunId: "wf_f350576c-7d9" })
+```
