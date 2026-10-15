@@ -89,13 +89,16 @@ function DeployFlow({ client, pollIntervalMs, onShowCli, onClose }: DeployFlowPr
   const [preparing, setPreparing] = useState(false);
   const [last, setLast] = useState<LastTarget>({});
 
-  // Is a key remembered in this browser's session? (Only possible while connected.)
+  // Is a key remembered in this browser's session? (Only possible while connected.) Checked again
+  // each time the form comes back, because a deploy may just have remembered (or replaced) the key.
   const connectedPortal = connected?.portalId;
+  const formShown = job.state.kind === 'idle';
   useEffect(() => {
     if (!connectedPortal) {
       setSavedKey(null);
       return;
     }
+    if (!formShown) return;
     let alive = true;
     client
       .keyInfo()
@@ -104,7 +107,7 @@ function DeployFlow({ client, pollIntervalMs, onShowCli, onClose }: DeployFlowPr
     return () => {
       alive = false;
     };
-  }, [client, connectedPortal]);
+  }, [client, connectedPortal, formShown]);
 
   const usingSavedKey = !!savedKey?.remembered && !useOtherKey;
 
@@ -135,6 +138,10 @@ function DeployFlow({ client, pollIntervalMs, onShowCli, onClose }: DeployFlowPr
   };
 
   const forgetKey = async () => {
+    // "Forget" means forget: don't keep a copy of the key in the field either.
+    setKey('');
+    setRemember(false);
+    setUseOtherKey(false);
     try {
       setSavedKey(await client.forgetKey());
     } catch {
@@ -151,7 +158,8 @@ function DeployFlow({ client, pollIntervalMs, onShowCli, onClose }: DeployFlowPr
         project={project}
         onAgain={() => {
           job.reset();
-          if (!remember) setKey('');
+          if (remember) setUseOtherKey(false); // the key just used is now the saved one
+          else setKey('');
         }}
       />
     );

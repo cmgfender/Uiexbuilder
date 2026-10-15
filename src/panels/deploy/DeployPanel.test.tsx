@@ -316,6 +316,32 @@ describe('<DeployToHubSpotPanel> deploying', () => {
     expect(client.forgetKey).toHaveBeenCalled();
   });
 
+  it('offers the saved key right after a deploy that remembered it', async () => {
+    let remembered = false;
+    const client = mockClient({
+      start: async (req) => {
+        if (req.remember) remembered = true;
+        return status('building', 1);
+      },
+      statuses: [status('success', 2)],
+    });
+    client.keyInfo.mockImplementation(async () => (remembered ? { remembered: true, portalId: PORTAL } : { remembered: false }));
+    renderPanel(client);
+    await waitFor(() => expect(client.keyInfo).toHaveBeenCalledTimes(1));
+    typeKey();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Remember on this browser' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy to HubSpot' }));
+    await screen.findByText('Your project is live in HubSpot.');
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy again' }));
+    expect(await screen.findByText('Using the personal access key saved on this browser.')).toBeInTheDocument();
+    expect(client.keyInfo).toHaveBeenCalledTimes(2);
+
+    // Forgetting it also empties the key field.
+    fireEvent.click(screen.getByRole('button', { name: 'Forget saved key' }));
+    expect(await screen.findByLabelText('Paste your key')).toHaveValue('');
+    expect(screen.getByRole('checkbox', { name: 'Remember on this browser' })).not.toBeChecked();
+  });
+
   it('lets a disconnected admin deploy, but only a connected one remember the key', async () => {
     connect('disconnected');
     const client = mockClient();

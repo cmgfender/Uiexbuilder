@@ -79,3 +79,33 @@ The script path is local to this session. In a new session, ask Claude to "finis
 1. Create the HubSpot OAuth app. `hubspot-app/` is ready to upload, and `docs/HOSTING.md` explains the no-terminal path.
 2. Host the builder and connector, e.g. with Render or Vercel one-click deploy. Set `APP_URL`, `HUBSPOT_CLIENT_ID`, `HUBSPOT_CLIENT_SECRET` and `SESSION_SECRET`.
 3. Do the first real sign-in. Everything here is tested only against the fake HubSpot portal, because this sandbox cannot reach HubSpot.
+
+## Update — hosting and next steps
+
+### Hosting (Render)
+
+- **Service:** `uiex-builder` at https://uiex-builder.onrender.com (free plan, Oregon). Dashboard: https://dashboard.render.com/web/srv-db8llg3bc2fs73frmrb0.
+- **Deploys:** automatic from `claude/ui-extension-builder`. Render only switches the site live after a successful build.
+- **Environment set:**
+  - `NODE_VERSION=22`
+  - `NODE_ENV=production`
+  - `APP_URL=https://uiex-builder.onrender.com`
+  - `SESSION_SECRET`, generated
+- **Still blank:** `HUBSPOT_CLIENT_ID` and `HUBSPOT_CLIENT_SECRET`. Add them once the HubSpot sign-in app is registered. Its redirect URL is `https://uiex-builder.onrender.com/api/auth/callback`.
+
+### Connector build
+
+Resumed. The build phase is still running.
+
+### Next: first-run experience for brand-new users (queued after the connector)
+
+- **Welcome screen:** "Connect my HubSpot" (recommended) or "Try with sample data".
+- **Guided setup:**
+  1. Connect.
+  2. Choose the record type, including the portal's custom objects.
+  3. Pick a sample record and a starter card, which opens with real data.
+- **Skippable 4-step tour** (add components, edit, preview, publish), replayable from Help.
+- **Plain language:** "Publish to HubSpot" instead of "Deploy". Code, Problems and Console collapsed by default.
+- **"Publish to HubSpot" wizard:** a direct link to the HubSpot personal access key page, a progress bar, an install-app link, and a link to the record page with a checklist for adding the card.
+- **Fix-it buttons on errors** (missing scope → Reconnect) and a "Waking up…" screen for free-plan cold starts.
+- **Usability test:** an agent role-plays a first-time admin end to end with screenshots; iterate until smooth.
