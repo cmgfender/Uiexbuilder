@@ -38,7 +38,23 @@ addition but is not needed to design or ship extensions.
   association tables) without hand-writing React.
 * **Agencies** — prototype cards with clients using realistic mock data, then hand off code.
 
-## 3. In scope (v1)
+## 3. Design principle: dramatically easier than code, without a ceiling
+
+Everything a developer can express in a hand-written card should be reachable in the GUI, but the
+default path never requires writing code.
+
+* **Easy by default** — starter cards and drop-in blocks, smart defaults on every component,
+  inline text editing, guided data-source wizards with CRM property pickers, a visual action
+  builder that reads as plain language ("When clicked → set *count* to *count + 1* → show success
+  alert"), problems panel with one-click fixes, contextual help and docs links everywhere.
+* **Powerful when needed** — expressions anywhere (`{{ }}` or full JS) with autocomplete over
+  state, data, context and repeat variables and a live value preview; computed values; reusable
+  helper functions; custom code actions; raw/custom props for anything the registry lacks;
+  conditional rendering and repeats; app functions; command palette (⌘K) and full keyboard
+  control; per-component and per-file generated code view; save your own blocks to a library;
+  round-trip via `.uiex.json`, and the exported code is clean, idiomatic TSX you can keep evolving.
+
+## 4. In scope (v1)
 
 **Design surface**
 * Component palette with every stable component of `@hubspot/ui-extensions` 0.17 and
@@ -78,7 +94,7 @@ addition but is not needed to design or ship extensions.
   storage; starter templates (record summary, deal calculator, form with validation, association
   table, statistics dashboard, onboarding checklist, settings page, …).
 
-## 4. Out of scope (v1)
+## 5. Out of scope (v1)
 
 * Deploying directly to HubSpot from the browser (requires CLI auth); we export a project and
   document `hs project upload`. A local helper could be added later.
@@ -87,7 +103,7 @@ addition but is not needed to design or ship extensions.
   app objects, webhooks, marketplace listing assets.
 * Real CRM data in preview (mock data only; fetch actions may hit real URLs in preview mode).
 
-## 5. Quality bar / verification
+## 6. Quality bar / verification
 
 * Generated TSX for every component and every template is **type-checked against the real
   `@hubspot/ui-extensions` package** (`tsc --strict`) in the test suite, and bundled with esbuild.
@@ -95,7 +111,7 @@ addition but is not needed to design or ship extensions.
 * Unit tests for the model, codegen, runtime and validation; Playwright end-to-end tests for drag &
   drop, property editing, preview interactions and export.
 
-## 6. Architecture (summary)
+## 7. Architecture (summary)
 
 See `ARCHITECTURE.md` for contracts. Modules:
 
