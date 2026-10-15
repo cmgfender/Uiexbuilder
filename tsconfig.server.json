@@ -2,7 +2,11 @@
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.server.tsbuildinfo",
     "target": "ES2022",
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
@@ -13,7 +17,14 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ],
+    "jsx": "react-jsx"
   },
-  "include": ["server", "src/connect/types.ts", "api"]
+  "include": [
+    "server",
+    "src/connect/types.ts",
+    "api"
+  ]
 }
