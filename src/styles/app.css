@@ -558,6 +558,10 @@ pre,
 /* ---------- Screen-reader only ---------- */
 .ub-sr-only {
   position: absolute;
+  /* Pinned to the containing block's corner: at their static position (deep in a scrolled list)
+     visually hidden texts would stretch the scrollable area of the shell around them. */
+  top: 0;
+  left: 0;
   width: 1px;
   height: 1px;
   padding: 0;

@@ -20,6 +20,9 @@
      narrow windows. */
   min-width: 860px;
   height: 100%;
+  /* Nothing inside may extend the (fixed) viewport's scroll area: focusing or scrolling to an
+     element must never shift the whole editor up. */
+  overflow: clip;
 }
 .ub-sh-top {
   grid-area: top;
