@@ -11,6 +11,7 @@ import { BASE_RESERVED } from '../codegen/context';
 import { isValidIdentifier, toIdentifier } from '../model/ids';
 import type { DataSource, Extension } from '../model/types';
 import { helperNames } from '../power/helpers';
+import { renameConflictMessage } from './findUsages';
 
 export function setterOf(name: string): string {
   return `set${name.charAt(0).toUpperCase()}${name.slice(1)}`;
@@ -80,7 +81,19 @@ export function validateDeclaredName(ext: Extension, name: string, entity: Named
     if (owner) return n === trimmed ? `Already used by ${owner}` : `Conflicts with “${n}” of ${owner}`;
   }
   for (const n of declares) if (RESERVED.has(n)) return `“${n}” is a reserved word`;
+  // Renaming: the new name must not be captured by a local name (event param, repeat item, ...)
+  // where the current name is used.
+  const current = currentName(ext, entity);
+  if (current && current !== trimmed) return renameConflictMessage(ext, current, trimmed);
   return null;
+}
+
+/** The current name of an existing state variable / data source / computed value, or null. */
+function currentName(ext: Extension, entity: NamedEntity): string | null {
+  const list: Array<{ id: string; name: string }> =
+    entity.kind === 'state' ? ext.state ?? [] : entity.kind === 'dataSource' ? ext.dataSources ?? [] : ext.computed ?? [];
+  const hit = list.find((x) => x?.id === entity.id);
+  return hit && typeof hit.name === 'string' ? hit.name : null;
 }
 
 /** First valid, free name derived from `base` (e.g. `record`, `record2`, ...). */

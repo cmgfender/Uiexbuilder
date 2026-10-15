@@ -68,7 +68,7 @@ describe('<ExtensionsDialog>', () => {
     const uid = screen.getByRole('textbox', { name: 'UID of Alpha Prime' });
     fireEvent.change(uid, { target: { value: beta.uid } });
     fireEvent.keyDown(uid, { key: 'Enter' });
-    expect(screen.getByRole('alert')).toHaveTextContent('already used');
+    expect(screen.getByRole('alert')).toHaveTextContent('Card “Beta” already uses this UID');
     expect(exts()[0].uid).toBe(alpha.uid);
     fireEvent.change(uid, { target: { value: 'alpha_prime' } });
     fireEvent.keyDown(uid, { key: 'Enter' });
@@ -77,10 +77,39 @@ describe('<ExtensionsDialog>', () => {
     const file = screen.getByRole('textbox', { name: 'File name of Alpha Prime' });
     fireEvent.change(file, { target: { value: beta.fileName } });
     fireEvent.keyDown(file, { key: 'Enter' });
-    expect(screen.getByRole('alert')).toHaveTextContent('Another file already uses this name');
+    expect(screen.getByRole('alert')).toHaveTextContent('“Beta” already uses this file name');
     fireEvent.change(file, { target: { value: 'AlphaPrimeCard' } });
     fireEvent.keyDown(file, { key: 'Enter' });
     expect(exts()[0].fileName).toBe('AlphaPrimeCard');
+  });
+
+  it('applies the project-wide uid and file name rules of validation', async () => {
+    const { validateProject } = await import('../model/validate');
+    useEditor.getState().addExtension({ kind: 'settings' });
+    renderDialog();
+    const [alpha] = exts();
+    const appUid = useEditor.getState().project.app.uid;
+    const uid = screen.getByRole('textbox', { name: 'UID of Alpha' });
+    fireEvent.change(uid, { target: { value: appUid } });
+    fireEvent.keyDown(uid, { key: 'Enter' });
+    expect(screen.getByRole('alert')).toHaveTextContent('The app already uses this UID');
+    expect(exts()[0].uid).toBe(alpha.uid);
+    fireEvent.blur(uid);
+
+    const file = screen.getByRole('textbox', { name: 'File name of Alpha' });
+    // Validation requires PascalCase extension file names.
+    fireEvent.change(file, { target: { value: 'my-card' } });
+    fireEvent.keyDown(file, { key: 'Enter' });
+    expect(screen.getByRole('alert')).toHaveTextContent('PascalCase');
+    // Unique across every extension (not only cards), ignoring case.
+    const settings = exts()[2];
+    fireEvent.change(file, { target: { value: settings.fileName.toUpperCase() } });
+    fireEvent.keyDown(file, { key: 'Enter' });
+    expect(screen.getByRole('alert')).toHaveTextContent('already uses this file name');
+    expect(exts()[0].fileName).toBe(alpha.fileName);
+    const rules = validateProject(useEditor.getState().project).map((i) => i.rule);
+    expect(rules).not.toContain('duplicate-uid');
+    expect(rules).not.toContain('invalid-file-name');
   });
 
   it('opens, duplicates and deletes extensions (never the last one)', () => {

@@ -25,7 +25,8 @@ import { selectActiveExtension, useEditor, type EditorState } from '../model/sto
 import { getComponent } from '../registry';
 import { endDrag, startDrag, useDragStore } from '../dnd/dragState';
 import { IconButton, cx } from '../ui';
-import { findNodeElement, findNodeElements } from './domHit';
+import { NODE_SELECTOR, OBSTACLE_ATTR, findNodeElement, findNodeElements } from './domHit';
+import { TOOLBAR_H, boxesIntersect, placeSelectionChrome, type ChromePlacement } from './chromePlacement';
 import { componentLabel, deleteNode, displayLabel, duplicateNode, moveSibling, nodeCapabilities, selectParent } from './nodeActions';
 import { useCanvasView } from './stores';
 
@@ -45,17 +46,38 @@ interface Flag {
 
 interface Measured {
   hover: Box | null;
+  /** The hovered element contains or is inside the selected one. */
+  hoverRelated: boolean;
   select: Box | null;
+  /** Content around the selection that its chrome should not cover. */
+  obstacles: Box[];
   clones: Box[];
   moving: Box | null;
   flags: Flag[];
   clipRight: number;
   clipBottom: number;
+  /** Visible size of the overlay layer. */
+  width: number;
+  height: number;
 }
 
-const EMPTY: Measured = { hover: null, select: null, clones: [], moving: null, flags: [], clipRight: 0, clipBottom: 0 };
+const EMPTY: Measured = {
+  hover: null,
+  hoverRelated: false,
+  select: null,
+  obstacles: [],
+  clones: [],
+  moving: null,
+  flags: [],
+  clipRight: 0,
+  clipBottom: 0,
+  width: 0,
+  height: 0,
+};
 const MAX_CLONES = 50;
 const MAX_FLAGS = 120;
+const MAX_OBSTACLES = 200;
+const OBSTACLE_SELECTOR = `${NODE_SELECTOR}, [${OBSTACLE_ATTR}]`;
 
 const requestFrame = (cb: () => void): number =>
   typeof requestAnimationFrame === 'function' ? requestAnimationFrame(cb) : (setTimeout(cb, 16) as unknown as number);
@@ -122,6 +144,36 @@ function hoverLabel(s: EditorState): string {
 
 const px = (b: Box) => ({ left: b.left, top: b.top, width: b.width, height: b.height });
 
+/** Matches any descendant that is not inline text formatting (makes an element "not plain text"). */
+const NOT_INLINE_TEXT = ['span', 'strong', 'em', 'b', 'i', 'u', 's', 'small', 'code', 'mark', 'sub', 'sup', 'br', 'abbr']
+  .map((tag) => `:not(${tag})`)
+  .join('');
+
+function isTransparent(color: string): boolean {
+  return !color || color === 'transparent' || /^rgba\(.*,\s*0\)$/.test(color.replace(/\s+/g, ''));
+}
+
+/**
+ * The line boxes of an element that is plain text (only text and inline formatting, no own
+ * background or border), else null. A Text or Heading block is as wide as its container while its
+ * words may take a fraction of it; covering the empty part hides nothing.
+ */
+function textLineRects(el: Element): DOMRect[] | null {
+  const doc = el.ownerDocument;
+  const view = doc.defaultView;
+  if (!view || typeof doc.createRange !== 'function') return null;
+  if (el.querySelector(NOT_INLINE_TEXT)) return null;
+  const cs = view.getComputedStyle(el);
+  if (!isTransparent(cs.backgroundColor) || (cs.backgroundImage !== 'none' && cs.backgroundImage !== '')) return null;
+  for (const side of ['top', 'right', 'bottom', 'left']) {
+    if (parseFloat(cs.getPropertyValue(`border-${side}-width`)) > 0) return null;
+  }
+  const range = doc.createRange();
+  range.selectNodeContents(el);
+  const rects = typeof range.getClientRects === 'function' ? Array.from(range.getClientRects()) : [];
+  return rects.length > 0 ? rects : null;
+}
+
 interface OverlayLayerProps {
   viewportRef: RefObject<HTMLDivElement | null>;
   stageRef: RefObject<HTMLDivElement | null>;
@@ -136,6 +188,7 @@ export const OverlayLayer = memo(function OverlayLayer({ viewportRef, stageRef, 
   const selKey = useEditor(selectionKey);
   const indicator = useDragStore((s) => (s.indicator && s.indicator.source === CANVAS_INDICATOR_SOURCE ? s.indicator : null));
   const movingId = useDragStore((s) => (s.payload?.kind === 'move' ? s.payload.nodeId : null));
+  const dragKind = useDragStore((s) => s.payload?.kind ?? null);
   const [m, setM] = useState<Measured>(EMPTY);
   const frame = useRef<number | null>(null);
 
@@ -145,8 +198,7 @@ export const OverlayLayer = memo(function OverlayLayer({ viewportRef, stageRef, 
     if (!vp || !surface) return;
     const st = useEditor.getState();
     const base = vp.getBoundingClientRect();
-    const toBox = (el: Element): Box | null => {
-      const r = el.getBoundingClientRect();
+    const rectBox = (r: { left: number; top: number; width: number; height: number }): Box | null => {
       if (r.width <= 0 && r.height <= 0) return null;
       return {
         left: Math.round((r.left - base.left) * 10) / 10,
@@ -155,28 +207,61 @@ export const OverlayLayer = memo(function OverlayLayer({ viewportRef, stageRef, 
         height: Math.round(r.height * 10) / 10,
       };
     };
+    const toBox = (el: Element): Box | null => rectBox(el.getBoundingClientRect());
     const stage = stageRef.current;
+    const clipRight = stage ? Math.max(0, stage.offsetWidth - stage.clientWidth) : 0;
+    const clipBottom = stage ? Math.max(0, stage.offsetHeight - stage.clientHeight) : 0;
     const next: Measured = {
       ...EMPTY,
+      obstacles: [],
       clones: [],
       flags: [],
-      clipRight: stage ? Math.max(0, stage.offsetWidth - stage.clientWidth) : 0,
-      clipBottom: stage ? Math.max(0, stage.offsetHeight - stage.clientHeight) : 0,
+      clipRight,
+      clipBottom,
+      width: Math.max(0, vp.clientWidth - clipRight),
+      height: Math.max(0, vp.clientHeight - clipBottom),
     };
     if (st.mode === 'design') {
       const sel = st.selectedNodeId;
+      let selEl: HTMLElement | null = null;
       if (sel) {
         const els = findNodeElements(surface, sel);
-        if (els[0]) next.select = toBox(els[0]);
+        selEl = els[0] ?? null;
+        if (selEl) next.select = toBox(selEl);
         for (const el of els.slice(1, MAX_CLONES + 1)) {
           const b = toBox(el);
           if (b) next.clones.push(b);
         }
       }
+      const box = next.select;
+      if (selEl && box) {
+        // Only content in the band the chrome can occupy (above / below the outline) matters.
+        const top = box.top - TOOLBAR_H - 4;
+        const bottom = box.top + box.height + TOOLBAR_H + 4;
+        for (const el of Array.from(surface.querySelectorAll(OBSTACLE_SELECTOR))) {
+          if (el === selEl || el.contains(selEl) || selEl.contains(el)) continue;
+          const b = toBox(el);
+          if (!b || b.top > bottom || b.top + b.height < top) continue;
+          // Plain text only occupies its lines, not its whole (often full-width) block.
+          const lines = textLineRects(el);
+          if (lines) {
+            for (const r of lines) {
+              const lb = rectBox(r);
+              if (lb) next.obstacles.push(lb);
+            }
+          } else {
+            next.obstacles.push(b);
+          }
+          if (next.obstacles.length >= MAX_OBSTACLES) break;
+        }
+      }
       const hov = st.hoveredNodeId;
       if (hov && hov !== sel) {
         const el = findNodeElement(surface, hov);
-        if (el) next.hover = toBox(el);
+        if (el) {
+          next.hover = toBox(el);
+          next.hoverRelated = !!selEl && (el.contains(selEl) || selEl.contains(el));
+        }
       }
       const payload = useDragStore.getState().payload;
       if (payload?.kind === 'move') {
@@ -236,7 +321,7 @@ export const OverlayLayer = memo(function OverlayLayer({ viewportRef, stageRef, 
   if (mode !== 'design') return null;
   const sel: SelectionInfo | null = selKey ? (JSON.parse(selKey) as SelectionInfo) : null;
   const base = viewportRef.current?.getBoundingClientRect();
-  const vpWidth = viewportRef.current?.clientWidth ?? 0;
+  const dragging = !!dragKind;
 
   return (
     <div className="ub-cv-overlay" style={{ right: m.clipRight, bottom: m.clipBottom }}>
@@ -257,7 +342,17 @@ export const OverlayLayer = memo(function OverlayLayer({ viewportRef, stageRef, 
         </div>
       )}
       {m.moving && <div className="ub-cv-moving" style={px(m.moving)} />}
-      {m.select && sel && <SelectionChrome box={m.select} info={sel} viewportWidth={vpWidth} />}
+      {m.select && sel && (
+        <SelectionChrome
+          box={m.select}
+          info={sel}
+          viewport={{ width: m.width, height: m.height }}
+          obstacles={m.obstacles}
+          peek={m.hover && !m.hoverRelated ? m.hover : null}
+          dragging={dragging}
+          focusStage={() => stageRef.current?.focus({ preventScroll: true })}
+        />
+      )}
       {indicator && base && <DropIndicatorView indicator={indicator} base={base} />}
     </div>
   );
@@ -268,10 +363,23 @@ export const OverlayLayer = memo(function OverlayLayer({ viewportRef, stageRef, 
 // ---------------------------------------------------------------------------
 
 const TOOLBAR_W = 168;
-const TOOLBAR_H = 28;
-const CHIP_H = 20;
+/** How long the pointer rests on covered content before the chrome fades out of its way. */
+const PEEK_DELAY = 250;
 
-function SelectionChrome({ box, info, viewportWidth }: { box: Box; info: SelectionInfo; viewportWidth: number }) {
+interface SelectionChromeProps {
+  box: Box;
+  info: SelectionInfo;
+  viewport: { width: number; height: number };
+  obstacles: Box[];
+  /** Hovered component (not the selection or one of its ancestors / descendants). */
+  peek: Box | null;
+  /** A drag is in progress: the chrome must not intercept drops on the content below it. */
+  dragging: boolean;
+  /** Puts keyboard focus back on the canvas stage. */
+  focusStage: () => void;
+}
+
+function SelectionChrome({ box, info, viewport, obstacles, peek, dragging, focusStage }: SelectionChromeProps) {
   const Icon = getComponent(info.type)?.icon;
   const chipRef = useRef<HTMLDivElement>(null);
   const quickRef = useRef<HTMLDivElement>(null);
@@ -285,24 +393,63 @@ function SelectionChrome({ box, info, viewportWidth }: { box: Box; info: Selecti
         : { chip: chip || prev.chip, quick: quick || prev.quick },
     );
   });
-  const chipInside = box.top < CHIP_H + 4;
-  // Toolbar: above the outline, right-aligned but never over the label chip; below when there is
-  // no room above.
-  const above = !chipInside && box.top >= TOOLBAR_H + 6;
-  const maxLeft = Math.max(4, (viewportWidth || Infinity) - sizes.quick - 4);
-  const toolbarLeft = above
-    ? Math.min(Math.max(box.left + box.width - sizes.quick, box.left + sizes.chip + 6), maxLeft)
-    : Math.min(Math.max(4, box.left + box.width - sizes.quick), maxLeft);
-  const toolbarTop = above ? box.top - TOOLBAR_H - 2 : box.top + box.height + 6;
+  // Outside the outline, on the side that hides the least of the surrounding content.
+  const placement: ChromePlacement = placeSelectionChrome({
+    box,
+    chipWidth: sizes.chip,
+    toolbarWidth: sizes.quick,
+    viewport,
+    obstacles,
+  });
+  const { chip, toolbar } = placement;
+
+  // Resting the pointer on content the chrome covers fades the chrome and lets clicks through,
+  // so the content can be seen and selected; entering the toolbar first keeps it usable.
+  const covering = !!peek && (boxesIntersect(peek, chip) || boxesIntersect(peek, toolbar));
+  const [peeking, setPeeking] = useState(false);
+  const inToolbar = useRef(false);
+  /** Bumped when the pointer leaves the toolbar: re-arms the fade for content still hovered. */
+  const [leftToolbar, setLeftToolbar] = useState(0);
+  useEffect(() => {
+    if (!covering) {
+      setPeeking(false);
+      return undefined;
+    }
+    const timer = setTimeout(() => {
+      if (!inToolbar.current) setPeeking(true);
+    }, PEEK_DELAY);
+    return () => clearTimeout(timer);
+  }, [covering, leftToolbar]);
+  const faded = (peeking && covering) || dragging;
   const nodeId = info.id;
+  /**
+   * After a toolbar action, focus must not drop to <body>: a move button that became disabled
+   * (the end of the list) hands focus to the other one; a deleted / replaced selection, to the stage.
+   */
+  const keepFocus = (from: 'up' | 'down' | 'other') => {
+    requestAnimationFrame(() => {
+      const active = document.activeElement as HTMLElement | null;
+      const lost = !active || active === document.body || !active.isConnected || (active as HTMLButtonElement).disabled === true;
+      if (!lost) return;
+      const other = from === 'other' ? null : quickRef.current?.querySelector<HTMLButtonElement>(`button[aria-label="${from === 'up' ? 'Move down' : 'Move up'}"]`);
+      if (other && !other.disabled) other.focus();
+      else focusStage();
+    });
+  };
   return (
     <>
       <div className={cx('ub-cv-select', info.locked && 'ub-cv-select--locked')} style={px(box)} />
       <div
         ref={chipRef}
-        className={cx('ub-cv-chip', chipInside && 'ub-cv-chip--inside')}
-        style={{ left: box.left, top: chipInside ? box.top + 2 : box.top - CHIP_H - 2 }}
+        className={cx(
+          'ub-cv-chip',
+          chip.side === 'inside' && 'ub-cv-chip--inside',
+          chip.side === 'below' && 'ub-cv-chip--below',
+          faded && 'ub-cv-chrome--peek',
+        )}
+        style={{ left: chip.left, top: chip.top }}
         data-testid="canvas-selection-chip"
+        data-side={chip.side}
       >
         {Icon && <Icon size={11} aria-hidden />}
         <span className="ub-cv-chip__label">{info.name || info.label}</span>
@@ -335,22 +482,54 @@ function SelectionChrome({ box, info, viewportWidth }: { box: Box; info: Selecti
       </div>
       <div
         ref={quickRef}
-        className="ub-cv-quick"
-        style={{ left: toolbarLeft, top: toolbarTop }}
+        className={cx('ub-cv-quick', faded && 'ub-cv-chrome--peek')}
+        style={{ left: toolbar.left, top: toolbar.top }}
         role="toolbar"
         aria-label={`${info.label} actions`}
+        data-side={toolbar.side}
         onMouseDown={(e) => e.stopPropagation()}
+        onPointerEnter={() => {
+          inToolbar.current = true;
+        }}
+        onPointerLeave={() => {
+          inToolbar.current = false;
+          setLeftToolbar((n) => n + 1);
+        }}
       >
         <IconButton size="sm" label="Select parent" disabled={!info.hasParentNode} onClick={() => selectParent(nodeId)}>
           <CornerLeftUp size={13} />
         </IconButton>
-        <IconButton size="sm" label="Move up" disabled={!info.canMoveUp} onClick={() => moveSibling(nodeId, -1)}>
+        <IconButton
+          size="sm"
+          label="Move up"
+          disabled={!info.canMoveUp}
+          onClick={() => {
+            moveSibling(nodeId, -1);
+            keepFocus('up');
+          }}
+        >
           <ArrowUp size={13} />
         </IconButton>
-        <IconButton size="sm" label="Move down" disabled={!info.canMoveDown} onClick={() => moveSibling(nodeId, 1)}>
+        <IconButton
+          size="sm"
+          label="Move down"
+          disabled={!info.canMoveDown}
+          onClick={() => {
+            moveSibling(nodeId, 1);
+            keepFocus('down');
+          }}
+        >
           <ArrowDown size={13} />
         </IconButton>
-        <IconButton size="sm" label="Duplicate" disabled={!info.canDuplicate} onClick={() => duplicateNode(nodeId)}>
+        <IconButton
+          size="sm"
+          label="Duplicate"
+          disabled={!info.canDuplicate}
+          onClick={() => {
+            duplicateNode(nodeId);
+            keepFocus('other');
+          }}
+        >
           <CopyPlus size={13} />
         </IconButton>
         <IconButton
@@ -358,7 +537,10 @@ function SelectionChrome({ box, info, viewportWidth }: { box: Box; info: Selecti
           label={info.locked ? 'Delete (locked)' : 'Delete'}
           disabled={info.locked}
           className="ub-cv-quick__danger"
-          onClick={() => deleteNode(nodeId)}
+          onClick={() => {
+            deleteNode(nodeId);
+            keepFocus('other');
+          }}
         >
           <Trash2 size={13} />
         </IconButton>

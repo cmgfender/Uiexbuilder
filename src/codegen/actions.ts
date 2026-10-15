@@ -8,7 +8,8 @@ import { getComponent } from '../registry';
 import type { ActionStep, FetchAction, RunFunctionAction } from '../model/types';
 import { isExpr } from '../model/types';
 import type { GenContext, NameAllocator } from './context';
-import { importValue, noteUserCode, stateSetter, UI_EXTENSIONS } from './context';
+import { importValue, noteUserCode, stateSetter, stateTypeArg, UI_EXTENSIONS, useHelper } from './context';
+import { fitsStateType, inferValueType, optionalContextAccess, type InferredType } from './rewrite';
 import {
   asOperand,
   CodeWriter,
@@ -18,6 +19,7 @@ import {
   jsObject,
   negate,
   normalizeExpression,
+  printNumber,
   quoteString,
   scanCode,
   writeCall,
@@ -80,6 +82,7 @@ export function collectStepCode(steps: ActionStep[] | undefined): string[] {
         break;
       case 'fetch':
         template(step.url);
+        for (const h of Array.isArray(step.headers) ? step.headers : []) template(asString(h?.value));
         out.push(asString(step.body), ...collectStepCode(step.onSuccess), ...collectStepCode(step.onError));
         break;
       case 'runFunction':
@@ -120,11 +123,11 @@ function emitStep(w: CodeWriter, step: ActionStep, hs: HandlerScope): void {
     case 'setState': {
       const state = ctx.states.get(step.state);
       if (!state) {
-        w.line(`// Set state: unknown state variable ${quoteString(step.state)}.`);
+        w.line(`// Set variable: unknown state variable ${quoteString(step.state)}.`);
         return;
       }
       const value = normalizeExpression(asString(step.value)) === '' ? 'undefined' : userExpr(ctx, step.value);
-      w.line(`${stateSetter(ctx, state.name)}(${asOperand(value)});`);
+      w.line(`${stateSetter(ctx, state.name)}(${setStateArgument(ctx, value, stateTypeArg(state))});`);
       return;
     }
     case 'addAlert': {
@@ -187,8 +190,14 @@ function emitStep(w: CodeWriter, step: ActionStep, hs: HandlerScope): void {
     case 'if': {
       const hasThen = asSteps(step.then).length > 0;
       const hasElse = asSteps(step.else).length > 0;
-      const cond = userExpr(ctx, step.condition);
       if (!hasThen && !hasElse) return;
+      if (normalizeExpression(asString(step.condition)) === '') {
+        // No condition is false (as in the preview): only the else branch runs. `if (undefined)`
+        // would fail TypeScript 5.9 (TS2873, "always falsy").
+        if (hasElse) emitSteps(w, step.else, hs);
+        return;
+      }
+      const cond = userExpr(ctx, step.condition);
       if (!hasThen) {
         w.block(`if (${negate(cond)}) {`, () => emitSteps(w, step.else, hs));
         return;
@@ -206,6 +215,51 @@ function emitStep(w: CodeWriter, step: ActionStep, hs: HandlerScope): void {
       emitCustom(w, step.code, hs);
       return;
   }
+}
+
+/** Static type of a known component-scope name (state variables, data source flags), or null. */
+function knownType(ctx: GenContext): (name: string) => InferredType {
+  return (name) => {
+    const state = ctx.states.get(name);
+    if (state) return stateTypeArg(state);
+    for (const plan of ctx.dataSources.values()) {
+      if (name === `${plan.source.name}Loading`) return 'boolean';
+      if (name === `${plan.source.name}Error`) return 'string | null';
+    }
+    return null;
+  };
+}
+
+/**
+ * The argument of a state setter. Values whose type provably differs from the state's
+ * (`setName(count + 1)` for a string state) are cast to `any` — the designer stores them as is,
+ * and the generated code keeps that behaviour while still type-checking under `strict`.
+ */
+function setStateArgument(ctx: GenContext, value: string, target: string): string {
+  if (fitsStateType(inferValueType(value, knownType(ctx)), target)) return asOperand(value);
+  ctx.usesAny = true;
+  const simple = /^[A-Za-z_$][A-Za-z0-9_$.]*$|^'[^']*'$|^-?[0-9.]+$/.test(value);
+  return `${simple ? value : `(${value})`} as any`;
+}
+
+/** hubspot.fetch options: method, headers, timeout and (never for GET) the JSON body. */
+export function fetchOptions(
+  ctx: GenContext,
+  method: string,
+  body: string | null,
+  headers: Array<{ key: string; value: string }> | undefined,
+  timeout: number | undefined,
+): Array<[string, JsNode]> {
+  const verb = asString(method).toUpperCase() || 'GET';
+  const options: Array<[string, JsNode]> = [['method', jsCode(quoteString(verb))]];
+  const list = (Array.isArray(headers) ? headers : []).filter((h) => h && asString(h.key).trim() !== '');
+  if (list.length) {
+    options.push(['headers', jsObject(list.map((h) => [asString(h.key).trim(), jsCode(templateText(ctx, asString(h.value)))]))]);
+  }
+  if (typeof timeout === 'number' && Number.isFinite(timeout) && timeout > 0) options.push(['timeout', jsCode(printNumber(timeout))]);
+  // HubSpot (like browsers) sends no body with GET; the designer preview drops it too.
+  if (body !== null && verb !== 'GET') options.push(['body', jsCode(asOperand(body))]);
+  return options;
 }
 
 function finiteOr(value: number, fallback: number): number {
@@ -232,7 +286,8 @@ function emitFetch(w: CodeWriter, step: FetchAction, hs: HandlerScope): void {
   const { ctx } = hs;
   const hubspot = importValue(ctx, UI_EXTENSIONS, 'hubspot');
   let url = templateText(ctx, step.url);
-  let body = normalizeExpression(asString(step.body)) !== '' ? userExpr(ctx, step.body!) : null;
+  const isGet = (asString(step.method).toUpperCase() || 'GET') === 'GET';
+  let body = !isGet && normalizeExpression(asString(step.body)) !== '' ? userExpr(ctx, step.body!) : null;
   // The request is built inside the `try` block that declares `response`; if the request refers
   // to an outer `response` (nested in another step's onSuccess) evaluate it before the block.
   const refersToResponse = (code: string | null) => code !== null && scanCode(code).identifiers.has('response');
@@ -247,15 +302,14 @@ function emitFetch(w: CodeWriter, step: FetchAction, hs: HandlerScope): void {
     body = name;
   }
   const res = hs.local.allocate('res');
-  const options: Array<[string, JsNode]> = [['method', jsCode(quoteString(asString(step.method) || 'GET'))]];
-  if (body !== null) options.push(['body', jsCode(asOperand(body))]);
+  const options = fetchOptions(ctx, asString(step.method), body, step.headers, step.timeout);
   const usesResponse = responseUsed(step.resultState, step.onSuccess, hs);
   w.block('try {', () => {
     writeCall(w, `const ${res} = await `, `${hubspot}.fetch`, [jsCode(asOperand(url)), jsObject(options)]);
     w.block(`if (!${res}.ok) {`, () => {
       w.line(`throw new Error(\`Request failed with status \${${res}.status}\`);`);
     });
-    if (usesResponse) w.line(`const response = await ${res}.json();`);
+    if (usesResponse) w.line(`const response = await ${useHelper(ctx, 'readJson')}(${res});`);
     emitResultAndSuccess(w, step.resultState, step.onSuccess, hs);
   }, catchClause(step.onError, hs));
   w.indent(() => emitErrorSteps(w, step.onError, hs));
@@ -331,7 +385,7 @@ function emitErrorSteps(w: CodeWriter, onError: ActionStep[] | undefined, hs: Ha
  * function so `return` only ends the custom step (as in the designer), not the whole handler.
  */
 function emitCustom(w: CodeWriter, rawCode: string, hs: HandlerScope): void {
-  const code = asString(rawCode);
+  const code = optionalContextAccess(asString(rawCode));
   const lines = dedentStatements(code);
   if (lines.every((l) => l.trim() === '')) return;
   const ids = noteUserCode(hs.ctx, code);

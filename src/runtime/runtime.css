@@ -21,16 +21,24 @@
 }
 
 /* ------------------------------------------------------------------ Alerts */
+/* In the flow at the top of the card body: alerts push the content down, never cover it. */
 .hsp-rt-alerts {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  right: 8px;
-  z-index: 70;
+  position: static;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  pointer-events: none;
+  margin: 0 0 12px;
+}
+.hsp-rt-alert-count {
+  flex: none;
+  align-self: center;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--hsp-rt-alert-accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
 }
 .hsp-rt-alert {
   --hsp-rt-alert-accent: var(--hsp-info, #00a4bd);
@@ -243,4 +251,51 @@
   .hsp-rt-alert {
     animation: none;
   }
+}
+
+/* ------------------------------------------------------------------ Paused code (untrusted import) */
+.hsp-rt-trust {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--hsp-warning, #f5c26b);
+  border-left-width: 4px;
+  border-radius: var(--hsp-radius, 3px);
+  background: var(--hsp-warning-bg, #fef8f0);
+  color: var(--hsp-text, #33475b);
+  font-family: var(--hsp-font, 'Lexend Deca', Helvetica, Arial, sans-serif);
+  font-size: 13px;
+  line-height: 18px;
+}
+.hsp-rt-trust-icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--hsp-warning-dark, #b36b00);
+}
+.hsp-rt-trust-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+/* Builder chrome: clickable in design mode too (component buttons are inert there). */
+.hsp-rt-trust .hsp-rt-trust-button {
+  flex: none;
+  align-self: center;
+  padding: 5px 10px;
+  border: 1px solid var(--hsp-text, #33475b);
+  border-radius: var(--hsp-radius, 3px);
+  background: #fff;
+  color: var(--hsp-text, #33475b);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.hsp-rt-trust .hsp-rt-trust-button:focus-visible {
+  outline: 2px solid var(--hsp-focus, #0091ae);
+  outline-offset: 2px;
 }

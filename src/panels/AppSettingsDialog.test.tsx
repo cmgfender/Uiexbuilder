@@ -53,8 +53,19 @@ describe('<AppSettingsDialog>', () => {
 
     fireEvent.change(screen.getByLabelText('App name'), { target: { value: 'Deal Desk' } });
     expect(app().name).toBe('Deal Desk');
-    fireEvent.change(screen.getByLabelText('App UID'), { target: { value: 'bad uid' } });
+    const before = app().uid;
+    const uid = screen.getByLabelText('App UID');
+    fireEvent.change(uid, { target: { value: 'bad uid' } });
     expect(screen.getByText(/no spaces/)).toBeInTheDocument();
+    // Invalid drafts are never stored (not even keystroke by keystroke).
+    expect(app().uid).toBe(before);
+    fireEvent.change(uid, { target: { value: useEditor.getState().project.extensions[0].uid } });
+    fireEvent.keyDown(uid, { key: 'Enter' });
+    expect(screen.getByRole('alert')).toHaveTextContent('already uses this UID');
+    expect(app().uid).toBe(before);
+    fireEvent.change(uid, { target: { value: 'deal_desk' } });
+    fireEvent.keyDown(uid, { key: 'Enter' });
+    expect(app().uid).toBe('deal_desk');
 
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(onClose).toHaveBeenCalled();

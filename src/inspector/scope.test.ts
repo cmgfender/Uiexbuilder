@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createExtension } from '../model/factory';
 import type { Extension } from '../model/types';
-import { buildPreviewScope, listScopeVariables, safeEvaluate } from './scope';
+import { buildPreviewScope, formSubmitVariables, listScopeVariables, safeEvaluate } from './scope';
 
 function fixture(): { ext: Extension; inner: string; outer: string } {
   const ext = createExtension({
@@ -104,5 +104,56 @@ describe('buildPreviewScope', () => {
     expect(safeEvaluate('window.location', {})).toBeNull();
     expect(safeEvaluate('context.location', { context: { location: 'crm.record.tab' } })).toEqual({ ok: true, value: 'crm.record.tab' });
     expect(safeEvaluate("'fetch(' + 1", {})).toEqual({ ok: true, value: 'fetch(1' });
+  });
+});
+
+describe('form submit values', () => {
+  function formExt() {
+    const ext = createExtension({
+      content: [
+        {
+          type: 'Form',
+          children: [
+            {
+              type: 'Flex',
+              children: [
+                { type: 'Input', props: { label: 'First name', name: 'firstname' } },
+                { type: 'NumberInput', props: { label: 'Age', name: 'age' } },
+                { type: 'Input', props: { label: 'Dash', name: 'first-name' } },
+                { type: 'Input', props: { label: 'Dynamic', name: '{{ dyn }}' } },
+                { type: 'Button', props: { type: 'submit' }, text: 'Send' },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const formId = ext.nodes[ext.rootId].children[0];
+    const flex = ext.nodes[formId].children[0];
+    const buttonId = ext.nodes[flex].children[4];
+    return { ext, formId, buttonId };
+  }
+
+  it('lists event.targetValue.<name> for the inputs of the submitted Form', () => {
+    const { ext, formId } = formExt();
+    const vars = listScopeVariables(ext, formId, ['event']);
+    const names = vars.map((v) => v.name);
+    expect(names.slice(0, 5)).toEqual([
+      'event',
+      'event.targetValue',
+      'event.targetValue.firstname',
+      'event.targetValue.age',
+      'event.targetValue["first-name"]',
+    ]);
+    expect(vars.find((v) => v.name === 'event.targetValue.firstname')).toMatchObject({ kind: 'param', detail: 'string — First name' });
+    expect(vars.find((v) => v.name === 'event.targetValue.age')?.detail).toMatch(/^number/);
+    // Dynamic names can't be listed.
+    expect(names.some((n) => n.includes('dyn'))).toBe(false);
+  });
+
+  it('only applies to the Form itself', () => {
+    const { ext, buttonId } = formExt();
+    expect(listScopeVariables(ext, buttonId, ['event']).map((v) => v.name)).not.toContain('event.targetValue');
+    expect(formSubmitVariables(ext, buttonId)).toEqual([]);
   });
 });

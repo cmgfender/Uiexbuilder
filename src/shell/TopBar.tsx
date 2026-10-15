@@ -11,6 +11,7 @@ import {
   CircleCheck,
   CircleHelp,
   Cloud,
+  CloudAlert,
   CloudCheck,
   CloudOff,
   Command,
@@ -39,15 +40,18 @@ import {
   Upload,
 } from 'lucide-react';
 import { selectActiveExtension, useEditor } from '../model/store';
-import { downloadFile, parseProjectJson, serializeProject } from '../model/persistence';
+import { downloadFile, serializeProject } from '../model/persistence';
 import { DOCS_BASE } from '../registry/constants';
 import { Button, IconButton, Menu, Segmented, cx, useToast, type MenuItem } from '../ui';
 import { useAnchoredMenu } from './useAnchoredMenu';
 import { useDialogs } from './dialogs';
-import { extensionLocationLabel } from './actions';
+import { extensionLocationLabel, historyStep } from './actions';
 import { ExtensionKindIcon } from './ExtensionKindIcon';
+import { importMessage, importProjectFromText } from './importProject';
+import { saveErrorMessage } from './persistence';
+import { showProjectConflict } from './ProjectConflictDialog';
 import { useProblems } from './problems';
-import { openBottomTab, toggleBottomPanel, useShell } from './shellStore';
+import { isLeftCollapsed, openBottomTab, setLeftSidebarOpen, toggleBottomPanel, useShell } from './shellStore';
 import { saveNow, shortcutLabel } from './shortcuts';
 import { openCommandPalette as openPowerPalette } from '../power/uiStore';
 
@@ -179,7 +183,7 @@ export function ExtensionSwitcher() {
         {extensions.length > 1 && <span className="ub-sh-tb-ext-count">{extensions.length}</span>}
         <ChevronDown size={13} aria-hidden />
       </button>
-      {menu.position && <Menu x={menu.position.x} y={menu.position.y} items={items} onClose={menu.close} />}
+      {menu.position && <Menu x={menu.position.x} y={menu.position.y} items={items} onClose={menu.close} returnFocus={menu.returnFocus} />}
     </>
   );
 }
@@ -187,12 +191,13 @@ export function ExtensionSwitcher() {
 function UndoRedo() {
   const canUndo = useEditor((s) => s.past.length > 0);
   const canRedo = useEditor((s) => s.future.length > 0);
+  const toast = useToast();
   return (
     <div className="ub-sh-tb-cluster">
-      <IconButton label={`Undo (${shortcutLabel('undo')})`} disabled={!canUndo} onClick={() => useEditor.getState().undo()}>
+      <IconButton label={`Undo (${shortcutLabel('undo')})`} disabled={!canUndo} onClick={() => historyStep('undo', toast)}>
         <Undo2 size={15} />
       </IconButton>
-      <IconButton label={`Redo (${shortcutLabel('redo')})`} disabled={!canRedo} onClick={() => useEditor.getState().redo()}>
+      <IconButton label={`Redo (${shortcutLabel('redo')})`} disabled={!canRedo} onClick={() => historyStep('redo', toast)}>
         <Redo2 size={15} />
       </IconButton>
     </div>
@@ -293,13 +298,8 @@ function ProjectMenu() {
       toast(`Couldn't read ${file.name}`);
       return;
     }
-    const res = parseProjectJson(text);
-    if (!res.ok) {
-      toast(`Import failed: ${res.error}`);
-      return;
-    }
-    useEditor.getState().loadProject(res.project);
-    toast(`Imported “${res.project.app.name || res.project.name}”`);
+    // Saves the current project first and asks before replacing a saved version with the same id.
+    toast(importMessage(await importProjectFromText(text, { fileName: file.name })));
   };
 
   const download = () => {
@@ -343,7 +343,7 @@ function ProjectMenu() {
         tabIndex={-1}
         onChange={onImport}
       />
-      {menu.position && <Menu x={menu.position.x} y={menu.position.y} items={items} onClose={menu.close} />}
+      {menu.position && <Menu x={menu.position.x} y={menu.position.y} items={items} onClose={menu.close} returnFocus={menu.returnFocus} />}
     </>
   );
 }
@@ -380,13 +380,13 @@ function HelpMenu() {
       >
         <CircleHelp size={16} />
       </IconButton>
-      {menu.position && <Menu x={menu.position.x} y={menu.position.y} items={items} onClose={menu.close} />}
+      {menu.position && <Menu x={menu.position.x} y={menu.position.y} items={items} onClose={menu.close} returnFocus={menu.returnFocus} />}
     </>
   );
 }
 
 function PanelToggles() {
-  const leftCollapsed = useShell((s) => s.leftCollapsed);
+  const leftCollapsed = useShell(isLeftCollapsed);
   const rightCollapsed = useShell((s) => s.rightCollapsed);
   const bottomOpen = useEditor((s) => s.bottomPanel !== null);
   return (
@@ -394,7 +394,7 @@ function PanelToggles() {
       <IconButton
         label={leftCollapsed ? 'Show left sidebar' : 'Hide left sidebar'}
         active={!leftCollapsed}
-        onClick={() => useShell.getState().setLeftCollapsed(!leftCollapsed)}
+        onClick={() => setLeftSidebarOpen(leftCollapsed)}
       >
         <PanelLeft size={15} />
       </IconButton>
@@ -416,8 +416,14 @@ function PanelToggles() {
   );
 }
 
+/**
+ * Autosave status. Routine "Saving… / Saved" changes are not announced to screen readers (they
+ * would interrupt typing after every pause); a failed save is, once, through the alert region.
+ * When another tab changed the project the status becomes a button that asks what to keep.
+ */
 function SaveIndicator() {
   const status = useShell((s) => s.saveStatus);
+  const saveError = useShell((s) => s.saveError);
   const at = useShell((s) => s.lastSavedAt);
   const time = at ? new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
   const content =
@@ -426,12 +432,25 @@ function SaveIndicator() {
       : status === 'saved'
         ? { icon: <CloudCheck size={14} aria-hidden />, text: 'Saved locally', title: time ? `Autosaved in this browser at ${time}` : 'Autosaved in this browser' }
         : status === 'error'
-          ? { icon: <CloudOff size={14} aria-hidden />, text: 'Not saved', title: 'Browser storage is unavailable — download a .uiex.json to keep your work' }
-          : { icon: <Cloud size={14} aria-hidden />, text: 'Autosave on', title: 'Changes are saved automatically in this browser' };
+          ? { icon: <CloudOff size={14} aria-hidden />, text: saveError === 'quota' ? 'Storage full' : 'Not saved', title: saveErrorMessage(saveError) }
+          : status === 'conflict'
+            ? { icon: <CloudAlert size={14} aria-hidden />, text: 'Changed in another tab', title: 'Another tab saved this project — choose which version to keep' }
+            : { icon: <Cloud size={14} aria-hidden />, text: 'Autosave on', title: 'Changes are saved automatically in this browser' };
+  if (status === 'conflict') {
+    return (
+      <button type="button" className={cx('ub-sh-tb-save', 'ub-sh-tb-save--conflict')} title={content.title} onClick={showProjectConflict}>
+        {content.icon}
+        <span className="ub-sh-tb-save-text">{content.text}</span>
+      </button>
+    );
+  }
   return (
-    <span className={cx('ub-sh-tb-save', `ub-sh-tb-save--${status}`)} title={content.title} role="status" aria-live="polite">
+    <span className={cx('ub-sh-tb-save', `ub-sh-tb-save--${status}`)} title={content.title}>
       {content.icon}
       <span className="ub-sh-tb-save-text">{content.text}</span>
+      <span className="ub-sr-only" role="alert">
+        {status === 'error' ? `Not saved: ${saveErrorMessage(saveError)}.` : ''}
+      </span>
     </span>
   );
 }

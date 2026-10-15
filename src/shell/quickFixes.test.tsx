@@ -59,6 +59,54 @@ describe('quick fixes', () => {
     expect(issue('unknown-state')).toBeUndefined();
   });
 
+  it('replaces a misspelt name with the suggestion in one undo step', () => {
+    const ext = createExtension({ name: 'Card', content: [{ type: 'Text', text: 'Email: {{ recrd.email }}' }, { type: 'Text', text: '{{ recrd.firstname }}' }] });
+    ext.dataSources.push({ id: 'd1', kind: 'crmProperties', name: 'record', properties: ['email', 'firstname'] });
+    resetEditor(createProject('Fix App', [ext]));
+    const typo = issue('unknown-name')!;
+    expect([typo.subject, typo.suggestion]).toEqual(['recrd', 'record']);
+    const fix = quickFixFor(typo, useEditor.getState().project)!;
+    expect(fix.label).toBe('Use “record”');
+    expect(fix.apply()).toBe('Replaced “recrd” with “record”.');
+    const texts = Object.values(selectActiveExtension(useEditor.getState()).nodes).map((n) => n.text).filter(Boolean);
+    expect(texts).toEqual(expect.arrayContaining(['Email: {{ record.email }}', '{{ record.firstname }}']));
+    expect(issue('unknown-name')).toBeUndefined();
+    useEditor.getState().undo();
+    expect(issue('unknown-name')?.subject).toBe('recrd');
+  });
+
+  it('binds the variable the store actually created when the name is taken', () => {
+    const ext = createExtension({ name: 'Card', content: [{ type: 'Input', props: { label: 'Email', name: 'email' }, binding: { state: 'email' } }] });
+    ext.computed = [{ id: 'c1', name: 'email', expr: "'x'" }];
+    resetEditor(createProject('Fix App', [ext]));
+    // The bound name is a computed value, so the new state variable gets another name.
+    const st = issue('unknown-state')!;
+    const fix = quickFixFor(st, useEditor.getState().project)!;
+    const pastBefore = useEditor.getState().past.length;
+    expect(fix.apply()).toMatch(/now bound to the new state variable “email2”/);
+    const after = selectActiveExtension(useEditor.getState());
+    const input = Object.values(after.nodes).find((n) => n.type === 'Input')!;
+    expect(after.state.map((s) => s.name)).toContain(input.binding!.state);
+    expect(useEditor.getState().past.length).toBe(pastBefore + 1);
+  });
+
+  it('adds the likely origin of a dynamic URL and fixes a property typo', () => {
+    const ext = createExtension({ name: 'Card', content: [{ type: 'Image', props: { src: '{{ logo }}', alt: 'Logo' } }] });
+    ext.state.push({ id: 's1', name: 'logo', type: 'string', initial: 'https://cdn.acme.io/logo.png' });
+    ext.dataSources.push({ id: 'd1', kind: 'crmProperties', name: 'record', properties: ['email', 'lifecyclestag'] });
+    resetEditor(createProject('Fix App', [ext]));
+    const origin = issue('dynamic-url-origin')!;
+    quickFixFor(origin, useEditor.getState().project)!.apply();
+    expect(useEditor.getState().project.app.permittedUrls.img).toEqual(['https://cdn.acme.io']);
+    expect(issue('dynamic-url-origin')).toBeUndefined();
+
+    const typo = issues().find((i) => i.rule === 'data-source-properties' && i.subject === 'lifecyclestag')!;
+    const fix = quickFixFor(typo, useEditor.getState().project)!;
+    expect(fix.label).toBe('Use “lifecyclestage”');
+    fix.apply();
+    expect(selectActiveExtension(useEditor.getState()).dataSources[0]).toMatchObject({ properties: ['email', 'lifecyclestage'] });
+  });
+
   it('offers no fix when a human has to decide', () => {
     resetEditor(createProject('Fix App', [createExtension({ name: 'Card', content: [{ type: 'Input', props: { name: 'x' } }] })]));
     const required = issue('required-prop');

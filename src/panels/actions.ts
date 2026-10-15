@@ -2,6 +2,7 @@
  * Store-level operations used by the Data panel and dialogs. Every mutation goes through store
  * actions (`commit` for multi-field changes so they form a single undo step).
  */
+import { asOneUndoStep } from '../model/history';
 import { smartInsertTarget } from '../dnd/dragState';
 import { selectActiveExtension, useEditor } from '../model/store';
 import { nodeLabel, walk } from '../model/tree';
@@ -52,14 +53,17 @@ export function renameDataSource(id: string, name: string): number {
 
 /** Adds a data source of a kind with sensible defaults (creating an app function if needed). */
 export function addDataSourceOfKind(kind: DataSourceKind): DataSource {
-  const store = useEditor.getState();
-  let functions = store.project.functions;
-  if (kind === 'function' && functions.length === 0) {
-    store.addFunction();
-    functions = useEditor.getState().project.functions;
-  }
-  const ds = createDataSource(kind, activeExt(), functions);
-  return useEditor.getState().addDataSource(ds);
+  // Creating the function and the data source that runs it is one undo step.
+  return asOneUndoStep(() => {
+    const store = useEditor.getState();
+    let functions = store.project.functions;
+    if (kind === 'function' && functions.length === 0) {
+      store.addFunction();
+      functions = useEditor.getState().project.functions;
+    }
+    const ds = createDataSource(kind, activeExt(), functions);
+    return useEditor.getState().addDataSource(ds);
+  });
 }
 
 /**

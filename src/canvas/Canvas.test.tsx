@@ -81,7 +81,8 @@ function fakeRect(target: Element, left: number, top: number, width: number, hei
 }
 
 function openMenuOn(target: Element) {
-  fireEvent.contextMenu(target, { clientX: 40, clientY: 40 });
+  // A right-click (secondary button); keyboard-invoked menus are covered separately.
+  fireEvent.contextMenu(target, { button: 2, clientX: 40, clientY: 40 });
   return screen.getByRole('menu');
 }
 
@@ -292,6 +293,76 @@ describe('selection and hover', () => {
     expect(useEditor.getState().selectedNodeId).toBe(byName('col').id);
   });
 
+  it('keeps keyboard focus in the quick toolbar or on the stage after its actions', async () => {
+    setup([
+      {
+        type: 'Flex',
+        name: 'col',
+        props: { direction: 'column' },
+        children: [
+          { type: 'Text', name: 'a', text: 'A' },
+          { type: 'Text', name: 'b', text: 'B' },
+        ],
+      },
+    ]);
+    const a = byName('a');
+    fakeRect(el(a.id), 100, 120, 300, 24);
+    act(() => useEditor.getState().select(a.id));
+    const toolbar = await screen.findByRole('toolbar', { name: 'Text actions' });
+    const down = within(toolbar).getByRole('button', { name: 'Move down' });
+    down.focus();
+    fireEvent.click(down);
+    // “a” is now last: Move down is disabled, so focus moves to Move up instead of <body>.
+    await waitFor(() => expect(within(screen.getByRole('toolbar', { name: 'Text actions' })).getByRole('button', { name: 'Move up' })).toHaveFocus());
+    fireEvent.click(within(screen.getByRole('toolbar', { name: 'Text actions' })).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(document.activeElement).toHaveClass('ub-cv-stage'));
+  });
+
+  it('selection chrome avoids covering neighbours, and fades out of the way of covered content', async () => {
+    setup([
+      {
+        type: 'Flex',
+        name: 'col',
+        props: { direction: 'column' },
+        children: [
+          { type: 'Text', name: 'above', text: 'Lifecycle stage: customer' },
+          { type: 'Button', name: 'btn', text: 'Click me' },
+        ],
+      },
+    ]);
+    const above = byName('above');
+    const btn = byName('btn');
+    fakeRect(el(above.id), 100, 100, 300, 24);
+    fakeRect(el(btn.id), 100, 130, 110, 40);
+    act(() => useEditor.getState().select(btn.id));
+    const chip = await screen.findByTestId('canvas-selection-chip');
+    // Above would hide the value: chip and toolbar go below the button instead.
+    expect(chip).toHaveAttribute('data-side', 'below');
+    expect(screen.getByRole('toolbar', { name: 'Button actions' })).toHaveAttribute('data-side', 'below');
+
+    // Boxed in (content right above and below): the least-covering side is used, and resting the
+    // pointer on the covered component fades the chrome and lets clicks through.
+    act(() => useEditor.getState().insertNode('Text', { parentId: byName('col').id, index: 2 }));
+    const below = byName('col').children[2];
+    fakeRect(el(below), 100, 172, 300, 60);
+    act(() => useEditor.getState().select(null));
+    act(() => useEditor.getState().select(btn.id));
+    const chip2 = await screen.findByTestId('canvas-selection-chip');
+    // Least covered: the chip below the button, the toolbar above it (both still outside it).
+    expect(chip2).toHaveAttribute('data-side', 'below');
+    expect(screen.getByRole('toolbar', { name: 'Button actions' })).toHaveAttribute('data-side', 'above');
+    expect(chip2).not.toHaveClass('ub-cv-chrome--peek');
+    fireEvent.pointerMove(el(above.id));
+    await waitFor(() => expect(screen.getByTestId('canvas-selection-chip')).toHaveClass('ub-cv-chrome--peek'));
+    expect(screen.getByRole('toolbar', { name: 'Button actions' })).toHaveClass('ub-cv-chrome--peek');
+    // Back on the selection: the chrome is solid again.
+    fireEvent.pointerMove(el(btn.id));
+    await waitFor(() => expect(screen.getByTestId('canvas-selection-chip')).not.toHaveClass('ub-cv-chrome--peek'));
+    // During a drag the chrome never intercepts drops on the content below it.
+    drag({ kind: 'new', componentType: 'Text' });
+    expect(screen.getByRole('toolbar', { name: 'Button actions' })).toHaveClass('ub-cv-chrome--peek');
+  });
+
   it('flags nodes hidden by a condition', async () => {
     setup([{ type: 'Text', name: 'h', text: 'Only VIPs', condition: 'false' }]);
     const h = byName('h');
@@ -458,6 +529,109 @@ describe('context menu', () => {
     openMenuOn(stage());
     chooseMenuItem('Add data');
     expect(useEditor.getState().leftPanel).toBe('data');
+  });
+
+  it('Shift+F10 / the Menu key opens the selected component’s menu at it and moves focus into the menu', () => {
+    setup(content);
+    const btn = byName('btn');
+    fakeRect(stage(), 0, 0, 800, 600);
+    fakeRect(el(btn.id), 100, 200, 80, 32);
+    act(() => useEditor.getState().select(btn.id));
+    stage().focus();
+    // Keyboard-invoked: targets the focused stage, no pointer button (Chromium reports -1).
+    fireEvent.contextMenu(stage(), { button: -1, clientX: 400, clientY: 300 });
+    expect(useEditor.getState().selectedNodeId).toBe(btn.id);
+    const menu = screen.getByRole('menu');
+    expect(within(menu).getByRole('menuitem', { name: /Save as block/ })).toBeInTheDocument();
+    expect(useCanvasUi.getState().menu).toMatchObject({ nodeId: btn.id, keyboard: true, x: 104, y: 234 });
+    expect(document.activeElement).toBe(within(menu).getAllByRole('menuitem')[0]);
+    // Escape closes it and focus returns to the canvas.
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(document.activeElement).toBe(stage());
+    expect(useEditor.getState().selectedNodeId).toBe(btn.id);
+  });
+
+  it('the keyboard menu without a selection is the canvas menu; a right-click still hit-tests', () => {
+    setup(content);
+    stage().focus();
+    fireEvent.contextMenu(stage(), { button: -1 });
+    expect(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'Add data' })).toBeInTheDocument();
+    expect(useCanvasUi.getState().menu).toMatchObject({ nodeId: null, keyboard: true });
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    const first = byName('first');
+    act(() => useEditor.getState().select(byName('btn').id));
+    fireEvent.contextMenu(el(first.id), { button: 2, clientX: 10, clientY: 10 });
+    expect(useEditor.getState().selectedNodeId).toBe(first.id);
+    expect(useCanvasUi.getState().menu).toMatchObject({ nodeId: first.id, x: 10, y: 10 });
+    expect(useCanvasUi.getState().menu?.keyboard).toBeFalsy();
+  });
+});
+
+describe('screen-reader support', () => {
+  const content: NodeTemplate[] = [
+    {
+      type: 'Flex',
+      name: 'col',
+      props: { direction: 'column' },
+      children: [
+        { type: 'Heading', text: 'Deal summary' },
+        { type: 'Text', text: 'Body copy' },
+        { type: 'Button', text: 'Save' },
+      ],
+    },
+  ];
+  const announcer = () => screen.getByTestId('canvas-announcer');
+  const child = (i: number) => byName('col').children[i];
+
+  it('describes the stage and its keyboard model', () => {
+    setup(content);
+    expect(stage()).toHaveAttribute('aria-roledescription', 'design canvas');
+    const help = document.getElementById(stage().getAttribute('aria-describedby')!);
+    expect(help).toHaveTextContent(/arrow keys/i);
+    expect(announcer()).toHaveAttribute('aria-live', 'polite');
+  });
+
+  it('announces selection, moves, duplicates and deletes made while the stage has focus', async () => {
+    setup(content);
+    stage().focus();
+    const run = async (fn: () => void) => {
+      // Announcements are computed once a store action (possibly several updates) finishes.
+      await act(async () => {
+        fn();
+        await Promise.resolve();
+      });
+    };
+    await run(() => useEditor.getState().select(child(1)));
+    expect(announcer()).toHaveTextContent('Selected Text “Body copy”, 2 of 3 in col (Flex).');
+    const textId = child(1);
+    await run(() => useEditor.getState().moveNode(textId, { parentId: byName('col').id, index: 3 }));
+    expect(announcer()).toHaveTextContent('Moved Text “Body copy” to position 3 of 3 in col (Flex).');
+    await run(() => useEditor.getState().duplicateNode(textId));
+    expect(announcer()).toHaveTextContent(/^Duplicated Text “Body copy”, 4 of 4 in col \(Flex\)\.$/);
+    await run(() => useEditor.getState().removeNode(useEditor.getState().selectedNodeId!));
+    expect(announcer()).toHaveTextContent(/^Deleted Text “Body copy”\. /);
+    await run(() => useEditor.getState().select(byName('col').id));
+    expect(announcer()).toHaveTextContent('Selected col (Flex), 1 of 1 in the card, contains 3 components.');
+    await run(() => useEditor.getState().select(null));
+    expect(announcer()).toHaveTextContent('Nothing selected — the card.');
+    // Prop edits are not announced.
+    await run(() => useEditor.getState().select(child(0)));
+    const before = announcer().textContent;
+    await run(() => useEditor.getState().setText(child(0), 'Renamed'));
+    expect(announcer().textContent).toBe(before);
+  });
+
+  it('stays quiet when the stage does not have focus (e.g. the layers tree drives the selection)', async () => {
+    setup(content);
+    await act(async () => {
+      useEditor.getState().select(child(0));
+      await Promise.resolve();
+    });
+    expect(announcer()).toHaveTextContent('');
+    // Focusing the stage with a selection says what is selected.
+    fireEvent.focus(stage());
+    expect(announcer()).toHaveTextContent('Selected Heading “Deal summary”, 1 of 3 in col (Flex).');
   });
 });
 

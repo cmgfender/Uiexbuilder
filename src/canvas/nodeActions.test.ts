@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { createExtension } from '../model/factory';
-import { toTemplate } from '../model/tree';
 import type { Extension, NodeTemplate, UINode } from '../model/types';
 import { addableOverlays, ancestorChain, canWrap, nodeCapabilities, usedStateVars } from './nodeActions';
 
@@ -79,7 +78,33 @@ describe('nodeActions', () => {
       { id: '3', name: 'tot', type: 'number', initial: 1 },
       { id: '4', name: 'other', type: 'string', initial: '' },
     ];
-    const names = usedStateVars(ext, toTemplate(ext, byName(ext, 'f').id)).map((v) => v.name);
+    const names = usedStateVars(ext, byName(ext, 'f').id).map((v) => v.name);
     expect(names).toEqual(['total', 'email']);
+  });
+
+  it('usedStateVars ignores JSON keys, literal text and option values; counts setters and slot content', () => {
+    const ext = doc([
+      {
+        type: 'Flex',
+        name: 'picker',
+        children: [
+          { type: 'Text', text: 'Pick a stage value' },
+          { type: 'Select', props: { label: 'Stage', name: 'stage', options: [{ label: 'Open', value: 'open' }] } },
+        ],
+      },
+      {
+        type: 'Button',
+        name: 'counter',
+        text: 'Add',
+        events: { onClick: [{ id: 's1', type: 'custom', code: 'setCount(c => c + 1)' }] },
+        slots: { overlay: [{ type: 'Tooltip', text: 'Clicked {{ clicks }} times' }] },
+      },
+    ]);
+    ext.state = ['value', 'text', 'label', 'type', 'count', 'clicks', 'unused'].map((name, i) => ({ id: String(i), name, type: 'string', initial: '' }));
+    // Keys (`text`, `label`, `type`, `value`) and words in literal text are not references.
+    expect(usedStateVars(ext, byName(ext, 'picker').id)).toEqual([]);
+    // `setCount` needs `count`; the overlay's template needs `clicks`.
+    expect(usedStateVars(ext, byName(ext, 'counter').id).map((v) => v.name)).toEqual(['count', 'clicks']);
+    expect(usedStateVars(ext, 'missing')).toEqual([]);
   });
 });

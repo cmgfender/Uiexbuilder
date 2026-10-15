@@ -21,6 +21,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { selectActiveExtension, useEditor } from '../model/store';
+import { pasteAt } from '../shell/actions';
 import { toTemplate } from '../model/tree';
 import { getComponent } from '../registry';
 import { saveUserBlock } from '../templates';
@@ -56,7 +57,7 @@ function TypeIcon({ type }: { type: string }) {
 }
 
 /** Menu items for a component. Exported for tests and other surfaces (e.g. layers tree). */
-export function nodeMenuItems(nodeId: string, surface: HTMLElement | null): MenuItem[] {
+export function nodeMenuItems(nodeId: string, surface: HTMLElement | null, notify?: (message: string) => void): MenuItem[] {
   const st = useEditor.getState();
   const ext = selectActiveExtension(st);
   const caps = nodeCapabilities(ext, nodeId);
@@ -93,7 +94,8 @@ export function nodeMenuItems(nodeId: string, surface: HTMLElement | null): Menu
       icon: icon(<ClipboardPaste size={ICON} aria-hidden />),
       shortcut: shortcut('V'),
       disabled: !st.clipboard,
-      onSelect: () => useEditor.getState().paste(nodeId),
+      // Explains a refused paste (wrong place, component not available in this location).
+      onSelect: () => pasteAt(nodeId, notify),
     },
     {
       label: locked ? 'Delete (locked)' : 'Delete',
@@ -155,7 +157,7 @@ export function nodeMenuItems(nodeId: string, surface: HTMLElement | null): Menu
 }
 
 /** Menu items for the empty canvas / card background. */
-export function canvasMenuItems(): MenuItem[] {
+export function canvasMenuItems(notify?: (message: string) => void): MenuItem[] {
   const st = useEditor.getState();
   return [
     {
@@ -163,7 +165,7 @@ export function canvasMenuItems(): MenuItem[] {
       icon: icon(<ClipboardPaste size={ICON} aria-hidden />),
       shortcut: shortcut('V'),
       disabled: !st.clipboard,
-      onSelect: () => useEditor.getState().paste(null),
+      onSelect: () => pasteAt(null, notify),
     },
     { label: '', separator: true },
     { label: 'Browse components', icon: icon(<Shapes size={ICON} aria-hidden />), onSelect: () => st.setLeftPanel('components') },
@@ -178,11 +180,33 @@ export function canvasMenuItems(): MenuItem[] {
   ];
 }
 
-export function CanvasContextMenu({ surfaceRef }: { surfaceRef: { current: HTMLElement | null } }) {
+const MENU_ITEM_SELECTOR = '.ub-menu [role="menuitem"]:not(:disabled)';
+
+export function CanvasContextMenu({
+  surfaceRef,
+  returnFocus,
+}: {
+  surfaceRef: { current: HTMLElement | null };
+  /** Called after a keyboard-opened menu closes (puts focus back on the stage). */
+  returnFocus?: () => void;
+}) {
   const menu = useCanvasUi((s) => s.menu);
-  const close = useCanvasUi((s) => s.closeMenu);
+  const toast = useToast();
+  // Stable: the Menu re-registers its outside-click / Escape listeners when onClose changes.
+  const close = useCallback(() => {
+    const fromKeyboard = !!useCanvasUi.getState().menu?.keyboard;
+    useCanvasUi.getState().closeMenu();
+    if (fromKeyboard) returnFocus?.();
+  }, [returnFocus]);
+  const keyboard = !!menu?.keyboard;
+  useEffect(() => {
+    if (!keyboard) return;
+    // Keyboard users land on the first available action (the menu is portalled to <body>).
+    const items = document.querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR);
+    items[0]?.focus();
+  }, [keyboard, menu]);
   if (!menu) return null;
-  const items = menu.nodeId ? nodeMenuItems(menu.nodeId, surfaceRef.current) : canvasMenuItems();
+  const items = menu.nodeId ? nodeMenuItems(menu.nodeId, surfaceRef.current, toast) : canvasMenuItems(toast);
   if (items.length === 0) return null;
   return <Menu x={menu.x} y={menu.y} items={items} onClose={close} />;
 }
@@ -221,9 +245,8 @@ export function SaveBlockDialog() {
       close();
       return;
     }
-    const template = toTemplate(ext, nodeId);
-    const state = usedStateVars(ext, template);
-    saveUserBlock(trimmed, template, state.length > 0 ? state : undefined);
+    const state = usedStateVars(ext, nodeId);
+    saveUserBlock(trimmed, toTemplate(ext, nodeId), state.length > 0 ? state : undefined);
     toast(`Saved “${trimmed}” to My blocks`);
     close();
   };

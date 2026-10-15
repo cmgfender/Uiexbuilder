@@ -1,10 +1,11 @@
 /**
  * Designer preview runtime — public API. See ./types.ts for the contract and ARCHITECTURE.md §5.
  */
-export { RuntimeProvider, MAX_LOG_ENTRIES, MAX_VISIBLE_ALERTS, type RuntimeProviderProps } from './RuntimeProvider';
+export { RuntimeProvider, DIAGNOSTICS_DEBOUNCE_MS, MAX_LOG_ENTRIES, MAX_VISIBLE_ALERTS, type RuntimeProviderProps } from './RuntimeProvider';
 export { useRuntime, useOptionalRuntime } from './context';
 export { NodeRenderer, ExtensionRenderer, MAX_DESIGN_REPEAT, MAX_PREVIEW_REPEAT } from './NodeRenderer';
 export { PreviewHost } from './PreviewHost';
+export { PreviewAlerts } from './PreviewAlerts';
 export { DropPlaceholder } from './DropPlaceholder';
 
 export {
@@ -13,10 +14,15 @@ export {
   buildScopeWithDiagnostics,
   buildContext,
   createInitialScope,
+  initialDataValue,
+  initialLoadStatus,
   initialStateValues,
+  loadsOnOpen,
   reconcileStateValues,
+  requestDependencies,
   resolveDataSources,
   setterName,
+  SIMULATED_ERROR,
   type BaseScopeInput,
   type ScopeDiagnostics,
   type ScopeWithDiagnostics,
@@ -24,6 +30,7 @@ export {
 export {
   generateAssociationRows,
   generateSearchRows,
+  formatPropertyValue,
   hasConfiguredMock,
   isDeferredSource,
   mockDataForSource,

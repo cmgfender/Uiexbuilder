@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { produce } from 'immer';
-import { createExtension } from '../model/factory';
+import { generateExtensionSource } from '../codegen';
+import { createExtension, createProject } from '../model/factory';
 import type { Extension, NodeTemplate } from '../model/types';
-import { findUsages, referencedIdentifiers, renameReferences, replaceIdentifiers, scanIdentifiers } from './findUsages';
+import { findUsages, referencedIdentifiers, renameConflicts, renameReferences, replaceIdentifiers, scanIdentifiers } from './findUsages';
+import { validateDeclaredName } from './names';
 
 function ext(content: NodeTemplate[], patch: Partial<Extension> = {}): Extension {
   return { ...createExtension({ name: 'Test', content }), ...patch };
@@ -173,5 +175,174 @@ describe('renameReferences', () => {
   it('is a no-op for identical names', () => {
     const e = fixture();
     expect(renameReferences(e, 'count', 'count')).toBe(0);
+  });
+});
+
+describe('scope-aware usages and renames (locals hide declarations)', () => {
+  /** The Data panel's first variable is `value`, and an input's default "Set variable" step sets it to the event's `value`. */
+  function inputFlow(): Extension {
+    return ext(
+      [
+        {
+          type: 'Input',
+          name: 'inp',
+          props: { label: 'First name', name: 'first' },
+          events: { onChange: [{ id: 'a1', type: 'setState', state: 'value', value: 'value' }] },
+        },
+        { type: 'Text', name: 'typed', text: 'Typed: {{ value }}' },
+      ],
+      { state: [{ id: 's1', name: 'value', type: 'string', initial: '' }] },
+    );
+  }
+
+  it('does not count or rename an event param that shares the state name', () => {
+    const e = inputFlow();
+    expect(findUsages(e, 'value').map((u) => u.location)).toEqual(['inp · On change', 'typed · Text']);
+    let changed = 0;
+    const next = produce(e, (d) => {
+      d.state[0].name = 'email';
+      changed = renameReferences(d as Extension, 'value', 'email');
+    });
+    // The set-variable target and the text are references; the step's value is the event param.
+    expect(changed).toBe(2);
+    expect(nodeByName(next, 'inp').events!.onChange[0]).toMatchObject({ type: 'setState', state: 'email', value: 'value' });
+    expect(nodeByName(next, 'typed').text).toBe('Typed: {{ email }}');
+    // The exported handler still stores what the user typed.
+    const project = createProject('Rename');
+    const source = generateExtensionSource({ ...project, extensions: [next] }, next);
+    expect(source).toMatch(/setEmail\(value\)/);
+    expect(source).not.toMatch(/setEmail\(email\)/);
+  });
+
+  it('still renames setters and other derived names next to a shadowing param', () => {
+    const e = ext(
+      [{ type: 'Input', name: 'inp', props: { label: 'A', name: 'a' }, events: { onChange: [{ id: 'c', type: 'custom', code: 'setValue(value.trim())' }] } }],
+      { state: [{ id: 's1', name: 'value', type: 'string', initial: '' }] },
+    );
+    const next = produce(e, (d) => {
+      renameReferences(d as Extension, 'value', 'email');
+    });
+    expect(nodeByName(next, 'inp').events!.onChange[0]).toMatchObject({ code: 'setEmail(value.trim())' });
+  });
+
+  it('respects repeat item / index names in the repeated subtree but not in the repeat items', () => {
+    const e = ext(
+      [
+        {
+          type: 'Flex',
+          name: 'list',
+          repeat: { items: 'item ? rows : []', itemName: 'item', indexName: 'index', key: 'item.id' },
+          children: [{ type: 'Text', name: 'row', text: '{{ item }} #{{ index }}', condition: 'item' }],
+        },
+        { type: 'Text', name: 'outside', text: '{{ item }}' },
+      ],
+      { state: [{ id: 's1', name: 'item', type: 'string', initial: '' }, { id: 's2', name: 'index', type: 'number', initial: 0 }] },
+    );
+    expect(findUsages(e, 'item').map((u) => u.location)).toEqual(['list · Repeat', 'outside · Text']);
+    const next = produce(e, (d) => {
+      renameReferences(d as Extension, 'item', 'selected');
+      renameReferences(d as Extension, 'index', 'position');
+    });
+    expect(nodeByName(next, 'list').repeat).toEqual({ items: 'selected ? rows : []', itemName: 'item', indexName: 'index', key: 'item.id' });
+    expect(nodeByName(next, 'row').text).toBe('{{ item }} #{{ index }}');
+    expect(nodeByName(next, 'row').condition).toBe('item');
+    expect(nodeByName(next, 'outside').text).toBe('{{ selected }}');
+  });
+
+  it('respects `response` / `error` in fetch callbacks and keeps the outer reference', () => {
+    const e = ext(
+      [
+        {
+          type: 'Button',
+          name: 'load',
+          text: 'Load',
+          events: {
+            onClick: [
+              {
+                id: 'f',
+                type: 'fetch',
+                url: 'https://api.example.com/{{ response.id }}',
+                method: 'GET',
+                headers: [{ key: 'X-Error', value: '{{ error }}' }],
+                onSuccess: [{ id: 's', type: 'setState', state: 'response', value: 'response.data' }],
+                onError: [{ id: 'e', type: 'log', level: 'error', message: '{{ error }} / {{ response }}' }],
+              },
+            ],
+          },
+        },
+      ],
+      {
+        state: [
+          { id: 's1', name: 'response', type: 'any', initial: null },
+          { id: 's2', name: 'error', type: 'string', initial: '' },
+        ],
+      },
+    );
+    const next = produce(e, (d) => {
+      renameReferences(d as Extension, 'response', 'lastResponse');
+      renameReferences(d as Extension, 'error', 'lastError');
+    });
+    const step = nodeByName(next, 'load').events!.onClick[0];
+    expect(step).toMatchObject({
+      url: 'https://api.example.com/{{ lastResponse.id }}',
+      headers: [{ key: 'X-Error', value: '{{ lastError }}' }],
+      onSuccess: [{ state: 'lastResponse', value: 'response.data' }],
+      onError: [{ message: '{{ error }} / {{ lastResponse }}' }],
+    });
+  });
+
+  it('renames template references in request headers', () => {
+    const e = ext([], {
+      state: [{ id: 's1', name: 'token', type: 'string', initial: '' }],
+      dataSources: [
+        {
+          id: 'd1',
+          kind: 'fetch',
+          name: 'api',
+          url: 'https://api.example.com',
+          method: 'GET',
+          runOnMount: true,
+          headers: [{ key: 'Authorization', value: 'Bearer {{ token }}' }],
+        },
+      ],
+    });
+    expect(findUsages(e, 'token').map((u) => u.field)).toEqual(['dataSource:d1']);
+    const next = produce(e, (d) => {
+      renameReferences(d as Extension, 'token', 'apiToken');
+    });
+    expect(next.dataSources[0]).toMatchObject({ headers: [{ key: 'Authorization', value: 'Bearer {{ apiToken }}' }] });
+  });
+
+  it('reports renames that a local name would capture, and the Data panel rejects them', () => {
+    const e = ext(
+      [
+        {
+          type: 'Input',
+          name: 'inp',
+          props: { label: 'Amount', name: 'amount' },
+          events: { onChange: [{ id: 'a1', type: 'setState', state: 'count', value: 'count + Number(value)' }] },
+        },
+        {
+          type: 'Text',
+          name: 'row',
+          repeat: { items: 'rows', itemName: 'row', indexName: 'i' },
+          text: '{{ row.name }} of {{ count }}',
+        },
+        { type: 'Button', name: 'custom', text: 'Go', events: { onClick: [{ id: 'c', type: 'custom', code: 'const total = 1;\nsetCount(count + total);' }] } },
+      ],
+      { state: [{ id: 's1', name: 'count', type: 'number', initial: 0 }] },
+    );
+    expect(renameConflicts(e, 'count', 'value')).toEqual([expect.objectContaining({ field: 'event:onChange', name: 'value' })]);
+    expect(renameConflicts(e, 'count', 'row')).toEqual([expect.objectContaining({ field: 'text', name: 'row' })]);
+    expect(renameConflicts(e, 'count', 'total')).toEqual([expect.objectContaining({ field: 'event:onClick', name: 'total' })]);
+    expect(renameConflicts(e, 'count', 'clicks')).toEqual([]);
+    expect(validateDeclaredName(e, 'value', { kind: 'state', id: 's1' })).toMatch(/already means something else in inp · On change/);
+    expect(validateDeclaredName(e, 'clicks', { kind: 'state', id: 's1' })).toBeNull();
+    // A new variable has no references, so nothing can be captured.
+    expect(validateDeclaredName(e, 'value', { kind: 'state', id: '__new__' })).toBeNull();
+  });
+
+  it('lets the default input flow be renamed (the param is not a reference to the state)', () => {
+    expect(validateDeclaredName(inputFlow(), 'email', { kind: 'state', id: 's1' })).toBeNull();
   });
 });

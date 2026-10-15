@@ -5,7 +5,10 @@
  */
 import { buildParentIndex } from '../model/tree';
 import type { DataSource, Extension, NodeId } from '../model/types';
-import { helperNames } from '../power/helpers';
+import { compileHelpers, helperNames } from '../power/helpers';
+import { codeExecutionAllowed } from '../model/trust';
+import { guardLoops } from '../runtime/loopGuard';
+import { getComponent } from '../registry';
 import { evaluate, objectTypeName, setterName, type EvalResult, type Scope } from '../runtime';
 
 export type ScopeVariableKind =
@@ -17,6 +20,11 @@ export interface ScopeVariable {
   kind: ScopeVariableKind;
   /** Short type or description shown in pickers. */
   detail?: string;
+  /**
+   * The value is (declared as) an object or array, so members can follow (`record.firstname`).
+   * Autocomplete keeps the caret inside `{{ }}` after inserting such a name.
+   */
+  members?: boolean;
 }
 
 /** Group labels (VariablePicker) in display order. */
@@ -108,6 +116,43 @@ export function repeatChain(ext: Extension, nodeId: NodeId | null | undefined): 
   return out;
 }
 
+const IDENT_RE = /^[A-Za-z_$][\w$]*$/;
+
+/**
+ * Form submit values: `event.targetValue.<name>` for every named input inside the Form (HubSpot
+ * passes the values keyed by the inputs' `name` props), typed by the input's value binding.
+ */
+export function formSubmitVariables(ext: Extension, formId: NodeId): ScopeVariable[] {
+  const form = ext.nodes[formId];
+  if (!form || form.type !== 'Form') return [];
+  const out: ScopeVariable[] = [];
+  const seenNames = new Set<string>();
+  const seenNodes = new Set<NodeId>();
+  const walk = (id: NodeId) => {
+    if (seenNodes.has(id)) return;
+    seenNodes.add(id);
+    const n = ext.nodes[id];
+    if (!n) return;
+    if (id !== formId) {
+      const def = getComponent(n.type);
+      const name = n.props.name;
+      if (def?.valueBinding && typeof name === 'string' && name.trim() && !name.includes('{{') && !seenNames.has(name)) {
+        seenNames.add(name);
+        const label = typeof n.props.label === 'string' && !n.props.label.includes('{{') ? n.props.label.trim() : '';
+        out.push({
+          name: IDENT_RE.test(name) ? `event.targetValue.${name}` : `event.targetValue[${JSON.stringify(name)}]`,
+          kind: 'param',
+          detail: `${def.valueBinding.stateType}${label ? ` — ${label}` : ''}`,
+        });
+      }
+    }
+    for (const c of n.children) walk(c);
+  };
+  walk(formId);
+  if (!out.length) return [];
+  return [{ name: 'event.targetValue', kind: 'param', detail: 'submitted values by input name', members: true }, ...out];
+}
+
 /** Lists identifiers/paths in scope for a node (and optional event params). */
 export function listScopeVariables(ext: Extension, nodeId?: NodeId | null, eventParams?: string[]): ScopeVariable[] {
   const vars: ScopeVariable[] = [];
@@ -117,16 +162,23 @@ export function listScopeVariables(ext: Extension, nodeId?: NodeId | null, event
     seen.add(v.name);
     vars.push(v);
   };
-  for (const p of eventParams ?? []) add({ name: p, kind: 'param', detail: 'event parameter' });
+  const isFormSubmit = !!nodeId && ext.nodes[nodeId]?.type === 'Form' && (eventParams ?? []).includes('event');
+  for (const p of eventParams ?? []) {
+    if (p === 'event' && isFormSubmit) {
+      add({ name: p, kind: 'param', detail: 'form submit event', members: true });
+      for (const v of formSubmitVariables(ext, nodeId!)) add(v);
+    } else add({ name: p, kind: 'param', detail: 'event parameter' });
+  }
   for (const rid of repeatChain(ext, nodeId)) {
     const r = ext.nodes[rid].repeat!;
     if (r.itemName) add({ name: r.itemName, kind: 'repeat', detail: `item of ${r.items || 'repeat'}` });
     if (r.indexName) add({ name: r.indexName, kind: 'repeat', detail: 'index (number)' });
   }
-  for (const s of ext.state ?? []) add({ name: s.name, kind: 'state', detail: s.type });
+  for (const s of ext.state ?? [])
+    add({ name: s.name, kind: 'state', detail: s.type, ...(s.type === 'object' || s.type === 'array' ? { members: true } : {}) });
   for (const c of ext.computed ?? []) add({ name: c.name, kind: 'computed', detail: c.description || 'computed value' });
   for (const ds of ext.dataSources ?? []) {
-    add({ name: ds.name, kind: 'dataSource', detail: dataSourceDetail(ds) });
+    add({ name: ds.name, kind: 'dataSource', detail: dataSourceDetail(ds), members: true });
     if (ds.kind === 'associations' || ds.kind === 'crmSearch') {
       add({ name: `${ds.name}.length`, kind: 'dataSource', detail: 'number of results' });
     }
@@ -149,28 +201,16 @@ export function listScopeVariables(ext: Extension, nodeId?: NodeId | null, event
 // Live preview scope
 // ---------------------------------------------------------------------------
 
-const helperCache = new Map<string, Record<string, unknown>>();
 const noop = () => undefined;
 
-/** Evaluates helper code once per source text and returns its top-level declarations. */
-export function evaluateHelpers(code: string | undefined): Record<string, unknown> {
-  if (!code || !code.trim()) return {};
-  const cached = helperCache.get(code);
-  if (cached) return cached;
-  let out: Record<string, unknown> = {};
-  const names = helperNames(code);
-  if (names.length) {
-    try {
-      const ret = `return { ${names.map((n) => `${n}: typeof ${n} === 'undefined' ? undefined : ${n}`).join(', ')} };`;
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval
-      out = (new Function(`"use strict";\n${code}\n${ret}`)() as Record<string, unknown>) ?? {};
-    } catch {
-      out = {};
-    }
-  }
-  if (helperCache.size > 50) helperCache.clear();
-  helperCache.set(code, out);
-  return out;
+/**
+ * Top-level declarations of the helper code for live previews (the runtime's cached
+ * `compileHelpers`, loop-guarded). Nothing runs while the active project's code is paused
+ * (an imported, untrusted document).
+ */
+function previewHelpers(code: string | undefined): Record<string, unknown> {
+  if (typeof code !== 'string' || !code.trim() || !codeExecutionAllowed()) return {};
+  return compileHelpers(guardLoops(code)).values;
 }
 
 /**
@@ -181,7 +221,7 @@ export function evaluateHelpers(code: string | undefined): Record<string, unknow
 export function buildPreviewScope(ext: Extension, base: Scope, nodeId?: NodeId | null): Scope {
   const scope: Scope = { ...base };
   for (const s of ext.state ?? []) scope[setterName(s.name)] = noop;
-  const helpers = evaluateHelpers(ext.helpers);
+  const helpers = previewHelpers(ext.helpers);
   for (const [k, v] of Object.entries(helpers)) if (!(k in scope)) scope[k] = v;
   for (const c of ext.computed ?? []) {
     if (c.name in scope) continue;

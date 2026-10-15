@@ -49,9 +49,12 @@ const TEMPLATE_DEV_DEPENDENCIES = {
   'eslint-plugin-react': '^7',
   'eslint-plugin-react-hooks': '^7',
   'eslint-plugin-unused-imports': '^4',
+  // `jiti` loads eslint.config.js on newer ESLint versions; the HubSpot CLI's lint check
+  // (`hs project lint`, `hs project upload`) requires jiti >= 2.6.1 and typescript-eslint >= 8.46.4.
+  jiti: '^2.6.1',
   prettier: '^3',
   typescript: '^5',
-  'typescript-eslint': '^8',
+  'typescript-eslint': '^8.46.4',
 };
 
 const TEMPLATE_TSCONFIG = {
@@ -373,6 +376,18 @@ const LOCATION_HELP: Record<string, string> = {
   home: "the app's home page (Marketplace icon → your app)",
 };
 
+/** How to put a card of each location on the page after the app is installed. */
+const ADD_CARD_HELP: Record<string, string> = {
+  'crm.record.tab':
+    'open a record, click **Customize** (or Settings → Objects → *object* → Record customization), choose a tab, click **+**, filter the card library by **App** and select the card',
+  'crm.record.sidebar':
+    'open a record, click **Customize**, edit the right sidebar, click **+**, filter the card library by **App** and select the card',
+  'crm.preview':
+    'go to Settings → Objects → *object* → Record customization, open the preview customization, add a card, filter by **App** and select the card',
+  'helpdesk.sidebar':
+    'open a ticket in the help desk, click **Customize** on the right sidebar, click **+**, filter the card library by **App** and select the card',
+};
+
 function readme(project: Project, extFiles: ExtensionFiles[], fnFiles: FunctionFiles[], appJson: unknown): string {
   const app = (appJson as { config: { auth: { requiredScopes: string[] }; permittedUrls: Record<string, string[]> } }).config;
   const lines: string[] = [];
@@ -399,12 +414,25 @@ function readme(project: Project, extFiles: ExtensionFiles[], fnFiles: FunctionF
         : LOCATION_HELP[location];
     lines.push(`| ${escapeCell(f.ext.name)} | ${kind} | ${escapeCell(where)} | \`${f.sourcePath}\` |`);
   }
-  if (fnFiles.length) {
+  const serverless = fnFiles.filter((f) => !functionEndpoint(f.fn));
+  const endpoints = fnFiles.filter((f) => functionEndpoint(f.fn));
+  if (serverless.length) {
     lines.push('');
-    lines.push('App functions (called with `hubspot.serverless(uid, ...)`):');
+    lines.push('App functions (called from the cards with `hubspot.serverless(uid, ...)`):');
     lines.push('');
-    for (const f of fnFiles) lines.push(`- \`${f.fn.uid}\` — \`${f.sourcePath}\``);
+    for (const f of serverless) lines.push(`- \`${f.fn.uid}\` — \`${f.sourcePath}\``);
   }
+  if (endpoints.length) {
+    lines.push('');
+    lines.push('Endpoint functions (public HTTP endpoints served by HubSpot at `https://<your HubSpot domain>/hs/serverless/<path>`):');
+    lines.push('');
+    for (const f of endpoints) {
+      const ep = functionEndpoint(f.fn)!;
+      lines.push(`- \`${f.fn.uid}\` — \`${ep.methods.join(', ')} /hs/serverless/${ep.path.replace(/^\/+/, '')}\` — \`${f.sourcePath}\``);
+    }
+  }
+  const secrets = [...new Set(fnFiles.flatMap((f) => (Array.isArray(f.fn.secretKeys) ? f.fn.secretKeys : [])).map((k) => String(k).trim()).filter(Boolean))].sort();
+  const staticPrivate = project.app.authType === 'static' && project.app.distribution === 'private';
   lines.push('');
   lines.push('## Requirements');
   lines.push('');
@@ -415,25 +443,56 @@ function readme(project: Project, extFiles: ExtensionFiles[], fnFiles: FunctionF
   lines.push('## Deploy');
   lines.push('');
   lines.push('```bash');
-  lines.push('# 1. Connect the CLI to your HubSpot account (once)');
+  let step = 1;
+  lines.push(`# ${step++}. Connect the CLI to your HubSpot account (once)`);
   lines.push('hs account auth');
   lines.push('');
-  lines.push('# 2. Install dependencies');
+  lines.push(`# ${step++}. Install dependencies`);
   const dirs = [...new Set(extFiles.map((f) => f.dir))];
   if (fnFiles.length) dirs.push('src/app/functions');
   for (const dir of dirs) lines.push(`(cd ${dir} && npm install)`);
   lines.push('');
-  lines.push('# 3. Upload and deploy the project');
+  if (secrets.length) {
+    lines.push(`# ${step++}. Add the secrets your app functions read from process.env (once per account)`);
+    for (const key of secrets) lines.push(`hs secret add ${key}`);
+    lines.push('');
+  }
+  lines.push(`# ${step++}. Upload and deploy the project`);
   lines.push('hs project upload');
   lines.push('');
+  if (staticPrivate) {
+    lines.push(`# ${step++}. Install the app in your account (once, after the first upload)`);
+    lines.push('hs project install-app');
+    lines.push('');
+  }
   lines.push('# Optional: run locally with hot reload against your account');
   lines.push('hs project dev');
   lines.push('```');
   lines.push('');
-  if (extFiles.some((f) => f.ext.kind === 'card')) {
+  if (staticPrivate) {
     lines.push(
-      'After the upload, add each card to a record view: open a record, click **Customize**, choose a tab, click **+**, filter the card library by **App** and select the card.',
+      'The app must be installed before its cards appear. Instead of `hs project install-app` you can open **Development → Projects → ' +
+        `${escapeCell(project.name)}** in HubSpot and install it from the **Distribution** tab.`,
     );
+  } else {
+    lines.push(
+      'The app must be installed before its cards appear: open **Development → Projects → ' +
+        `${escapeCell(project.name)}** in HubSpot, go to the **Distribution** tab and use the install link (OAuth).`,
+    );
+  }
+  lines.push('');
+  const cardLocations = [...new Set(extFiles.filter((f) => f.ext.kind === 'card').map((f) => extensionLocation(f.ext)))];
+  if (cardLocations.length) {
+    lines.push('Then add each card to the page:');
+    lines.push('');
+    for (const location of cardLocations) {
+      const names = extFiles.filter((f) => f.ext.kind === 'card' && extensionLocation(f.ext) === location).map((f) => escapeCell(f.ext.name));
+      lines.push(`- ${names.join(', ')} (${LOCATION_HELP[location] ?? location}): ${ADD_CARD_HELP[location] ?? ADD_CARD_HELP['crm.record.tab']}.`);
+    }
+    lines.push('');
+  }
+  if (secrets.length) {
+    lines.push(`Secrets (${secrets.map((k) => `\`${k}\``).join(', ')}) are read by the functions as \`process.env.<NAME>\`; without them those values are \`undefined\`.`);
     lines.push('');
   }
   lines.push('## Scopes and permitted URLs');
@@ -452,6 +511,18 @@ function readme(project: Project, extFiles: ExtensionFiles[], fnFiles: FunctionF
   );
   lines.push('');
   return lines.join('\n');
+}
+
+/** The public endpoint of an app function, when it has one. */
+function functionEndpoint(fn: AppFunction): { path: string; methods: string[] } | null {
+  const path = typeof fn.endpoint?.path === 'string' ? fn.endpoint.path.trim() : '';
+  if (!fn.endpoint || !path) return null;
+  return { path: normalizeEndpointPath(path), methods: Array.isArray(fn.endpoint.methods) && fn.endpoint.methods.length ? fn.endpoint.methods : ['GET'] };
+}
+
+/** Endpoint paths in the official leading-slash form (`/api/status`), as in the 2026.03 template. */
+function normalizeEndpointPath(path: string): string {
+  return path.startsWith('/') ? path : `/${path}`;
 }
 
 function listOrNone(values: string[]): string {
@@ -499,10 +570,8 @@ export function generateProjectFiles(project: Project): GeneratedFile[] {
       const source = typeof f.fn.code === 'string' ? f.fn.code : '';
       files.push({ path: f.sourcePath, contents: source.endsWith('\n') ? source : `${source}\n` });
       const config: Record<string, unknown> = { entrypoint: f.entrypoint };
-      const endpointPath = typeof f.fn.endpoint?.path === 'string' ? f.fn.endpoint.path.trim() : '';
-      if (f.fn.endpoint && endpointPath) {
-        config.endpoint = { path: endpointPath, methods: Array.isArray(f.fn.endpoint.methods) ? f.fn.endpoint.methods : ['GET'] };
-      }
+      const endpoint = functionEndpoint(f.fn);
+      if (endpoint) config.endpoint = endpoint;
       config.secretKeys = Array.isArray(f.fn.secretKeys) ? f.fn.secretKeys : [];
       files.push({ path: f.metaPath, contents: formatJson({ uid: f.fn.uid, type: 'app-function', config }) });
     }

@@ -7,9 +7,10 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { FileUp, Plus, TriangleAlert } from 'lucide-react';
 import { toProjectSlug } from '../model/factory';
 import { toUid } from '../model/ids';
-import { parseProjectJson, saveProject } from '../model/persistence';
 import { useEditor } from '../model/store';
 import type { DialogComponentProps } from '../panels/dialogs';
+import { importMessage, importProjectFromText } from '../shell/importProject';
+import { saveCurrentProject } from '../shell/persistence';
 import { CRM_OBJECT_TYPES } from '../registry/constants';
 import { Badge, Button, Dialog, Field, TextInput, cx, useToast } from '../ui';
 import { projectFromTemplate } from './actions';
@@ -70,7 +71,12 @@ export function NewProjectDialog({ open, onClose, arg }: DialogComponentProps) {
     setTouched(true);
     const tpl = templates.find((t) => t.id === tplId);
     if (!trimmed || !tpl) return;
-    saveProject(useEditor.getState().project);
+    // Store the open project first — unless another tab saved a newer version of it: then the
+    // conflict dialog asks which one to keep before anything else is opened.
+    if (saveCurrentProject() === 'conflict') {
+      toast('The open project changed in another tab — choose which version to keep first');
+      return;
+    }
     const project = projectFromTemplate(trimmed, tpl);
     useEditor.getState().newProject(project);
     toast(`Created “${trimmed}”${tpl.id === BLANK_ID ? '' : ` from ${tpl.name}`}`);
@@ -86,16 +92,15 @@ export function NewProjectDialog({ open, onClose, arg }: DialogComponentProps) {
       setImportError(`Could not read ${file.name}.`);
       return;
     }
-    const parsed = parseProjectJson(text);
-    if (!parsed.ok) {
-      setImportError(`${file.name} is not a valid builder file: ${parsed.error}`);
+    // The shared import path: asks before replacing a saved project with the same id, keeps the
+    // file's code paused until trusted and guards the first render (see shell/importProject).
+    const res = await importProjectFromText(text, { fileName: file.name });
+    if (!res.ok) {
+      setImportError(`${file.name} is not a valid builder file: ${res.error}`);
       return;
     }
-    saveProject(useEditor.getState().project);
-    useEditor.getState().loadProject(parsed.project);
-    saveProject(parsed.project);
-    toast(`Imported “${parsed.project.app.name}”`);
-    onClose();
+    toast(importMessage(res));
+    if (res.outcome !== 'cancelled') onClose();
   };
 
   /** Arrow-key navigation inside the template radio group. */

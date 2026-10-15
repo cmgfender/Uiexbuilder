@@ -7,9 +7,13 @@
  *                                 parameter / return / variable / class property annotations,
  *                                 optional markers (`a?: T`), `as` / `satisfies` casts, non-null
  *                                 assertions (`x!.y`), generic parameters and call type arguments,
- *                                 `type` / `interface` declarations, access modifiers and (optionally)
- *                                 `export` keywords. Removed text becomes spaces (line breaks are kept,
- *                                 so error positions still line up).
+ *                                 `type` / `interface` / `declare` declarations, overload signatures,
+ *                                 `this` parameters, access modifiers, `abstract` members and
+ *                                 (optionally) `export` keywords. Removed text becomes spaces (line
+ *                                 breaks are kept, so error positions still line up). The TypeScript
+ *                                 constructs that do run are lowered like `tsc` does: constructor
+ *                                 parameter properties (`this.x = x`), `enum` / `const enum` objects
+ *                                 (with reverse mapping for numbers) and `namespace` objects.
  *  - annotateUntypedParams(code)  adds `: any` to function parameters without a type annotation, so
  *                                 plain JavaScript helpers type-check under `strict` in the exported
  *                                 project (noImplicitAny).
@@ -47,6 +51,9 @@ const KEYWORDS = new Set([
   'extends', 'finally', 'for', 'function', 'if', 'import', 'in', 'instanceof', 'let', 'new', 'return', 'switch',
   'throw', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield', 'await', 'of',
 ]);
+
+/** Words strict-mode code cannot declare (besides KEYWORDS). */
+const STRICT_RESERVED = new Set(['static', 'implements', 'package', 'private', 'protected', 'public', 'interface', 'enum', 'arguments', 'eval', 'let']);
 
 /** Keywords that can end an expression (`this as any`, `null!`). */
 const VALUE_KEYWORDS = new Set(['this', 'super', 'null', 'true', 'false', 'undefined']);
@@ -262,6 +269,10 @@ class Transformer {
   private readonly inserts: Array<[number, string]> = [];
   private readonly braceKinds = new Map<number, BraceKind>();
   private readonly paramsDone = new Set<number>();
+  /** Strip mode: replacements of source ranges (lowered enums, namespaces, parameter properties). */
+  private readonly edits: Array<{ start: number; end: number; text: string | (() => string); raw?: boolean }> = [];
+  /** Namespace bodies by the index of their `{`: the namespace name and its exported names. */
+  private readonly namespaces = new Map<number, { name: string; exports: Array<{ name: string; live: boolean }> }>();
 
   constructor(
     private readonly code: string,
@@ -319,6 +330,49 @@ class Transformer {
     if (b <= a || this.mode !== 'strip') return;
     for (let k = a; k < b; k++) this.removed[k] = 1;
     this.ranges.push([this.T[a].start, this.T[b - 1].end]);
+  }
+
+  /** Strip mode: replaces the source of tokens a..b-1 (line breaks inside are kept) with `text`. */
+  private replace(a: number, b: number, text: string | (() => string)): void {
+    if (this.mode !== 'strip' || b <= a) return;
+    this.edits.push({ start: this.T[a].start, end: this.T[b - 1].end, text });
+  }
+
+  /** Strip mode: inserts `text` at a source offset. */
+  private insert(pos: number, text: string): void {
+    if (this.mode === 'strip') this.edits.push({ start: pos, end: pos, text });
+  }
+
+  /**
+   * End (exclusive token index) of the statement or class member starting at `i`: after its `;`,
+   * or before the next line that starts a new statement. Brackets are skipped as a whole.
+   */
+  private statementEnd(i: number): number {
+    const T = this.T;
+    let j = i;
+    while (j < T.length) {
+      const t = T[j];
+      if (j > i && t.nl && this.isExprEnd(j - 1) && !(t.kind === 'punct' && ['.', '?.', '|', '&', '=>', '?', ':', ','].includes(t.value))) return j;
+      if (t.kind === 'punct') {
+        if (t.value === ';') return j + 1;
+        if (t.value === '}' || t.value === ')' || t.value === ']') return j;
+        if (OPENERS[t.value]) {
+          const c = this.match[j];
+          if (c < 0) return T.length;
+          j = c + 1;
+          continue;
+        }
+        if (t.value === '<') {
+          const k = this.skipAngle(j);
+          if (k > 0) {
+            j = k;
+            continue;
+          }
+        }
+      }
+      j++;
+    }
+    return T.length;
   }
 
   // ---- types
@@ -468,15 +522,21 @@ class Transformer {
     return null;
   }
 
-  /** Handles annotations inside the parameter list opened at `open`. */
-  private processParams(open: number, opts: { catchClause?: boolean } = {}): void {
-    if (this.paramsDone.has(open)) return;
+  /**
+   * Handles annotations inside the parameter list opened at `open`. Returns the names of
+   * constructor parameter properties (`private cents: number`), which strip mode lowers to
+   * `this.cents = cents` assignments.
+   */
+  private processParams(open: number, opts: { catchClause?: boolean } = {}): string[] {
+    const properties: string[] = [];
+    if (this.paramsDone.has(open)) return properties;
     this.paramsDone.add(open);
     const close = this.match[open];
-    if (close < 0) return;
+    if (close < 0) return properties;
     let j = open + 1;
     let state: 'start' | 'after' | 'default' = 'start';
     let rest = false;
+    let modifier = false;
     while (j < close) {
       if (this.removed[j]) {
         j++;
@@ -486,9 +546,21 @@ class Transformer {
       if (state === 'start') {
         if (t.kind === 'ident' && PARAM_MODIFIERS.has(t.value) && (this.isIdent(j + 1) || this.isPunct(j + 1, '{') || this.isPunct(j + 1, '['))) {
           this.remove(j, j + 1);
+          modifier = true;
           j++;
           continue;
         }
+        // `this: Window` declares the type of `this`; it is not a real parameter.
+        if (this.mode === 'strip' && t.kind === 'ident' && t.value === 'this' && this.isPunct(j + 1, ':')) {
+          const k = this.parseType(j + 2);
+          if (k > j + 2) {
+            this.remove(j, this.isPunct(k, ',') ? k + 1 : k);
+            j = this.isPunct(k, ',') ? k + 1 : k;
+            continue;
+          }
+        }
+        if (modifier && t.kind === 'ident') properties.push(t.value);
+        modifier = false;
         if (t.kind === 'punct' && t.value === '...') {
           rest = true;
           j++;
@@ -539,6 +611,33 @@ class Transformer {
         j = this.match[j] + 1;
       } else j++;
     }
+    return properties;
+  }
+
+  /**
+   * Lowers constructor parameter properties: `this.a = a;` at the start of the constructor body,
+   * or right after the top-level `super(…)` call of a derived class (like `tsc`).
+   */
+  private assignParameterProperties(body: number, names: string[]): void {
+    if (!names.length || !this.isPunct(body, '{')) return;
+    const close = this.match[body];
+    if (close < 0) return;
+    const text = names.map((n) => `this.${n} = ${n};`).join(' ');
+    for (let j = body + 1; j < close; j++) {
+      const t = this.T[j];
+      if (t.kind === 'punct' && OPENERS[t.value]) {
+        // Nested blocks / calls: a super call there is not the top-level one.
+        j = Math.max(j, this.match[j]);
+        continue;
+      }
+      if (this.isIdent(j, 'super') && this.isPunct(j + 1, '(') && this.match[j + 1] > 0) {
+        const end = this.match[j + 1];
+        const after = this.isPunct(end + 1, ';') ? end + 1 : end;
+        this.insert(this.T[after].end, ` ;${text}`);
+        return;
+      }
+    }
+    this.insert(this.T[body].end, ` ${text}`);
   }
 
   /** Removes a return type annotation `: T` that starts at `colon` and must be followed by `{`. */
@@ -569,12 +668,27 @@ class Transformer {
           continue;
         }
         if (t.value === '[') {
+          // Class index signature `[key: string]: any;` (a type only).
+          const enclosing = stack.length ? stack[stack.length - 1] : -1;
+          if (
+            this.mode === 'strip' &&
+            enclosing >= 0 &&
+            this.braceKinds.get(enclosing) === 'class' &&
+            this.isIdent(i + 1) &&
+            this.isPunct(i + 2, ':') &&
+            this.isPunct(this.match[i] + 1, ':') &&
+            (this.atStatementStart(i) || (prev !== null && prev.kind === 'punct' && prev.value === '{'))
+          ) {
+            this.remove(i, this.statementEnd(i));
+            continue;
+          }
           stack.push(i);
           continue;
         }
         if (t.value === '(') {
           this.handleParen(i, p, stack);
-          stack.push(i);
+          // An overload signature was removed as a whole (its `)` is skipped too).
+          if (!this.removed[i]) stack.push(i);
           continue;
         }
         if (t.value === ')' || t.value === ']' || t.value === '}') {
@@ -587,11 +701,16 @@ class Transformer {
         }
         if (this.mode === 'strip' && t.value === '!' && prev && this.isExprEnd(p) && prev.kind !== 'string' && prev.end === t.start) {
           const next = T[i + 1];
-          if (!next || next.nl || ['.', '?.', ')', ']', ',', ';', '[', '}', ':'].includes(next.value)) this.remove(i, i + 1);
+          // `x!.y`, `fn!()`, `obj.x! = 1`, `x! as T` (a prefix `!` cannot follow an expression).
+          if (!next || next.nl || ['.', '?.', ')', ']', ',', ';', '[', '}', ':', '(', '=', 'as', 'satisfies'].includes(next.value)) this.remove(i, i + 1);
         }
         continue;
       }
 
+      if (t.kind === 'template' && this.mode === 'strip') {
+        this.stripInterpolations(t);
+        continue;
+      }
       if (t.kind !== 'ident') continue;
       const v = t.value;
       if (prev && prev.kind === 'punct' && (prev.value === '.' || prev.value === '?.')) continue;
@@ -616,7 +735,16 @@ class Transformer {
         }
         if (this.isPunct(j, '(')) {
           this.processParams(j);
-          if (this.mode === 'strip') this.removeReturnTypeBeforeBody(this.match[j] + 1);
+          if (this.mode === 'strip') {
+            const c = this.match[j];
+            let body = c + 1;
+            if (this.isPunct(body, ':')) {
+              const k = this.parseType(body + 1);
+              if (k > body + 1) body = k;
+            }
+            if (this.isPunct(body, '{')) this.removeReturnTypeBeforeBody(c + 1);
+            else if (this.endsSignature(body)) this.removeBodilessFunction(i);
+          }
         }
         continue;
       }
@@ -629,10 +757,28 @@ class Transformer {
       if (this.mode !== 'strip') continue;
 
       const statementStart = this.atStatementStart(i);
+      const enclosingBrace = stack.length ? stack[stack.length - 1] : -1;
+      const namespace = this.namespaces.get(enclosingBrace);
+      if (v === 'export' && namespace && statementStart) {
+        // `export` inside a namespace: a member of the namespace object.
+        namespace.exports.push(...this.exportedNames(i + 1));
+        this.remove(i, i + 1);
+        continue;
+      }
+      if (statementStart && (v === 'enum' || (v === 'const' && this.isIdent(i + 1, 'enum')))) {
+        if (this.handleEnum(i, v === 'enum' ? i : i + 1)) continue;
+      }
+      if (statementStart && (v === 'namespace' || v === 'module') && this.isIdent(i + 1) && !T[i + 1].nl) {
+        if (this.handleNamespace(i)) continue;
+      }
+      if (v === 'abstract' && statementStart && this.isIdent(i + 1, 'class')) {
+        this.remove(i, i + 1);
+        continue;
+      }
       if (v === 'export' && this.opts.stripExport && statementStart) {
         let j = i + 1;
         if (this.isIdent(j, 'default') && (this.isIdent(j + 1, 'function') || this.isIdent(j + 1, 'class') || this.isIdent(j + 1, 'async'))) j++;
-        if (this.isIdent(j) && ['function', 'const', 'let', 'var', 'class', 'async', 'type', 'interface', 'enum', 'default'].includes(this.val(j)!)) {
+        if (this.isIdent(j) && ['function', 'const', 'let', 'var', 'class', 'abstract', 'async', 'type', 'interface', 'enum', 'namespace', 'module', 'declare', 'default'].includes(this.val(j)!)) {
           if (this.val(j) !== 'default') this.remove(i, j);
         }
         continue;
@@ -665,11 +811,21 @@ class Transformer {
       // Class members: modifiers and property annotations.
       const enclosing = stack.length ? stack[stack.length - 1] : -1;
       if (enclosing >= 0 && this.braceKinds.get(enclosing) === 'class' && (statementStart || (prev && prev.kind === 'punct' && prev.value === '{'))) {
+        // Abstract members and `declare` fields have no runtime code.
+        if ((v === 'abstract' || v === 'declare') && (this.isIdent(i + 1) || this.isPunct(i + 1, '['))) {
+          this.remove(i, this.statementEnd(i));
+          continue;
+        }
         if (MEMBER_MODIFIERS.has(v) && (this.isIdent(i + 1) || this.isPunct(i + 1, '['))) {
           this.remove(i, i + 1);
           continue;
         }
         let j = i + 1;
+        // Optional method `m?() {}` / `m?(): void;`
+        if (this.isPunct(j, '?') && (this.isPunct(j + 1, '(') || this.isPunct(j + 1, '<'))) {
+          this.remove(j, j + 1);
+          continue;
+        }
         if (this.isPunct(j, '?') || this.isPunct(j, '!')) j++;
         if (this.isPunct(j, ':')) {
           const k = this.parseType(j + 1);
@@ -704,9 +860,213 @@ class Transformer {
     const before = b >= 0 ? T[b] : null;
     if (!before || !(before.value === '{' || before.value === ',' || before.value === ';' || before.value === '}' || T[p].nl)) return;
     const c = this.match[i];
-    if (c < 0 || !(this.isPunct(c + 1, '{') || this.isPunct(c + 1, ':'))) return;
-    this.processParams(i);
-    if (this.mode === 'strip') this.removeReturnTypeBeforeBody(c + 1);
+    if (c < 0) return;
+    if (kind === 'class' && this.mode === 'strip') {
+      let body = c + 1;
+      if (this.isPunct(body, ':')) {
+        const k = this.parseType(body + 1);
+        if (k > body + 1) body = k;
+      }
+      if (!this.isPunct(body, '{') && this.endsSignature(body)) {
+        // Overload signature (`format(x: number): string;`): no runtime code.
+        this.processParams(i);
+        let start = b + 1;
+        while (start < p && this.removed[start]) start++;
+        this.remove(start, this.statementEnd(start));
+        return;
+      }
+    }
+    if (!(this.isPunct(c + 1, '{') || this.isPunct(c + 1, ':'))) return;
+    const properties = this.processParams(i);
+    if (this.mode === 'strip') {
+      this.removeReturnTypeBeforeBody(c + 1);
+      if (kind === 'class' && prev.value === 'constructor') this.assignParameterProperties(c + 1, properties);
+    }
+  }
+
+  /** A signature without a body ends at token `j` (`;`, a line break, the end of the block or code). */
+  private endsSignature(j: number): boolean {
+    const t = this.T[j];
+    return !t || t.nl || this.isPunct(j, ';') || this.isPunct(j, '}');
+  }
+
+  /** Strips TypeScript inside the `${…}` interpolations of a template literal token. */
+  private stripInterpolations(t: Token): void {
+    const code = this.code;
+    let i = t.start + 1;
+    while (i < t.end) {
+      const ch = code[i];
+      if (ch === '\\') {
+        i += 2;
+        continue;
+      }
+      if (ch === '`') return;
+      if (ch === '$' && code[i + 1] === '{') {
+        const start = i + 2;
+        const after = lex(code, start, true, null);
+        const end = Math.max(start, after - 1);
+        const inner = code.slice(start, end);
+        const stripped = transform(inner, 'strip');
+        // Same length and line breaks (strip mode only blanks text): applied verbatim.
+        if (stripped !== inner) this.edits.push({ start, end, text: stripped, raw: true });
+        i = after;
+        continue;
+      }
+      i++;
+    }
+  }
+
+  /** Removes a function declaration without a body (an overload signature) and its modifiers. */
+  private removeBodilessFunction(fn: number): void {
+    let start = fn;
+    for (let q = this.prevIdx(fn); q >= 0 && this.T[q].kind === 'ident' && ['async', 'export', 'default', 'declare'].includes(this.T[q].value); q = this.prevIdx(q)) {
+      start = q;
+    }
+    if (!this.atStatementStart(start)) return;
+    this.remove(start, this.statementEnd(fn));
+  }
+
+  /** Names a statement after `export` (inside a namespace) declares; `live` for let / var. */
+  private exportedNames(j: number): Array<{ name: string; live: boolean }> {
+    const T = this.T;
+    let k = j;
+    while (this.isIdent(k, 'async') || this.isIdent(k, 'abstract') || this.isIdent(k, 'declare')) {
+      if (this.isIdent(k, 'declare')) return [];
+      k++;
+    }
+    const kw = this.val(k);
+    if (kw === 'function') {
+      const n = this.isPunct(k + 1, '*') ? k + 2 : k + 1;
+      return this.isIdent(n) ? [{ name: T[n].value, live: false }] : [];
+    }
+    if (kw === 'class' || kw === 'enum' || kw === 'namespace' || kw === 'module') {
+      return this.isIdent(k + 1) ? [{ name: T[k + 1].value, live: false }] : [];
+    }
+    if (kw === 'const' && this.isIdent(k + 1, 'enum')) return this.isIdent(k + 2) ? [{ name: T[k + 2].value, live: false }] : [];
+    if (kw !== 'const' && kw !== 'let' && kw !== 'var') return [];
+    const live = kw !== 'const';
+    const out: Array<{ name: string; live: boolean }> = [];
+    const end = this.statementEnd(k);
+    if (this.isIdent(k + 1)) out.push({ name: T[k + 1].value, live });
+    for (let q = k + 2; q < end; q++) {
+      const t = T[q];
+      if (t.kind === 'punct' && OPENERS[t.value]) {
+        q = Math.max(q, this.match[q]);
+        continue;
+      }
+      if (this.isPunct(q, ',') && this.isIdent(q + 1)) out.push({ name: T[q + 1].value, live });
+    }
+    return out;
+  }
+
+  /** Marks tokens a..b-1 as handled and replaces their source with `text`. */
+  private consume(a: number, b: number, text: string | (() => string)): void {
+    for (let k = a; k < b; k++) this.removed[k] = 1;
+    this.replace(a, b, text);
+  }
+
+  /**
+   * `enum E { A, B = 5, C = 'c' }` (also `const enum`) -> an object built like tsc does: numeric
+   * members get a reverse mapping (`E[0] === 'A'`), members without a value continue from the
+   * previous number, and initializers may use earlier members by name.
+   */
+  private handleEnum(first: number, kw: number): boolean {
+    const T = this.T;
+    const nameIdx = kw + 1;
+    const open = nameIdx + 1;
+    if (!this.isIdent(nameIdx) || !this.isPunct(open, '{')) return false;
+    const close = this.match[open];
+    if (close < 0) return false;
+    const E = T[nameIdx].value;
+    // Parse members first: nothing is changed unless the whole body is understood.
+    const members: Array<{ name: number; init: [number, number] | null; comma: number }> = [];
+    let j = open + 1;
+    while (j < close) {
+      const t = T[j];
+      if (t.kind !== 'ident' && t.kind !== 'string') return false;
+      if (this.isPunct(j + 1, ',') || j + 1 === close) {
+        members.push({ name: j, init: null, comma: j + 1 < close ? j + 1 : -1 });
+        j += 2;
+        continue;
+      }
+      if (!this.isPunct(j + 1, '=')) return false;
+      let k = j + 2;
+      while (k < close && !this.isPunct(k, ',')) {
+        if (T[k].kind === 'punct' && OPENERS[T[k].value]) k = this.match[k];
+        if (k < 0) return false;
+        k++;
+      }
+      if (k === j + 2) return false;
+      members.push({ name: j, init: [j + 2, k], comma: k < close ? k : -1 });
+      j = k + 1;
+    }
+    const V = '__uiexEnumValue';
+    const S = '__uiexEnumSet';
+    // The braces stay in the token stream (block nesting and statement starts after the enum
+    // keep working); only their text changes.
+    this.consume(first, open, `var ${E}; (function (${E}) `);
+    this.replace(open, open + 1, `{ let ${V} = -1; const ${S} = (k, v) => { ${E}[k] = v; if (typeof v === 'number') ${E}[v] = k; return v; };`);
+    let pending = false;
+    for (const m of members) {
+      const t = T[m.name];
+      const key = t.kind === 'string' ? t.value : JSON.stringify(t.value);
+      const local =
+        t.kind === 'ident' && t.value !== E && t.value !== V && t.value !== S && !KEYWORDS.has(t.value) && !VALUE_KEYWORDS.has(t.value) && !STRICT_RESERVED.has(t.value);
+      const decl = local ? `const ${t.value} = ` : '';
+      if (!m.init) {
+        this.consume(m.name, m.comma > 0 ? m.comma + 1 : m.name + 1, `${decl}${S}(${key}, ++${V});`);
+        continue;
+      }
+      this.consume(m.name, m.init[0], `${decl}${S}(${key}, ${V} = (`);
+      if (m.comma > 0) this.consume(m.comma, m.comma + 1, '));');
+      else pending = true;
+    }
+    this.replace(close, close + 1, `${pending ? '));' : ''} })(${E} || (${E} = {}));`);
+    return true;
+  }
+
+  /**
+   * `namespace A.B { export const x = 1; }` (or `module`) -> nested IIFEs filling an object per
+   * level, like tsc. Exported functions, classes, constants, enums and namespaces are copied onto
+   * the object at the end of the body; exported `let` / `var` become accessors (live bindings).
+   */
+  private handleNamespace(kw: number): boolean {
+    const T = this.T;
+    const parts: string[] = [];
+    let j = kw + 1;
+    for (;;) {
+      if (!this.isIdent(j)) return false;
+      parts.push(T[j].value);
+      if (this.isPunct(j + 1, '.')) j += 2;
+      else break;
+    }
+    const open = j + 1;
+    if (!this.isPunct(open, '{')) return false;
+    const close = this.match[open];
+    if (close < 0) return false;
+    const inner = parts[parts.length - 1];
+    const info = { name: inner, exports: [] as Array<{ name: string; live: boolean }> };
+    this.namespaces.set(open, info);
+    let head = `var ${parts[0]}; (function (${parts[0]}) `;
+    for (let k = 1; k < parts.length; k++) head += `{ let ${parts[k]}; (function (${parts[k]}) `;
+    this.consume(kw, open, head);
+    this.edits.push({
+      start: T[close].start,
+      end: T[close].start,
+      text: () =>
+        info.exports
+          .map(({ name, live }) =>
+            live
+              ? ` Object.defineProperty(${inner}, ${JSON.stringify(name)}, { get: () => ${name}, set: (v) => { ${name} = v; }, enumerable: true, configurable: true });`
+              : ` ${inner}.${name} = ${name};`,
+          )
+          .join('') + ' ',
+    });
+    let tail = '';
+    for (let k = parts.length - 1; k >= 1; k--) tail += `)(${parts[k]} = ${parts[k - 1]}.${parts[k]} || (${parts[k - 1]}.${parts[k]} = {})); }`;
+    tail += `)(${parts[0]} || (${parts[0]} = {}));`;
+    this.insert(T[close].end, tail);
+    return true;
   }
 
   private handleAngle(i: number, p: number): void {
@@ -826,10 +1186,17 @@ class Transformer {
       }
       return out + code.slice(last);
     }
-    if (!this.ranges.length) return code;
+    if (!this.ranges.length && !this.edits.length) return code;
     const chars = code.split('');
     for (const [a, b] of this.ranges) {
       for (let k = a; k < b; k++) if (chars[k] !== '\n' && chars[k] !== '\r') chars[k] = ' ';
+    }
+    // Later edits first, so earlier offsets stay valid. Line breaks of replaced text are kept.
+    const edits = [...this.edits].sort((x, y) => y.start - x.start || y.end - x.end);
+    for (const e of edits) {
+      const text = typeof e.text === 'function' ? e.text() : e.text;
+      const breaks = e.raw ? '' : code.slice(e.start, e.end).replace(/[^\n]/g, '');
+      chars.splice(e.start, e.end - e.start, text + breaks);
     }
     return chars.join('');
   }
@@ -863,8 +1230,10 @@ export function annotateUntypedParams(code: string): string {
 
 /**
  * Names declared at the top level of `code`: `function f`, `async function f`, `function* f`,
- * `class C`, `const|let|var x` (including later declarators `const a = 1, b = 2`). `export` is
- * allowed in front. TypeScript `type` / `interface` names are not values and are not listed.
+ * `class C` / `abstract class C`, `const|let|var x` (including later declarators
+ * `const a = 1, b = 2`), `enum E` / `const enum E` and `namespace N`. `export` is allowed in front.
+ * TypeScript `type` / `interface` names and `declare`d (ambient) names are not values and are not
+ * listed.
  */
 export function topLevelDeclarations(code: string | undefined): string[] {
   if (!code || typeof code !== 'string') return [];
@@ -885,7 +1254,7 @@ export function topLevelDeclarations(code: string | undefined): string[] {
     if (i === 0) return true;
     const prev = tokens[i - 1];
     if (prev.kind === 'punct' && (prev.value === ';' || prev.value === '}')) return true;
-    if (prev.kind === 'ident' && (prev.value === 'export' || prev.value === 'default' || prev.value === 'async')) return true;
+    if (prev.kind === 'ident' && (prev.value === 'export' || prev.value === 'default' || prev.value === 'async' || prev.value === 'abstract')) return true;
     return tokens[i].nl;
   };
   for (let i = 0; i < tokens.length; i++) {
@@ -907,8 +1276,14 @@ export function topLevelDeclarations(code: string | undefined): string[] {
       let j = i + 1;
       if (tokens[j]?.value === '*') j++;
       if (tokens[j]?.kind === 'ident') add(tokens[j].value);
-    } else if (t.value === 'class') {
+    } else if (t.value === 'class' || t.value === 'enum') {
       if (tokens[i + 1]?.kind === 'ident') add(tokens[i + 1].value);
+    } else if ((t.value === 'namespace' || t.value === 'module') && tokens[i + 1]?.kind === 'ident' && !tokens[i + 1].nl) {
+      // `namespace A.B { … }` declares A.
+      const after = tokens[i + 2];
+      if (after && after.kind === 'punct' && (after.value === '{' || after.value === '.')) add(tokens[i + 1].value);
+    } else if (t.value === 'const' && tokens[i + 1]?.value === 'enum') {
+      if (tokens[i + 2]?.kind === 'ident') add(tokens[i + 2].value);
     } else if (t.value === 'const' || t.value === 'let' || t.value === 'var') {
       inDeclaration = true;
       if (tokens[i + 1]?.kind === 'ident') add(tokens[i + 1].value);

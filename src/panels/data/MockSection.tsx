@@ -2,9 +2,9 @@
 import { useId, useState } from 'react';
 import { FlaskConical, Plus, RotateCcw, WandSparkles, X } from 'lucide-react';
 import { useEditor } from '../../model/store';
-import type { Extension } from '../../model/types';
+import type { DataSourceSimulation, Extension } from '../../model/types';
 import { CRM_OBJECT_TYPES } from '../../registry/constants';
-import { Badge, Button, Field, IconButton, NumberField, Section, Select, TextInput } from '../../ui';
+import { Badge, Button, Field, IconButton, NumberField, Section, Segmented, Select, TextInput } from '../../ui';
 import { CommitInput, JsonEditor } from '../common';
 import { addMissingMockProperties, missingMockProperties, sampleMockForSource } from '../actions';
 import { kindInfo } from '../dataSourceMeta';
@@ -22,6 +22,7 @@ export function MockSection({ ext }: { ext: Extension }) {
       <div className="ub-pn-muted">Mock data is only used by the designer preview — it is never exported.</div>
       {ext.kind === 'card' && <RecordProperties ext={ext} />}
       <ContextEditor ext={ext} />
+      <SimulateStates ext={ext} />
       <DataSourceMocks ext={ext} />
       <FunctionMocks ext={ext} />
     </Section>
@@ -210,6 +211,58 @@ function ContextEditor({ ext }: { ext: Extension }) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+const SIMULATIONS: Array<{ value: DataSourceSimulation; label: string; title: string }> = [
+  { value: 'ok', label: 'Normal', title: 'Loads briefly, then shows the mock data' },
+  { value: 'loading', label: 'Loading', title: 'Stays loading (the Loading flag is true, the data is empty)' },
+  { value: 'empty', label: 'Empty', title: 'Loads no records (null for fetch / function results)' },
+  { value: 'error', label: 'Error', title: 'Fails: the Error value holds a message' },
+];
+
+/**
+ * Lets the preview show each data source's loading, empty and error states, so the card's
+ * spinners, empty states and error alerts can be checked before HubSpot shows them.
+ */
+function SimulateStates({ ext }: { ext: Extension }) {
+  if (ext.dataSources.length === 0) return null;
+  const simulate = ext.mock.simulate ?? {};
+  const set = (dsId: string, value: DataSourceSimulation) =>
+    useEditor.getState().updateMock((m) => {
+      if (value === 'ok') {
+        if (m.simulate) {
+          delete m.simulate[dsId];
+          if (Object.keys(m.simulate).length === 0) delete m.simulate;
+        }
+        return;
+      }
+      m.simulate = { ...(m.simulate ?? {}), [dsId]: value };
+    });
+  return (
+    <div className="ub-pn-block">
+      <div className="ub-pn-subhead">
+        <span>Simulate in preview</span>
+      </div>
+      <div className="ub-pn-muted">Check how the card looks while data loads, when nothing is found and when a request fails.</div>
+      {ext.dataSources.map((ds) => {
+        const Icon = kindInfo(ds.kind).icon;
+        const value = simulate[ds.id] ?? 'ok';
+        return (
+          <div key={ds.id} className="ub-pn-mock__head ub-pn-simulate">
+            <Icon size={13} aria-hidden />
+            <span className="ub-pn-item__name">{ds.name}</span>
+            <span className="ub-pn-spacer" />
+            <Segmented<DataSourceSimulation>
+              aria-label={`Simulate ${ds.name}`}
+              value={value}
+              options={SIMULATIONS}
+              onChange={(v) => set(ds.id, v)}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 }

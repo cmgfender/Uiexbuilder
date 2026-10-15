@@ -13,7 +13,11 @@ import { revealField } from '../inspector/Problems';
 import { revealDataItem } from '../panels/reveal';
 import { usePowerUi } from '../power/uiStore';
 
-export const PROBLEMS_DEBOUNCE_MS = 300;
+/**
+ * Validation waits for a pause in editing (the same delay the inline syntax checks use), so a
+ * half-typed expression doesn't flash an error badge and count in the top bar while typing.
+ */
+export const PROBLEMS_DEBOUNCE_MS = 600;
 
 interface ProblemsState {
   issues: Issue[];

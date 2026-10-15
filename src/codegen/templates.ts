@@ -10,6 +10,7 @@
 import { hasTemplate, parseTemplate, singleExpression } from '../model/template';
 import type { GenContext } from './context';
 import { noteUserCode, useHelper } from './context';
+import { optionalContextAccess } from './rewrite';
 import {
   asOperand,
   escapeTemplateLiteralText,
@@ -26,9 +27,12 @@ export function asString(value: unknown): string {
   return typeof value === 'object' ? '' : String(value);
 }
 
-/** A user expression ready to embed: normalised and recorded in the context. */
+/**
+ * A user expression ready to embed: normalised, optional context members accessed with `?.`
+ * (so `context.extension.appName` type-checks), and recorded in the context.
+ */
 export function userExpr(ctx: GenContext, code: string): string {
-  const normalized = normalizeExpression(asString(code));
+  const normalized = optionalContextAccess(normalizeExpression(asString(code)));
   noteUserCode(ctx, normalized);
   return normalized === '' ? 'undefined' : normalized;
 }

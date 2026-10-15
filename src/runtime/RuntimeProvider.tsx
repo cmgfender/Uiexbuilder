@@ -6,13 +6,17 @@
  * Reset rules:
  *  - `resetKey` change (or reset(), or switching to another extension): everything returns to its
  *    initial values (state, data sources, overlays, alerts, iframe modal). Logs are kept.
+ *  - Preview sessions start like the card opens on HubSpot: CRM hooks and "load on open" sources
+ *    begin loading with HubSpot's first-render values (`{}`, `[]`, `null`) and get their mock data
+ *    after RUNTIME_TIMING.dataSourceLatencyMs; a request that reads other sources waits for them.
  *  - State variable definitions change: variables whose definition is unchanged keep their value,
  *    others start from their initial value.
  *  - Switching to design mode closes overlays, alerts, the iframe modal and tooltips.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { codeTrustVersion, subscribeCodeTrust } from '../model/trust';
 import { getComponent } from '../registry';
-import type { ActionStep, AlertType, NodeId, Project, Extension, StateVar } from '../model/types';
+import type { ActionStep, AlertType, DataSource, NodeId, Project, Extension, StateVar } from '../model/types';
 import { executeActions, RUNTIME_TIMING, type ActionHost } from './actions';
 import {
   ControlsContext,
@@ -25,12 +29,17 @@ import {
   type TooltipState,
 } from './context';
 import { resolvePropValue, type Scope } from './expr';
+import { interpolate } from './expr';
 import { mockDataForSource } from './mockData';
 import {
   buildScopeWithDiagnostics,
+  initialLoadStatus,
   initialStateValues,
+  loadsOnOpen,
   reconcileStateValues,
+  requestDependencies,
   resolveDataSources,
+  SIMULATED_ERROR,
   stateSignature,
   type DataSourceStatus,
 } from './scope';
@@ -41,6 +50,8 @@ import './runtime.css';
 export const MAX_LOG_ENTRIES = 500;
 /** At most this many alerts are visible at once (oldest dropped first). */
 export const MAX_VISIBLE_ALERTS = 5;
+/** Helper / computed value errors are reported once editing pauses for this long. */
+export const DIAGNOSTICS_DEBOUNCE_MS = 800;
 
 export interface RuntimeProviderProps {
   project: Project;
@@ -67,6 +78,25 @@ const DATA_SOURCE_LABEL: Record<string, string> = {
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/** Dependency depth of an on-open source (0 = loads right away, 1 = waits for one level, ...). */
+function loadDepths(ext: Extension): Map<string, number> {
+  const depths = new Map<string, number>();
+  const visiting = new Set<string>();
+  const depthOf = (ds: DataSource): number => {
+    const known = depths.get(ds.id);
+    if (known !== undefined) return known;
+    if (visiting.has(ds.id)) return 0; // a cycle: load without waiting
+    visiting.add(ds.id);
+    const deps = requestDependencies(ext, ds);
+    const d = deps.length ? Math.max(...deps.map(depthOf)) + 1 : 0;
+    visiting.delete(ds.id);
+    depths.set(ds.id, d);
+    return d;
+  };
+  (ext.dataSources ?? []).filter(loadsOnOpen).forEach(depthOf);
+  return depths;
+}
+
 export function RuntimeProvider({ project, extension, mode, resetKey = 0, children }: RuntimeProviderProps) {
   // Latest props for callbacks that outlive a render (async handlers, timers, overlay unmounts).
   const projectRef = useRef(project);
@@ -91,7 +121,9 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
     vars: extension.state ?? [],
     values: initialStateValues(extension.state ?? []),
   }));
-  const [dsStatus, setDsStatus] = useState<Record<string, DataSourceStatus>>({});
+  const [dsStatus, setDsStatus] = useState<Record<string, DataSourceStatus>>(() =>
+    mode === 'preview' ? initialLoadStatus(extension) : {},
+  );
   const [overlays, setOverlays] = useState<OpenOverlayEntry[]>([]);
   const [alerts, setAlerts] = useState<RuntimeAlert[]>([]);
   const [iframeModal, setIframeModal] = useState<IframeModalState | null>(null);
@@ -104,10 +136,15 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
   // with old values is never committed.
   const isReset = applied.resetToken !== resetToken;
   let store = stateStore;
+  if (isReset || (applied.mode !== mode && mode === 'preview')) {
+    // A preview session opens like the card on HubSpot: data that loads on open starts loading.
+    setDsStatus(mode === 'preview' ? initialLoadStatus(extension) : {});
+  } else if (applied.mode !== mode) {
+    setDsStatus({});
+  }
   if (isReset) {
     store = { sig, vars: extension.state ?? [], values: initialStateValues(extension.state ?? []) };
     setStateStore(store);
-    setDsStatus({});
   } else if (stateStore.sig !== sig) {
     store = { sig, vars: extension.state ?? [], values: reconcileStateValues(stateStore.vars, extension.state ?? [], stateStore.values) };
     setStateStore(store);
@@ -146,12 +183,28 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
   }, [stateNamesKey, setStateValue]);
 
   // ---------------------------------------------------------------- logging
-  const log = useCallback((level: RuntimeLogEntry['level'], message: string, detail?: unknown) => {
-    if (!mountedRef.current) return;
-    const entry: RuntimeLogEntry = { id: `log_${++seqRef.current}`, at: Date.now(), level, message };
-    if (detail !== undefined) entry.detail = detail;
-    setLogs((prev) => (prev.length >= MAX_LOG_ENTRIES ? [...prev.slice(prev.length - MAX_LOG_ENTRIES + 1), entry] : [...prev, entry]));
+  /** Entries logged during the first render / commit (before the mount effect) are kept here. */
+  const pendingLogsRef = useRef<RuntimeLogEntry[] | null>([]);
+  const appendLogs = useCallback((entries: RuntimeLogEntry[]) => {
+    setLogs((prev) => {
+      const next = [...prev, ...entries];
+      return next.length > MAX_LOG_ENTRIES ? next.slice(next.length - MAX_LOG_ENTRIES) : next;
+    });
   }, []);
+  const log = useCallback(
+    (level: RuntimeLogEntry['level'], message: string, detail?: unknown) => {
+      const entry: RuntimeLogEntry = { id: `log_${++seqRef.current}`, at: Date.now(), level, message };
+      if (detail !== undefined) entry.detail = detail;
+      if (!mountedRef.current) {
+        // Before mount (e.g. a node failing on the first render): flushed by the mount effect.
+        // After unmount the queue is gone and the entry is dropped.
+        pendingLogsRef.current?.push(entry);
+        return;
+      }
+      appendLogs([entry]);
+    },
+    [appendLogs],
+  );
   const clearLogs = useCallback(() => setLogs([]), []);
 
   // ---------------------------------------------------------------- data sources
@@ -175,12 +228,72 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
       await delay(RUNTIME_TIMING.dataSourceLatencyMs);
       if (!mountedRef.current || sessionRef.current !== session) return;
       setDsStatus((prev) => ({ ...prev, [ds.id]: { loading: false, error: null, loaded: true } }));
-      log('info', `${ds.name} loaded (mock data)`, mockDataForSource(extRef.current, ds));
+      logLoaded(extRef.current, ds);
     },
     [log],
   );
 
+  /** Console entry for a finished (mock) load, explaining simulated states and missing mocks. */
+  const logLoaded = useCallback(
+    (ext: Extension, ds: DataSource) => {
+      const simulate = ext.mock?.simulate?.[ds.id];
+      if (simulate === 'error') {
+        log('error', `${ds.name} failed: ${SIMULATED_ERROR}`);
+        return;
+      }
+      if (simulate === 'empty') {
+        log('info', `${ds.name} loaded with no data (simulated empty result)`);
+        return;
+      }
+      const data = mockDataForSource(ext, ds);
+      if ((ds.kind === 'fetch' || ds.kind === 'function') && data === null) {
+        log(
+          'warn',
+          `${ds.name} has no mock data, so it stays null in the preview. Add a sample response in Data › Mock data ` +
+            `to see your card with data (on HubSpot the real ${ds.kind === 'fetch' ? 'API' : 'function'} answers).`,
+        );
+        return;
+      }
+      log('info', `${ds.name} loaded (mock data)`, data);
+    },
+    [log],
+  );
+
+  // Preview start: complete the loads that started on open (see initialLoadStatus), each after
+  // the simulated latency — sources whose request reads other sources one latency later.
+  useEffect(() => {
+    if (mode !== 'preview') return undefined;
+    const ext = extRef.current;
+    const depths = loadDepths(ext);
+    const timers: Array<ReturnType<typeof setTimeout>> = [];
+    for (const ds of ext.dataSources ?? []) {
+      const depth = depths.get(ds.id);
+      if (depth === undefined || ext.mock?.simulate?.[ds.id] === 'loading') continue;
+      timers.push(
+        setTimeout(() => {
+          if (!mountedRef.current) return;
+          setDsStatus((prev) => (prev[ds.id]?.loaded ? prev : { ...prev, [ds.id]: { loading: false, error: null, loaded: true } }));
+          const latest = extRef.current;
+          const current = latest.dataSources.find((d) => d.id === ds.id);
+          if (!current) return;
+          if (current.kind === 'fetch') {
+            log('action', `hubspot.fetch ${(current.method ?? 'GET').toUpperCase()} ${interpolate(current.url ?? '', scopeRef.current)} (on open)`);
+          } else if (current.kind === 'function') {
+            const fn = projectRef.current.functions.find((f) => f.id === current.functionId);
+            log('action', `hubspot.serverless('${fn?.uid ?? current.functionId}') (on open)`);
+          }
+          logLoaded(latest, current);
+        }, (depth + 1) * RUNTIME_TIMING.dataSourceLatencyMs),
+      );
+    }
+    return () => timers.forEach(clearTimeout);
+    // Runs once per preview session (reset / mode change); later edits do not restart loads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetToken, mode]);
+
   // ---------------------------------------------------------------- base scope
+  // Trusting an imported project (model/trust.ts) lets its code run: rebuild the scope.
+  const trustVersion = useSyncExternalStore(subscribeCodeTrust, codeTrustVersion, codeTrustVersion);
   const { scope, diagnostics } = useMemo(
     () => buildScopeWithDiagnostics({ project, extension, stateValues, setters, dataSources }),
     // buildScopeWithDiagnostics reads only these parts of the project / extension.
@@ -197,6 +310,7 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
       stateValues,
       setters,
       dataSources,
+      trustVersion,
     ],
   );
   const scopeRef = useRef(scope);
@@ -210,17 +324,35 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
     alertTimers.current.delete(id);
     setAlerts((prev) => (prev.some((a) => a.id === id) ? prev.filter((a) => a.id !== id) : prev));
   }, []);
+  const alertsRef = useRef<RuntimeAlert[]>([]);
+  alertsRef.current = alerts;
   const addAlert = useCallback(
     (alert: { type: AlertType; title?: string; message: string }) => {
       if (!mountedRef.current) return;
+      const last = alertsRef.current[alertsRef.current.length - 1];
+      const restartTimer = (id: string) => {
+        const old = alertTimers.current.get(id);
+        if (old) clearTimeout(old);
+        alertTimers.current.set(
+          id,
+          setTimeout(() => dismissAlert(id), RUNTIME_TIMING.alertDismissMs),
+        );
+      };
+      // The same alert again (e.g. submitting twice) is counted instead of stacked.
+      if (last && last.type === alert.type && (last.title ?? '') === (alert.title ?? '') && last.message === alert.message) {
+        const count = (last.count ?? 1) + 1;
+        const updated = { ...last, count };
+        alertsRef.current = [...alertsRef.current.slice(0, -1), updated];
+        setAlerts((prev) => prev.map((a) => (a.id === last.id ? { ...a, count } : a)));
+        restartTimer(last.id);
+        return;
+      }
       const id = `alert_${++seqRef.current}`;
       const entry: RuntimeAlert = { id, type: alert.type, message: alert.message };
       if (alert.title) entry.title = alert.title;
+      alertsRef.current = [...alertsRef.current, entry].slice(-MAX_VISIBLE_ALERTS);
       setAlerts((prev) => [...prev, entry].slice(-MAX_VISIBLE_ALERTS));
-      alertTimers.current.set(
-        id,
-        setTimeout(() => dismissAlert(id), RUNTIME_TIMING.alertDismissMs),
-      );
+      restartTimer(id);
     },
     [dismissAlert],
   );
@@ -351,29 +483,85 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
   // ---------------------------------------------------------------- lifecycle
   useEffect(() => {
     mountedRef.current = true;
+    const pending = pendingLogsRef.current;
+    pendingLogsRef.current = null;
+    if (pending?.length) appendLogs(pending);
     const timers = alertTimers.current;
     return () => {
       mountedRef.current = false;
       for (const t of timers.values()) clearTimeout(t);
       timers.clear();
     };
-  }, []);
+  }, [appendLogs]);
 
-  // Helper / computed value errors are logged once per distinct message (not on every render).
+  // Helper / computed value errors: one live console entry per helper code / computed value,
+  // updated in place when the error changes and removed once it evaluates again. While editing,
+  // reports wait until typing pauses (DIAGNOSTICS_DEBOUNCE_MS) so half-typed code is not logged.
   // Declared after the mount effect so the first report happens once `log` is live.
-  const reportedRef = useRef<{ helpers: string | null; computed: Record<string, string> }>({ helpers: null, computed: {} });
+  const diagnosticEntries = useRef(new Map<string, string>());
+  const firstDiagnostics = useRef(true);
+  const reportDiagnostic = useCallback((key: string, message: string | null) => {
+    const entries = diagnosticEntries.current;
+    const existing = entries.get(key);
+    if (message === null) {
+      if (!existing) return;
+      entries.delete(key);
+      setLogs((prev) => prev.filter((l) => l.id !== existing));
+      return;
+    }
+    if (existing) {
+      setLogs((prev) => {
+        const found = prev.find((l) => l.id === existing);
+        if (found?.message === message) return prev;
+        if (!found) {
+          return [...prev, { id: existing, at: Date.now(), level: 'error' as const, message }].slice(-MAX_LOG_ENTRIES);
+        }
+        return prev.map((l) => (l.id === existing ? { ...l, at: Date.now(), message } : l));
+      });
+      return;
+    }
+    const id = `log_${++seqRef.current}`;
+    entries.set(key, id);
+    setLogs((prev) => [...prev, { id, at: Date.now(), level: 'error' as const, message }].slice(-MAX_LOG_ENTRIES));
+  }, []);
   useEffect(() => {
-    const reported = reportedRef.current;
-    if (diagnostics.helpersError && diagnostics.helpersError !== reported.helpers) {
-      log('error', `Helper functions failed: ${diagnostics.helpersError}`);
+    const flush = () => {
+      if (!mountedRef.current) return;
+      reportDiagnostic('helpers', diagnostics.helpersError ? `Helper functions failed: ${diagnostics.helpersError}` : null);
+      const ids = new Set(Object.keys(diagnostics.computedErrors));
+      for (const [id, message] of Object.entries(diagnostics.computedErrors)) {
+        const name = extRef.current.computed?.find((c) => c.id === id)?.name ?? id;
+        reportDiagnostic(`computed:${id}`, `Computed value "${name}" failed: ${message}`);
+      }
+      for (const key of [...diagnosticEntries.current.keys()]) {
+        if (key.startsWith('computed:') && !ids.has(key.slice('computed:'.length))) reportDiagnostic(key, null);
+      }
+    };
+    if (firstDiagnostics.current) {
+      firstDiagnostics.current = false;
+      flush();
+      return undefined;
     }
-    for (const [id, message] of Object.entries(diagnostics.computedErrors)) {
-      if (reported.computed[id] === message) continue;
-      const name = extRef.current.computed?.find((c) => c.id === id)?.name ?? id;
-      log('error', `Computed value "${name}" failed: ${message}`);
-    }
-    reportedRef.current = { helpers: diagnostics.helpersError, computed: diagnostics.computedErrors };
-  }, [diagnostics, log]);
+    const timer = setTimeout(flush, DIAGNOSTICS_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [diagnostics, reportDiagnostic]);
+
+  // Nodes that fail to render: one console entry per node and message per session.
+  const nodeErrorsRef = useRef(new Set<string>());
+  useEffect(() => {
+    nodeErrorsRef.current = new Set();
+  }, [resetToken]);
+  const reportNodeError = useCallback(
+    (nodeId: NodeId, message: string) => {
+      const key = `${nodeId}\u0000${message}`;
+      if (nodeErrorsRef.current.has(key) || modeRef.current !== 'preview') return;
+      nodeErrorsRef.current.add(key);
+      const node = extRef.current.nodes[nodeId];
+      const label = node ? getComponent(node.type)?.label ?? node.type : 'Component';
+      log('error', `${node?.name ? `${label} “${node.name}”` : label} could not be rendered: ${message}`);
+    },
+    [log],
+  );
 
   // ---------------------------------------------------------------- context values
   const controls = useMemo<RuntimeControls>(
@@ -385,8 +573,9 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
       showTooltip,
       hideTooltip,
       registerHost,
+      reportNodeError,
     }),
-    [fireEvent, openOverlay, closeOverlay, showTooltip, hideTooltip, registerHost],
+    [fireEvent, openOverlay, closeOverlay, showTooltip, hideTooltip, registerHost, reportNodeError],
   );
 
   const renderState = useMemo<RenderState>(

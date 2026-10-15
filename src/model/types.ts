@@ -171,13 +171,23 @@ export interface RunDataSourceAction extends ActionBase {
   dataSourceId: string;
 }
 
+/** One request header. `value` is a template string (`Bearer {{ token }}`). */
+export interface RequestHeader {
+  key: string;
+  value: string;
+}
+
 /** Inline hubspot.fetch call. url is a template string; body is an expression (object). */
 export interface FetchAction extends ActionBase {
   type: 'fetch';
   url: string;
   method: HttpMethod;
-  /** Expression producing the JSON body object, e.g. `{ email, note }`. Optional. */
+  /** Expression producing the JSON body object, e.g. `{ email, note }`. Optional; never sent with GET. */
   body?: string;
+  /** Request headers (hubspot.fetch `headers`). Entries with an empty key are ignored. */
+  headers?: RequestHeader[];
+  /** Request timeout in milliseconds (hubspot.fetch `timeout`). */
+  timeout?: number;
   /** Store parsed JSON response in this state variable. */
   resultState?: string;
   /** Steps executed after success / failure. `response` and `error` are in scope respectively. */
@@ -307,9 +317,16 @@ export interface FetchSource extends DataSourceBase {
   /** Template string. Its origin must be listed in app permittedUrls.fetch (codegen adds it). */
   url: string;
   method: HttpMethod;
-  /** Expression producing the JSON body object. */
+  /** Expression producing the JSON body object. Never sent with GET. */
   body?: string;
-  /** Run automatically when the extension mounts. */
+  /** Request headers (hubspot.fetch `headers`). Entries with an empty key are ignored. */
+  headers?: RequestHeader[];
+  /** Request timeout in milliseconds (hubspot.fetch `timeout`). */
+  timeout?: number;
+  /**
+   * Run automatically when the extension opens — once the CRM data its request uses (record
+   * properties, associations, searches, other on-open sources) has loaded.
+   */
   runOnMount: boolean;
 }
 
@@ -356,7 +373,15 @@ export interface PreviewMockData {
   dataSources: Record<string, JsonValue>;
   /** Mock return values per app function id (used by runFunction actions in preview). */
   functions: Record<string, JsonValue>;
+  /**
+   * Preview simulation per data source id (optional): 'ok' (default: loading, then the mock data),
+   * 'loading' (stays loading), 'empty' (no records / null) or 'error' (fails with an error).
+   */
+  simulate?: Record<string, DataSourceSimulation>;
 }
+
+/** How the preview simulates a data source (see PreviewMockData.simulate). */
+export type DataSourceSimulation = 'ok' | 'loading' | 'empty' | 'error';
 
 /**
  * A derived value recomputed on every render: `const <name> = (<expr>);` placed after state and

@@ -220,3 +220,75 @@ export function defaultPropertiesFor(objectType: string | undefined | null): str
       return ['hs_object_id'];
   }
 }
+
+/** Edit distance with adjacent swaps (optimal string alignment), stopping early above `max`. */
+function editDistance(a: string, b: string, max: number): number {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev2: number[] = [];
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let d = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d = Math.min(d, prev2[j - 2] + 1);
+      cur.push(d);
+      rowMin = Math.min(rowMin, d);
+    }
+    if (rowMin > max) return max + 1;
+    prev2 = prev;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/**
+ * The known property a typed name was probably meant to be: a different capitalisation
+ * (`FirstName`), an unfinished name (`life` → `lifecyclestage`) or a small typo (`firstnmae`).
+ * Null when the name is known, when no catalog exists for the object types (custom objects) or
+ * when it is not close to any known property — custom properties are common and fine.
+ */
+export function likelyPropertyTypo(name: string, objectTypes: Array<string | undefined | null>): CrmPropertyInfo | null {
+  const known = propertySuggestions(objectTypes);
+  const typed = name.trim();
+  if (!typed || known.length === 0 || known.some((k) => k.name === typed)) return null;
+  const lower = typed.toLowerCase();
+  const sameCase = known.find((k) => k.name.toLowerCase() === lower);
+  if (sameCase) return sameCase;
+  if (lower.length >= 2) {
+    const started = known.filter((k) => k.name.startsWith(lower));
+    if (started.length > 0) return started.reduce((a, b) => (b.name.length < a.name.length ? b : a));
+  }
+  if (lower.length >= 4) {
+    const max = lower.length >= 8 ? 2 : 1;
+    let best: CrmPropertyInfo | null = null;
+    let bestDistance = max + 1;
+    for (const k of known) {
+      const d = editDistance(lower, k.name, max);
+      if (d < bestDistance) {
+        best = k;
+        bestDistance = d;
+      }
+    }
+    return best;
+  }
+  return null;
+}
+
+/**
+ * A non-blocking warning for a property name that is probably a mistake for these object types
+ * (see likelyPropertyTypo), with the known property as the suggested fix; null otherwise.
+ */
+export function propertyNameWarning(
+  name: string,
+  objectTypes: Array<string | undefined | null>,
+): { message: string; fix: string } | null {
+  const hit = likelyPropertyTypo(name, objectTypes);
+  if (!hit) return null;
+  const types = [...new Set(objectTypes.filter((t): t is string => !!t).map((t) => objectTypeLabel(t).toLowerCase()))].join(' / ');
+  return {
+    message: `“${name}” isn’t a standard ${types || 'CRM'} property — did you mean “${hit.name}” (${hit.label})? Ignore this for a custom property.`,
+    fix: hit.name,
+  };
+}

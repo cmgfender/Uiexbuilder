@@ -19,6 +19,28 @@ and examples in `/home/user/hubspot/ui-extensions-examples`.
 * State: `StateVar` → `useState`. Data: `DataSource` (crmProperties | associations | crmSearch |
   fetch | function). Each data source named `x` exposes `x`, `xLoading`, `xError` in scope.
 * Mock data for the designer lives in `Extension.mock` (never in generated code).
+  `PreviewMockData.simulate?: Record<dataSourceId, 'ok' | 'loading' | 'empty' | 'error'>` makes the
+  preview show a data source's loading / empty / error state (Data panel › Mock data › Simulate).
+* `FetchSource` and `FetchAction` take optional `headers: RequestHeader[]` (`{ key, value }`, the
+  value a template string) and `timeout` (ms), passed to `hubspot.fetch`; a body is never sent
+  with GET.
+
+### Importing documents (`src/model/normalize.ts`, `src/model/trust.ts`)
+* `validateProjectShape` / `parseProjectJson` run `normalizeProject`: it repairs fields the editor
+  dereferences (missing `location`, `objectTypes` as a string, wrong-typed props / text / events /
+  bindings, `app: {}`, …) and reports each repair in `ParseResult.warnings`; it rejects unknown
+  extension kinds and node graphs that are not trees (cycles, the root as a child, shared nodes,
+  depth > `MAX_NODE_DEPTH` 200) and drops unreachable nodes. It never mutates its input.
+* **Code trust**: a project imported from a file is *untrusted* (`markProjectUntrusted`, persisted
+  per project id under `uiex-builder:untrusted-projects`). While the active project is untrusted
+  the runtime evaluates only *safe expressions* (`runtime/safeExpression.ts`: no calls except
+  `toText(…)`, no assignment, only scope names and harmless globals), shows the source of paused
+  template segments, refuses custom code and skips helper code; `CodeTrustNotice` (rendered above
+  the card) says what is paused and offers “Trust and run code” (`trustProject`). Every place that
+  runs document code checks `codeExecutionAllowed()` (runtime scope / expr, power Helpers status,
+  inspector live previews). Projects created in this browser are trusted.
+* `src/model/jsTokens.ts` is the shared lossless JavaScript tokenizer (loop guards, safe
+  expressions, codegen rewrites, validation's `context.crm` / async-data checks).
 
 ### Scope available to expressions
 State variable names, their setters `setX` (in handlers/custom code), data source names and
@@ -27,6 +49,10 @@ extension), repeat item/index names of the node and its ancestors, and in event 
 event's params (e.g. `value`, `event`). Custom code additionally gets `actions`, `hubspot`, `logger`.
 Plus the power features: helper functions declared in `Extension.helpers` (module level — every
 other name shadows them) and computed values (`Extension.computed`, see §6c).
+`context.crm` exists only on app cards (`SettingsContext` / `AppHomeContext` have none); the preview
+matches that and validation reports `context-location`. Every expression can also call `toText(x)`
+(rule 3's conversion) unless the document declares its own `toText`; codegen emits the helper when
+user code uses it. The inspector's `fx` toggle writes `` `Hi ${toText(name)}` `` for `Hi {{ name }}`.
 
 ### Template strings (`src/model/template.ts`) — runtime and codegen MUST agree
 1. No `{{` → plain string.
@@ -126,6 +152,18 @@ store (`insertNode`, `moveNode`, `paste`), drag & drop and the palette.
 coalescing rapid edits). UI state: `mode` ('design' | 'preview'), `selectedNodeId`,
 `hoveredNodeId`, `leftPanel`, `rightPanel`, `bottomPanel`, `clipboard`, `previewResetKey`.
 Hooks: `useActiveExtension()`, `useSelectedNode()`, `selectActiveExtension(state)`.
+* `commit` records nothing when the recipe changes nothing (immer no-op), so no-op actions create
+  no undo step; `updatedAt` is only bumped for real changes.
+* `undo` / `redo` switch to the extension the step changes (and keep the selection only if the
+  node still exists); `shell/actions.historyStep` toasts when that happens.
+* `addStateVar` keeps a valid typed name and makes it unique against everything declared
+  (`freeStateName`, using `panels/names.validateDeclaredName`); callers must use the returned name.
+* `insertNode` / `paste` refuse templates containing components unavailable in the location
+  (`unavailableComponents(ext, tpl)`; also used by `templates/actions.insertBlock` and
+  `shell/actions.pasteAt` for the explanation); copies get unique Modal / Panel ids with their
+  `closeOverlay` references remapped (`uniquifyOverlayIds`, `toTemplate` writes `@<id>` refs).
+* `model/history.asOneUndoStep(fn)` collapses several store actions into one undo step (create a
+  variable and bind it, create a function and the data source that runs it, quick fixes).
 Power actions (active extension): `addComputed(partial?)` (unique valid name, default base
 `computed`), `updateComputed(id, patch)` (coalesced), `removeComputed(id)`, `moveComputed(id, index)`,
 `setHelpers(code)` (coalesced; empty code removes the field). `duplicateExtension` copies computed
@@ -143,8 +181,23 @@ values and helpers.
 selected node's element so enclosing Tabs / Accordions reveal it.
 The base scope (`buildBaseScope` / `buildScopeWithDiagnostics`) also holds helper values and
 computed values; `RuntimeApi.diagnostics` (optional) reports `helpersError` and `computedErrors`
-(by computed id). Errors never throw: a failing computed value is `undefined`, and each distinct
-error is logged once to the console panel.
+(by computed id). Errors never throw: a failing computed value is `undefined`. Diagnostics are
+reported on mount, then debounced (`DIAGNOSTICS_DEBOUNCE_MS` 800) and kept as one console entry
+per helpers block / computed id, updated in place and removed once resolved.
+* **First render like HubSpot**: a preview session starts with each on-open data source in its
+  first-render state (`null` for fetch / function, `{}` record properties, `[]` lists, `xLoading`
+  true) and switches to the mock data after `RUNTIME_TIMING.dataSourceLatencyMs` (one latency step
+  per dependency, as the generated mount effects wait for the data their request reads).
+* In **preview** mode a failing condition / repeat / prop / text expression renders the node's
+  error box (it would stop the card on HubSpot) and logs once (`RuntimeControls.reportNodeError`);
+  design mode degrades silently as before. `NodeRendererProps.depth` stops runaway recursion at
+  `MAX_RENDER_DEPTH` 250 with an error box.
+* Preview alerts render at the top of the card body (`PreviewAlerts`, from `ExtensionRenderer`),
+  not over the content; identical consecutive alerts collapse (`RuntimeAlert.count`). A preview
+  “Copy to clipboard” also shows what was copied.
+* `runtime/loopGuard.ts`: `guardLoops(code)` makes `while` / `do` / C-style `for` loops call a
+  global guard that throws after 1.5 s of synchronous looping; applied to every compiled
+  expression, custom code and helper code, so a runaway loop errors instead of freezing the tab.
 
 ## 6. Codegen (`src/codegen`)
 `generateExtensionSource(project, ext)`, `generateProjectFiles(project)`,
@@ -155,6 +208,24 @@ components and `useCrmProperties`/`useAssociations`.
 `generateNodeJsx(project, ext, nodeId)` returns one node subtree's JSX exactly as it appears in the
 generated component (condition / repeat wrappers, slot content as the bare element, handler names
 of the full file); the root id yields the `<>…</>` fragment, unknown ids `''`.
+* Requests: loaders and fetch steps read responses with a module helper `readJson` (empty / 204
+  body → `null`); `fetchOptions` never emits a body for GET and passes `headers` / `timeout`.
+* Each “load on open” source gets its own mount effect that waits for the `…Loading` flags of the
+  CRM hooks and on-open sources its request reads, then loads once (lint-clean, no stale empty
+  request values).
+* User code is rewritten with `optionalContextAccess` (`context.extension?.…`, `user?.locale`, …);
+  set-state values whose inferred type can't fit the state are cast (`(count + 1) as any`); an If
+  step without a condition emits only its else branch. Comments built from document text go
+  through `commentText` (line terminators and `*/` defused).
+* `requirements.ts`: permitted URLs also come from `hubspot.fetch('…')` literals in custom code,
+  helpers and computed values (`fetchUrlsInCode`); `urlOriginHint(url, ext)` explains dynamic hosts
+  (suggests the origin of the state variable a URL starts with).
+* Project files: function endpoint paths are written in the official leading-slash form; the
+  README lists `hs secret add` per secret, `hs project install-app` (static auth) or the install
+  link (OAuth) and where to add each card; the UI `package.json` includes the dev dependencies
+  `hs project lint` requires (`typescript-eslint`, `jiti`).
+* `src/codegen/hubspotRender.test.ts` renders every fixture with HubSpot's own test renderer
+  (`@hubspot/ui-extensions/testing`) while data is still loading.
 
 ## 6b. Templates & validation (`src/templates`, `src/model/validate.ts`)
 * `ExtensionTemplate.build(existing, functionIds?)`; templates that need server code declare
@@ -167,19 +238,36 @@ of the full file); the root id yields the `<>…</>` fragment, unknown ids `''`.
   `helpers`, `function:<id>`, `app.*`, `project.name`, extension fields, prop names, `text`,
   `condition`, `repeat`, `binding`, `event:<name>`). Every starter / block validates without
   errors or warnings and type-checks (`src/templates/templates.test.ts`).
+* Deploy-safety rules added after the review: `context-location` (error: `context.crm` on a
+  settings / app home page), `unguarded-async-data` (warning: `weather.temp` on a fetch / function
+  source that is null until loaded, unless `?.`, an in-expression check or a node / ancestor
+  condition guards it), `dynamic-url-origin` (warning: a request / iframe / image URL whose host is
+  an expression; `subject` is the likely origin, the issue key starts with the permitted-URL kind),
+  `function-app-type` (error: app functions only in private, static-auth apps; never marketplace —
+  `appFunctionsUnsupported(project)`), `function-platform` (warning: 2025.2 has only endpoint
+  functions and no `hubspot.serverless`), `endpoint-path`, `set-state-value` (blank “Set variable”
+  value), `set-state-type` (a value of another type than the variable), `empty-copy`, and likely
+  typos of standard CRM properties under `data-source-properties` (`subject` the name,
+  `suggestion` the standard property).
+* `Issue.suggestion` (optional) is a likely replacement for `subject`: for `unknown-name` the
+  closest name in scope (`closestName` / `editDistance`; none when ambiguous).
 
 ## 6c. Power features (`src/power`)
 * **Helpers** (`Extension.helpers`): module-level JavaScript or TypeScript. `helperNames(code)` lists
-  top-level `function` / `class` / `const` / `let` / `var` names (`src/power/helpers.ts`, pure and
+  top-level `function` / `class` / `const` / `let` / `var` names (and enum, namespace and abstract
+  class names) (`src/power/helpers.ts`, pure and
   dependency-free so model / runtime / codegen / validation import it). Codegen emits the code after
   the imports and generated helpers (`// Helper functions …` header); parameters without a type get
   `: any` (`prepareHelpersForTypeScript`) so plain JS helpers type-check under `strict` — other TS
   strictness (e.g. indexing `{}` with a string) is the author's to satisfy, so type params / locals
   or use `any`. Import names and generated helpers that clash with a helper are aliased (`Text as
   TextComponent`, `toText2`); `hubspot` / `logger` used by helper code are imported. The preview
-  evaluates the code once per source text (`compileHelpers`) after `stripTypeScript` removes
-  annotations, casts, generics, `type` / `interface` declarations and `export`; helpers cannot see
-  the extension scope (pass values as arguments). `checkHelpersSyntax` accepts TypeScript.
+  evaluates the code once per source text (`compileHelpers`, loop-guarded, only while code is
+  trusted) after `stripTypeScript` removes annotations, casts, generics, `type` / `interface` /
+  `declare` declarations, overload signatures, `this` parameters, abstract / declare members, index
+  signatures and `export` (also inside template `${…}`), and lowers enums, namespaces and
+  constructor parameter properties like tsc; helpers cannot see the extension scope (pass values
+  as arguments). `checkHelpersSyntax` accepts TypeScript.
 * **Computed values** (`Extension.computed`): `const <name>: any = <expr>;` in list order, declared
   after state, data hooks and data source loaders and before handlers — each may use state, data,
   context, helpers and the computed values above it. Data source options are emitted earlier and so
@@ -192,14 +280,26 @@ of the full file); the root id yields the `<>…</>` fragment, unknown ids `''`.
   once by the shell) toggles on ⌘K / Ctrl+K in the capture phase (works inside inputs);
   `openCommandPalette()` opens it programmatically. Commands (`buildCommands`) are rebuilt from
   the store; ranking (`rankCommands`, `fuzzyMatch`: exact > prefix > word start > words at word
-  starts > acronym > substring > subsequence) caps results at 50; recent command ids are kept in
-  localStorage (`uiex-builder:palette-recent`).
+  starts > acronym > substring > subsequence; keywords weigh 0.65 and subtitles 0.55 so they never
+  beat a title word-start match; title subsequence matches below 150 are dropped; multi-word
+  queries may mix title and keyword words) caps results at 50. Commands include an “Events” group
+  (“Add action: <kind>” adds a step to the selected component's first event), zoom commands and
+  “Duplicate this card”. Recent command ids are kept in localStorage under
+  `uiex-builder:command-recent` (the component palette keeps recently used components under
+  `uiex-builder:palette-recent`).
+* `CodeEditor` / `CodeEditorDialog` / `handleCodeKeyDown` (power/CodeEditor.tsx): highlighted code
+  editor and the large modal editor used by Helpers, computed values and custom code actions.
+  `usePowerUi.focusHelpers()` is a one-shot request (`helpersFocusPending`) consumed by
+  HelpersSection.
 
 ## 6d. Editor integration notes
 * **Problems**: `Issue.subject` (optional) carries the value an issue is about (scope, origin,
   bound state name). `src/shell/quickFixes.ts` turns unambiguous issues into one-click fixes in the
-  Problems panel (add scope / permitted URL, valid project name, create a missing bound state
-  variable, browse components). Navigating to a node issue focuses the field (`revealField` from
+  Problems panel (add scope / permitted URL — also the likely origin of a dynamic URL, valid
+  project name, create a missing bound state variable and bind the name the store created,
+  replace a misspelt name with the suggestion everywhere in the extension, use the standard CRM
+  property for a likely typo, browse components). Validation for the panel and the top-bar count
+  runs `PROBLEMS_DEBOUNCE_MS` (600) after the last edit. Navigating to a node issue focuses the field (`revealField` from
   `src/inspector/Problems`); `state:` / `dataSource:` / `computed:` / `helpers` issues expand that
   item in the Data panel (`src/panels/reveal.ts`, `usePowerUi.revealComputed / focusHelpers`).
 * **Validation**: data source options are checked without computed values in scope
@@ -218,6 +318,50 @@ of the full file); the root id yields the `<>…</>` fragment, unknown ids `''`.
 * **Canvas frames** are responsive: settings / home pages follow the stage width (max 960 / 1200);
   the record page hides its decorative summary column when the stage is narrower than the frame.
 * JSZip is loaded on demand by `buildProjectZip` (export only).
+* **Kit focus contracts**: `Dialog` traps Tab / Shift+Tab, makes `#root` inert while open, keeps an
+  autofocused field focused (else focuses itself) and returns focus to its opener — the menu
+  trigger when it was opened from a menu item. `Menu` implements the ARIA menu keyboard model
+  (focus the first item, Up / Down / Home / End / Tab, Escape) and returns focus to its opener or a
+  `returnFocus` prop. `Tabs` is one Tab stop with Left / Right / Home / End; pass `idBase` and
+  spread `tabPanelProps(idBase, value)` on the panel. Inspector popovers that are interactive pass
+  `autoFocus` (focus moves in once positioned; Escape closes and refocuses the anchor). In
+  multi-line fields the autocomplete list opens under the caret's line (`anchorRect`).
+* **Shortcut scope**: single-key shortcuts (Delete / Backspace, Escape, arrows, Alt+arrows) only
+  act with focus on `body`, `.ub-cv-stage` or inside `[data-shortcuts-scope]` (the Layers tree);
+  Cmd / Ctrl shortcuts stay global.
+* **Saving**: save the open project with `saveCurrentProject()` (src/shell/persistence), never
+  `saveProject(current)`, so another tab's newer version is not overwritten (the conflict dialog
+  asks); a failed save reports its reason (`useShell.saveError`: 'quota' → “Browser storage is
+  full”). Import files with `importProjectFromText(text, { fileName })` (src/shell/importProject):
+  it asks before replacing a different saved version of the same project (copy / replace /
+  cancel), keeps the file's code untrusted and opens it under the boot guard.
+* **Crash recovery**: `EditorErrorBoundary` (src/shell/Recovery.tsx) shows a recovery screen and
+  suspends autosave; the boot guard `uiex-builder:boot-guard` (written before a project is opened
+  at startup or imported, cleared once the editor settled) makes the next startup show the
+  recovery screen instead of reopening a document that crashed or hung; `?safe=1` does the same.
+* **Layout**: below 1180 px the left sidebar starts as a rail (`useShell.leftAutoCollapsed`, not
+  persisted; read `isLeftCollapsed(state)`). Both sidebars are resizable (`leftWidth` /
+  `rightWidth`, 240–560 px, persisted; separators on their inner edges). The canvas zoom is
+  automatic until the user picks one (`useCanvasView.auto`): a card frame wider than the stage
+  (e.g. the record tab in a small window) starts zoomed out to fit.
+* **Canvas**: the selection chip and quick toolbar are placed by `placeSelectionChrome`
+  (src/canvas/chromePlacement.ts) outside the outline on the side that covers the least
+  surrounding content (frame text marks itself with `data-cv-obstacle`); they fade and become
+  click-through after the pointer rests on covered content, and during drags. Quick-toolbar
+  actions keep keyboard focus in the toolbar or on the stage. Click-to-add is form-aware: adding
+  to a Form goes into its fields' layout Flex / Box, before the trailing submit / reset action area
+  (`formActionsStart`). The focused stage announces keyboard selection changes, moves, duplicates
+  and deletes in a polite live region (src/canvas/announce.ts); Shift+F10 / the Menu key open the
+  selected node's context menu at the node and return focus to the stage when it closes.
+* **Renaming** (panels/findUsages `renameReferences` / `findUsages`) is scope-aware: repeat item /
+  index names, event params and fetch / runFunction `response` / `error` hide declarations, so
+  they are neither counted nor renamed. `validateDeclaredName` and the computed-value name field
+  reject a new name that such a local, or a name declared in custom code, would capture at a usage
+  site (`renameConflicts` / `renameConflictMessage`). “Save as block” (canvas and layers) lists the
+  state variables a subtree really uses (`canvas/nodeActions.usedStateVars`).
+* **HubSpot ids**: `projectUidError`, `extensionFileNameError`, `functionFileNameError`,
+  `ENDPOINT_PATH_RE` (src/panels/utils) are the project-wide rules shared by the dialogs, the
+  inspector's extension settings and validation.
 
 ## 7. Conventions
 * TypeScript strict, no `any` leaks into public APIs (internal `any` in previews is fine).

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { useEditor } from '../model/store';
 import { getComponent, listComponents } from '../registry';
@@ -163,6 +163,77 @@ describe('<Palette>', () => {
     fireEvent.dragStart(tile('Button')!, { dataTransfer });
     fireEvent.dragEnd(tile('Button')!, { dataTransfer: { ...dataTransfer, dropEffect: 'copy' } });
     expect(screen.getByRole('region', { name: 'Recently used' })).toBeInTheDocument();
+  });
+
+  it('is a single Tab stop with arrow-key navigation over tiles and group headers', () => {
+    resetEditor();
+    renderPalette();
+    const body = document.querySelector<HTMLElement>('.ub-sh-pal-body')!;
+    const stops = Array.from(body.querySelectorAll<HTMLElement>('button')).filter((b) => b.tabIndex >= 0);
+    expect(stops).toHaveLength(1);
+    const first = stops[0];
+    expect(first).toHaveClass('ub-sh-pal-tile');
+
+    // Up from the first tile goes to its group header (now reachable without Tab).
+    act(() => first.focus());
+    fireEvent.keyDown(first, { key: 'ArrowUp' });
+    const head = within(screen.getByRole('region', { name: 'Layout' })).getByRole('button', { name: /Layout/ });
+    expect(head).toHaveFocus();
+    // The focused element becomes the Tab stop.
+    expect(head).toHaveAttribute('tabindex', '0');
+    expect(first).toHaveAttribute('tabindex', '-1');
+    // Left on a header collapses the group, Right expands it again.
+    fireEvent.keyDown(head, { key: 'ArrowLeft' });
+    expect(head).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.keyDown(head, { key: 'ArrowRight' });
+    expect(head).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.keyDown(head, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(tile('Flex'));
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+    expect(document.activeElement).not.toBe(tile('Flex'));
+    expect(document.activeElement).toHaveClass('ub-sh-pal-tile');
+    // Up from the first header returns to the search box.
+    fireEvent.keyDown(document.activeElement!, { key: 'Home' });
+    expect(document.activeElement).toBe(head);
+    fireEvent.keyDown(head, { key: 'ArrowUp' });
+    expect(screen.getByLabelText('Search components')).toHaveFocus();
+  });
+
+  it('describes each tile and shows a dismissible info card on keyboard focus', async () => {
+    resetEditor();
+    renderPalette();
+    const button = tile('Button')!;
+    const desc = document.getElementById(button.getAttribute('aria-describedby')!);
+    expect(desc).toHaveTextContent(getComponent('Button')!.description);
+    expect(desc).toHaveTextContent('F1');
+
+    // Keyboard focus (the last input was a key press) shows the card after a short rest.
+    fireEvent.keyDown(document.body, { key: 'Tab' });
+    act(() => button.focus());
+    await act(() => new Promise((r) => setTimeout(r, 500)));
+    const card = screen.getByRole('tooltip');
+    expect(card).toHaveTextContent('<Button>');
+    fireEvent.keyDown(button, { key: 'Escape' });
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    expect(button).toHaveFocus();
+
+    // Pointer hover shows it too; Escape hides it without moving the pointer.
+    fireEvent.mouseEnter(tile('Text')!);
+    await act(() => new Promise((r) => setTimeout(r, 500)));
+    expect(screen.getByRole('tooltip')).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+
+  it('F1 on a tile opens the component docs', () => {
+    resetEditor();
+    renderPalette();
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const button = tile('Button')!;
+    act(() => button.focus());
+    fireEvent.keyDown(button, { key: 'F1' });
+    expect(open).toHaveBeenCalledWith(getComponent('Button')!.docsUrl, '_blank', 'noopener,noreferrer');
+    open.mockRestore();
   });
 
   it('focuses the search box on request (Cmd+/)', () => {

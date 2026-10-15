@@ -246,7 +246,7 @@
   scrollbar-width: thin;
 }
 .ub-cv-stage:focus-visible {
-  box-shadow: inset 0 0 0 2px rgba(47, 107, 255, 0.35);
+  box-shadow: var(--ub-focus-inset);
 }
 .ub-cv--preview .ub-cv-stage {
   background-color: #e5e8ee;
@@ -544,7 +544,7 @@
 }
 .ub-cv-side-head:focus-visible {
   outline: none;
-  box-shadow: inset var(--ub-focus);
+  box-shadow: var(--ub-focus-inset);
 }
 .ub-cv-side-head__title {
   min-width: 0;
@@ -804,6 +804,25 @@
 .ub-cv-chip--inside {
   border-radius: 0 0 4px 0;
 }
+.ub-cv-chip--below {
+  border-radius: 0 0 4px 4px;
+}
+/* Selection chrome over content the pointer rests on (or during a drag): see-through and
+   click-through, so the content underneath can be read, selected and dropped onto. */
+.ub-cv-chip,
+.ub-cv-quick {
+  transition: opacity 0.12s ease;
+}
+.ub-cv-chip.ub-cv-chrome--peek,
+.ub-cv-quick.ub-cv-chrome--peek,
+.ub-cv-chrome--peek .ub-cv-chip__badge {
+  opacity: 0.22;
+  pointer-events: none;
+}
+.ub-cv-quick.ub-cv-chrome--peek:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
 .ub-cv-chip__label {
   min-width: 0;
   overflow: hidden;
@@ -1019,4 +1038,18 @@
     clip: rect(0 0 0 0);
     white-space: nowrap;
   }
+}
+
+/* ------------------------------------------------------------------ Screen-reader only */
+.ub-cv-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }

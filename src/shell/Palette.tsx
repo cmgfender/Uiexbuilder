@@ -1,6 +1,12 @@
 /**
  * Component palette: searchable, grouped by category, with recently used components. Tiles are
  * draggable onto the canvas / layers and insert at a smart position on click or Enter.
+ *
+ * Keyboard: the palette body is a single Tab stop (roving tabindex over group headers and tiles);
+ * arrow keys move between tiles (2-column grid) and headers, Home / End jump to the ends,
+ * Left / Right on a header collapse / expand it. Each tile describes its component
+ * (aria-describedby); resting on a tile — with the pointer or keyboard focus — shows the info
+ * card, which Escape dismisses. F1 on a tile opens the component's HubSpot docs.
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
@@ -25,6 +31,11 @@ import { formatShortcut } from './shortcuts';
 
 const HOVER_DELAY_MS = 450;
 const HIDE_DELAY_MS = 140;
+
+/** Roving-focus key of a palette element (`head:<group>` or `tile:<group>:<type>`). */
+const headKey = (group: string) => `head:${group}`;
+const tileKey = (group: string, type: string) => `tile:${group}:${type}`;
+const domId = (text: string) => text.replace(/[^a-z0-9_-]+/gi, '-');
 
 interface Availability {
   ok: boolean;
@@ -51,6 +62,8 @@ interface HoverState {
   def: ComponentDef;
   rect: { left: number; top: number; right: number; bottom: number };
   reason?: string;
+  /** Shown for keyboard focus (the card then mentions the F1 shortcut). */
+  viaKeyboard?: boolean;
 }
 
 export function Palette() {
@@ -66,6 +79,7 @@ export function Palette() {
     return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [];
   });
   const focusNonce = useShell((s) => s.paletteFocusNonce);
+  useInputModality();
 
   // Cmd+/ (or the rail) asks to focus the search box.
   useEffect(() => {
@@ -113,6 +127,28 @@ export function Palette() {
 
   const matchCount = useMemo(() => groups.reduce((n, g) => n + g.components.length, 0), [groups]);
 
+  // ---------------------------------------------------------------- roving tabindex
+  const showRecent = !terms.length && recentDefs.length > 0;
+  const recentCollapsed = collapsed.includes('__recent');
+  const roveKeys = useMemo(() => {
+    const keys: string[] = [];
+    const add = (id: string, defs: ComponentDef[], isCollapsed: boolean) => {
+      keys.push(headKey(id));
+      if (!isCollapsed) for (const d of defs) keys.push(tileKey(id, d.type));
+    };
+    if (showRecent) add('__recent', recentDefs, recentCollapsed);
+    for (const g of groups) add(g.category, g.components, !terms.length && collapsed.includes(g.category));
+    return keys;
+  }, [showRecent, recentDefs, recentCollapsed, groups, terms.length, collapsed]);
+  const [currentKey, setCurrentKey] = useState<string | null>(null);
+  // The one Tab stop: the last focused element, else the first tile (else the first header).
+  const rovingKey =
+    currentKey && roveKeys.includes(currentKey) ? currentKey : roveKeys.find((k) => k.startsWith('tile:')) ?? roveKeys[0] ?? null;
+  const onBodyFocus = (e: React.FocusEvent<HTMLDivElement>) => {
+    const key = (e.target as HTMLElement).dataset.roveKey;
+    if (key && key !== currentKey) setCurrentKey(key);
+  };
+
   // ---------------------------------------------------------------- insert / drag
   const add = useCallback(
     (def: ComponentDef) => {
@@ -140,12 +176,17 @@ export function Palette() {
   };
   useEffect(() => clearTimers, []);
   const scheduleHover = useCallback(
-    (def: ComponentDef, el: HTMLElement) => {
+    (def: ComponentDef, el: HTMLElement, viaKeyboard = false) => {
       clearTimers();
       showTimer.current = setTimeout(() => {
         if (!el.isConnected) return;
         const r = el.getBoundingClientRect();
-        setHover({ def, rect: { left: r.left, top: r.top, right: r.right, bottom: r.bottom }, reason: availability.get(def.type)?.reason });
+        setHover({
+          def,
+          rect: { left: r.left, top: r.top, right: r.right, bottom: r.bottom },
+          reason: availability.get(def.type)?.reason,
+          viaKeyboard,
+        });
       }, HOVER_DELAY_MS);
     },
     [availability],
@@ -160,11 +201,27 @@ export function Palette() {
     clearTimers();
     setHover(null);
   }, []);
+  // Escape dismisses the info card without moving the pointer or focus (WCAG 1.4.13).
+  const cardShown = hover !== null;
+  useEffect(() => {
+    if (!cardShown) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      hideNow();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [cardShown, hideNow]);
 
   // ---------------------------------------------------------------- keyboard
   const focusTile = (index: number) => {
     const tiles = bodyRef.current?.querySelectorAll<HTMLButtonElement>('.ub-sh-pal-tile');
-    if (!tiles || !tiles.length) return;
+    if (!tiles || !tiles.length) {
+      bodyRef.current?.querySelector<HTMLElement>('[data-rove-key]')?.focus();
+      return;
+    }
     tiles[Math.max(0, Math.min(index, tiles.length - 1))].focus();
   };
 
@@ -188,58 +245,96 @@ export function Palette() {
     }
   };
 
-  /** Arrow keys move between tiles (2-column grids, across groups). */
+  /**
+   * Arrow keys inside the palette body: Left / Right step through the tiles (across groups),
+   * Up / Down move by grid row and visit the group headers between groups, Home / End jump to
+   * the first / last element; Left / Right on a header collapse / expand it. F1 on a tile opens
+   * its docs.
+   */
   const onBodyKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
-    if (!target.classList.contains('ub-sh-pal-tile') || e.altKey || e.metaKey || e.ctrlKey) return;
-    const grids = Array.from(bodyRef.current?.querySelectorAll<HTMLElement>('.ub-sh-pal-grid') ?? []);
-    const grid = target.parentElement as HTMLElement | null;
-    const gi = grid ? grids.indexOf(grid) : -1;
-    if (gi === -1) return;
-    const items = (g: HTMLElement) => Array.from(g.children) as HTMLElement[];
-    const cur = items(grid!);
-    const idx = cur.indexOf(target);
-    const col = idx % 2;
-    let next: HTMLElement | undefined;
+    const key = target.dataset.roveKey;
+    if (!key || e.altKey || e.metaKey || e.ctrlKey) return;
+    const body = bodyRef.current;
+    if (!body) return;
+    const all = Array.from(body.querySelectorAll<HTMLElement>('[data-rove-key]'));
+    const tiles = all.filter((el) => el.classList.contains('ub-sh-pal-tile'));
+    const isHead = key.startsWith('head:');
     const focusSearch = () => searchRef.current?.querySelector('input')?.focus();
-    switch (e.key) {
-      case 'ArrowRight':
-        next = cur[idx + 1] ?? (grids[gi + 1] ? items(grids[gi + 1])[0] : undefined);
-        break;
-      case 'ArrowLeft':
-        next = cur[idx - 1] ?? (grids[gi - 1] ? items(grids[gi - 1]).at(-1) : undefined);
-        break;
-      case 'ArrowDown': {
-        next = cur[idx + 2];
-        if (!next && grids[gi + 1]) {
-          const below = items(grids[gi + 1]);
-          next = below[col] ?? below[0];
-        }
-        break;
+    let next: HTMLElement | undefined;
+    if (e.key === 'F1' && !isHead) {
+      const def = getComponent(target.dataset.componentType ?? '');
+      if (def?.docsUrl) {
+        e.preventDefault();
+        window.open(def.docsUrl, '_blank', 'noopener,noreferrer');
       }
-      case 'ArrowUp': {
-        next = cur[idx - 2];
-        if (!next && grids[gi - 1]) {
-          const above = items(grids[gi - 1]);
-          const lastRowStart = above.length - (above.length % 2 === 0 ? 2 : 1);
-          next = above[lastRowStart + col] ?? above.at(-1);
-        }
-        if (!next) {
+      return;
+    }
+    if (e.key === 'Home') next = all[0];
+    else if (e.key === 'End') next = all[all.length - 1];
+    else if (isHead) {
+      const section = target.closest('section');
+      const grid = section?.querySelector<HTMLElement>('.ub-sh-pal-grid');
+      const i = all.indexOf(target);
+      switch (e.key) {
+        case 'ArrowDown':
+          next = all[i + 1];
+          break;
+        case 'ArrowUp':
+          next = all[i - 1];
+          if (!next) {
+            e.preventDefault();
+            focusSearch();
+            return;
+          }
+          break;
+        case 'ArrowRight':
+        case 'ArrowLeft': {
+          const expanded = target.getAttribute('aria-expanded') === 'true';
+          if ((e.key === 'ArrowRight') !== expanded) target.click();
+          else if (e.key === 'ArrowRight' && grid) next = grid.querySelector<HTMLElement>('[data-rove-key]') ?? undefined;
           e.preventDefault();
-          focusSearch();
+          e.stopPropagation();
+          next?.focus();
           return;
         }
-        break;
+        default:
+          return;
       }
-      default:
-        return;
+    } else {
+      const grid = target.parentElement as HTMLElement | null;
+      const cur = grid ? (Array.from(grid.children) as HTMLElement[]) : [];
+      const idx = cur.indexOf(target);
+      const t = tiles.indexOf(target);
+      switch (e.key) {
+        case 'ArrowRight':
+          next = tiles[t + 1];
+          break;
+        case 'ArrowLeft':
+          next = tiles[t - 1];
+          break;
+        case 'ArrowDown': {
+          // Next row of this grid (the short last row's tile), else the next group's header.
+          const lastRow = Math.floor((cur.length - 1) / 2);
+          if (cur[idx + 2]) next = cur[idx + 2];
+          else if (Math.floor(idx / 2) < lastRow) next = cur[cur.length - 1];
+          else next = all[all.indexOf(cur[cur.length - 1]) + 1];
+          break;
+        }
+        case 'ArrowUp':
+          // Previous row of this grid, else this group's header.
+          next = cur[idx - 2] ?? target.closest('section')?.querySelector<HTMLElement>('.ub-sh-pal-group-head') ?? undefined;
+          break;
+        default:
+          return;
+      }
     }
     e.preventDefault();
     e.stopPropagation();
     next?.focus();
   };
 
-  const tileProps = { terms, availability, onAdd: add, onHover: scheduleHover, onLeave: scheduleHide, onDragBegin: hideNow };
+  const tileProps = { terms, availability, rovingKey, onAdd: add, onHover: scheduleHover, onLeave: scheduleHide, onDragBegin: hideNow };
 
   return (
     <div className="ub-sh-pal">
@@ -266,20 +361,20 @@ export function Palette() {
         )}
       </div>
 
-      <div className="ub-sh-pal-body ub-scroll" ref={bodyRef} onKeyDown={onBodyKeyDown} onScroll={hideNow}>
+      <div className="ub-sh-pal-body ub-scroll" ref={bodyRef} onKeyDown={onBodyKeyDown} onFocus={onBodyFocus} onScroll={hideNow}>
         {terms.length > 0 && (
           <div className="ub-sh-pal-resultcount" aria-live="polite">
             {matchCount === 0 ? 'No matches' : `${matchCount} ${matchCount === 1 ? 'component' : 'components'}`}
           </div>
         )}
 
-        {!terms.length && recentDefs.length > 0 && (
+        {showRecent && (
           <PaletteGroup
             id="__recent"
             title="Recently used"
             icon={<Clock size={12} />}
             defs={recentDefs}
-            collapsed={collapsed.includes('__recent')}
+            collapsed={recentCollapsed}
             onToggle={toggleCategory}
             tileProps={tileProps}
           />
@@ -319,8 +414,10 @@ export function Palette() {
 interface TileSharedProps {
   terms: string[];
   availability: Map<string, Availability>;
+  /** The palette element that is the Tab stop (see roveKeys). */
+  rovingKey: string | null;
   onAdd: (def: ComponentDef) => void;
-  onHover: (def: ComponentDef, el: HTMLElement) => void;
+  onHover: (def: ComponentDef, el: HTMLElement, viaKeyboard?: boolean) => void;
   onLeave: () => void;
   onDragBegin: () => void;
 }
@@ -337,13 +434,16 @@ interface PaletteGroupProps {
 
 function PaletteGroup({ id, title, icon, defs, collapsed, onToggle, tileProps }: PaletteGroupProps) {
   const bodyId = `ub-sh-pal-group-${id.replace(/[^a-z0-9]+/gi, '-')}`;
+  const key = headKey(id);
   return (
     <section className="ub-sh-pal-group" aria-label={title}>
       <button
         type="button"
         className="ub-sh-pal-group-head"
         aria-expanded={!collapsed}
-        aria-controls={bodyId}
+        aria-controls={collapsed ? undefined : bodyId}
+        tabIndex={tileProps.rovingKey === key ? 0 : -1}
+        data-rove-key={key}
         onClick={() => onToggle(id)}
       >
         {collapsed ? <ChevronRight size={12} aria-hidden /> : <ChevronDown size={12} aria-hidden />}
@@ -354,7 +454,7 @@ function PaletteGroup({ id, title, icon, defs, collapsed, onToggle, tileProps }:
       {!collapsed && (
         <div className="ub-sh-pal-grid" id={bodyId}>
           {defs.map((def) => (
-            <PaletteTile key={def.type} def={def} {...tileProps} />
+            <PaletteTile key={def.type} def={def} group={id} {...tileProps} />
           ))}
         </div>
       )}
@@ -362,18 +462,44 @@ function PaletteGroup({ id, title, icon, defs, collapsed, onToggle, tileProps }:
   );
 }
 
+/** Whether the last user input was a key press (focus moved by keyboard) rather than the pointer. */
+const inputModality = { keyboard: false };
+
+function useInputModality(): void {
+  useEffect(() => {
+    const onKey = () => {
+      inputModality.keyboard = true;
+    };
+    const onPointer = () => {
+      inputModality.keyboard = false;
+    };
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('pointerdown', onPointer, true);
+    window.addEventListener('mousedown', onPointer, true);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('pointerdown', onPointer, true);
+      window.removeEventListener('mousedown', onPointer, true);
+    };
+  }, []);
+}
+
 const PaletteTile = memo(function PaletteTile({
   def,
+  group,
   terms,
   availability,
+  rovingKey,
   onAdd,
   onHover,
   onLeave,
   onDragBegin,
-}: TileSharedProps & { def: ComponentDef }) {
+}: TileSharedProps & { def: ComponentDef; group: string }) {
   const avail = availability.get(def.type);
   const disabled = avail ? !avail.ok : false;
   const Icon = def.icon;
+  const key = tileKey(group, def.type);
+  const descId = `ub-sh-pal-desc-${domId(group)}-${domId(def.type)}`;
   const onDragStart = (e: DragEvent<HTMLButtonElement>) => {
     if (disabled) {
       e.preventDefault();
@@ -395,7 +521,10 @@ const PaletteTile = memo(function PaletteTile({
       className={cx('ub-sh-pal-tile', disabled && 'ub-sh-pal-tile--disabled')}
       aria-disabled={disabled || undefined}
       aria-label={disabled ? `${def.label} (unavailable: ${avail?.reason ?? ''})` : `Add ${def.label}`}
+      aria-describedby={descId}
       title={disabled ? avail?.reason : undefined}
+      tabIndex={rovingKey === key ? 0 : -1}
+      data-rove-key={key}
       data-component-type={def.type}
       draggable={!disabled}
       onDragStart={onDragStart}
@@ -403,8 +532,15 @@ const PaletteTile = memo(function PaletteTile({
       onClick={() => onAdd(def)}
       onMouseEnter={(e) => onHover(def, e.currentTarget)}
       onMouseLeave={onLeave}
+      onFocus={(e) => {
+        if (inputModality.keyboard) onHover(def, e.currentTarget, true);
+      }}
       onBlur={onLeave}
     >
+      <span id={descId} className="ub-sr-only">
+        {def.description}
+        {def.docsUrl ? ' Press F1 for the HubSpot docs.' : ''}
+      </span>
       <Icon size={16} strokeWidth={1.75} className="ub-sh-pal-tile-icon" aria-hidden />
       <span className="ub-sh-pal-tile-label">
         {highlightSegments(def.label, terms).map((seg, i) =>
@@ -422,7 +558,7 @@ const PaletteTile = memo(function PaletteTile({
 });
 
 function HoverCard({ state, onEnter, onLeave }: { state: HoverState; onEnter: () => void; onLeave: () => void }) {
-  const { def, rect, reason } = state;
+  const { def, rect, reason, viaKeyboard } = state;
   const Icon = def.icon;
   const width = 260;
   const left = Math.min(rect.right + 10, window.innerWidth - width - 8);
@@ -448,13 +584,19 @@ function HoverCard({ state, onEnter, onLeave }: { state: HoverState; onEnter: ()
       {reason && <p className="ub-sh-pal-card-reason">{reason}</p>}
       <div className="ub-sh-pal-card-foot">
         <span className="ub-sh-pal-card-from">{def.importFrom}</span>
-        {def.docsUrl && (
-          <a className="ub-sh-pal-card-docs" href={def.docsUrl} target="_blank" rel="noreferrer noopener">
-            Docs <ExternalLink size={11} aria-hidden />
-          </a>
-        )}
+        {def.docsUrl &&
+          (viaKeyboard ? (
+            <span className="ub-sh-pal-card-key">
+              <kbd className="ub-sh-kbd">F1</kbd> docs · <kbd className="ub-sh-kbd">Esc</kbd> close
+            </span>
+          ) : (
+            <a className="ub-sh-pal-card-docs" href={def.docsUrl} target="_blank" rel="noreferrer noopener">
+              Docs <ExternalLink size={11} aria-hidden />
+            </a>
+          ))}
       </div>
     </div>,
-    document.body,
+    // Inside the sidebar landmark (it is position: fixed, so nothing clips it).
+    document.querySelector('.ub-sh-left') ?? document.body,
   );
 }

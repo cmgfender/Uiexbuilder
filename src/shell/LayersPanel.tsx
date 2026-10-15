@@ -20,6 +20,8 @@ import {
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
+  ArrowDown,
+  ArrowUp,
   ClipboardPaste,
   Copy,
   CopyPlus,
@@ -50,6 +52,7 @@ import {
   applyDropPayload,
   cutNodeSafe,
   duplicateNodeSafe,
+  moveSelectedAmongSiblings,
   pasteAt,
   removeNodeSafe,
   stateVarsUsedBy,
@@ -70,7 +73,6 @@ import {
 import { recordRecentComponent } from './paletteModel';
 import { showLeftTab } from './shellStore';
 import { isEditableTarget, shortcutLabel } from './shortcuts';
-import { useMenuKeyboard } from './useAnchoredMenu';
 
 const INDENT = 14;
 const AUTO_EXPAND_MS = 600;
@@ -99,15 +101,24 @@ export function LayersPanel() {
 
   const rows = useMemo(() => flattenLayers(ext, overrides), [ext, overrides]);
 
-  // Context menu: arrow keys inside it; focus returns to the selected row when it closes.
-  useMenuKeyboard(!!menu, () => {
+  /** The row of the selected layer (else the tree's first row): where keyboard focus belongs. */
+  const selectedRowElement = useCallback((): HTMLElement | null => {
+    const tree = treeRef.current;
+    if (!tree) return null;
+    const id = useEditor.getState().selectedNodeId;
+    return (
+      (id ? tree.querySelector<HTMLElement>(`[data-layer-key="${id}"]`) : null) ??
+      tree.querySelector<HTMLElement>('[role="treeitem"][tabindex="0"]')
+    );
+  }, []);
+  /** Re-focuses the selected row after the tree re-rendered (e.g. the focused row was deleted or moved). */
+  const refocusSelectedRow = useCallback(() => {
     requestAnimationFrame(() => {
       const active = document.activeElement;
-      if (active && active !== document.body) return;
-      const id = useEditor.getState().selectedNodeId;
-      if (id) treeRef.current?.querySelector<HTMLElement>(`[data-layer-key="${id}"]`)?.focus();
+      if (active && active !== document.body && active.isConnected && !treeRef.current?.contains(active)) return;
+      selectedRowElement()?.focus({ preventScroll: true });
     });
-  });
+  }, [selectedRowElement]);
   const rowIndex = useMemo(() => new Map(rows.map((r, i) => [r.key, i])), [rows]);
 
   // Reveal the selection when it changes: expand its ancestors once, then scroll it into view.
@@ -312,7 +323,15 @@ export function LayersPanel() {
 
   // ---------------------------------------------------------------- keyboard
   const onTreeKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (isEditableTarget(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (isEditableTarget(e.target) || e.metaKey || e.ctrlKey) return;
+    if (e.altKey) {
+      // Alt+Up / Alt+Down reorder the selected layer among its siblings (as on the canvas).
+      if (e.shiftKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (moveSelectedAmongSiblings(e.key === 'ArrowUp' ? -1 : 1, toast)) refocusSelectedRow();
+      return;
+    }
     const state = useEditor.getState();
     const curIndex = selectedId ? rowIndex.get(selectedId) ?? -1 : -1;
     const cur = curIndex >= 0 ? rows[curIndex] : null;
@@ -352,7 +371,8 @@ export function LayersPanel() {
         break;
       case 'Delete':
       case 'Backspace':
-        if (cur) removeNodeSafe(cur.nodeId, toast);
+        // Focus follows the new selection (the focused row is gone).
+        if (cur && removeNodeSafe(cur.nodeId, toast)) refocusSelectedRow();
         break;
       case 'ContextMenu':
         if (cur) {
@@ -377,6 +397,11 @@ export function LayersPanel() {
     const locked = !!node.locked;
     const state = useEditor.getState();
     const parentIsRoot = ext.nodes[ext.rootId].children.includes(id);
+    const siblings = siblingPosition(ext, id);
+    const move = (delta: 1 | -1) => {
+      state.select(id);
+      if (moveSelectedAmongSiblings(delta, toast)) refocusSelectedRow();
+    };
     return [
       { label: 'Rename', icon: <Pencil size={14} />, shortcut: 'F2', onSelect: () => setRenamingId(id) },
       { label: 'Duplicate', icon: <CopyPlus size={14} />, shortcut: shortcutLabel('duplicate'), onSelect: () => duplicateNodeSafe(id, toast) },
@@ -389,6 +414,21 @@ export function LayersPanel() {
       { label: 'Wrap in Box', icon: <SquareDashed size={14} />, disabled: locked, onSelect: () => wrapNodeSafe(id, 'Box', toast) },
       { label: 'Wrap in Tile', icon: <SquareStack size={14} />, disabled: locked, onSelect: () => wrapNodeSafe(id, 'Tile', toast) },
       { label: 'Select parent', icon: <CornerLeftUp size={14} />, disabled: parentIsRoot, onSelect: () => selectParentOf(ext, id) },
+      { separator: true, label: '' },
+      {
+        label: 'Move up',
+        icon: <ArrowUp size={14} />,
+        shortcut: shortcutLabel('moveUp'),
+        disabled: locked || !siblings || siblings.index === 0,
+        onSelect: () => move(-1),
+      },
+      {
+        label: 'Move down',
+        icon: <ArrowDown size={14} />,
+        shortcut: shortcutLabel('moveDown'),
+        disabled: locked || !siblings || siblings.index >= siblings.count - 1,
+        onSelect: () => move(1),
+      },
       { separator: true, label: '' },
       { label: 'Save as block…', icon: <BookmarkPlus size={14} />, onSelect: () => setBlockFor(id) },
       {
@@ -405,6 +445,8 @@ export function LayersPanel() {
       { label: 'Delete', icon: <Trash2 size={14} />, shortcut: shortcutLabel('delete'), danger: true, disabled: locked, onSelect: () => removeNodeSafe(id, toast) },
     ];
   };
+
+  const closeMenu = useCallback(() => setMenu(null), []);
 
   const onRowContextMenu = useCallback((row: LayerRow, e: MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -448,6 +490,7 @@ export function LayersPanel() {
         className="ub-sh-lyr-tree ub-scroll"
         role="tree"
         aria-label="Layers"
+        data-shortcuts-scope=""
         ref={treeRef}
         onKeyDown={onTreeKeyDown}
         onDragLeave={onTreeDragLeave}
@@ -503,7 +546,9 @@ export function LayersPanel() {
           )}
         </div>
       </div>
-      {menu && <Menu x={menu.x} y={menu.y} items={menuItems(menu.id)} onClose={() => setMenu(null)} />}
+      {menu && (
+        <Menu x={menu.x} y={menu.y} items={menuItems(menu.id)} onClose={closeMenu} returnFocus={selectedRowElement} aria-label="Layer actions" />
+      )}
       <SaveBlockDialog
         ext={ext}
         nodeId={blockFor}
@@ -517,6 +562,18 @@ export function LayersPanel() {
 function getActiveNode(id: NodeId): UINode | undefined {
   const s = useEditor.getState();
   return s.project.extensions.find((e) => e.id === s.activeExtensionId)?.nodes[id];
+}
+
+/** Index of a node among its siblings (children or slot content) and how many there are. */
+function siblingPosition(ext: Extension, id: NodeId): { index: number; count: number } | null {
+  for (const n of Object.values(ext.nodes)) {
+    const lists = [n.children, ...Object.values(n.slots ?? {})];
+    for (const list of lists) {
+      const index = list.indexOf(id);
+      if (index !== -1) return { index, count: list.length };
+    }
+  }
+  return null;
 }
 
 function selectParentOf(ext: Extension, id: NodeId) {

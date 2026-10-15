@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } fr
 import { ChevronDown, ChevronUp, CircleAlert, Code2, Terminal, TriangleAlert } from 'lucide-react';
 import { useEditor } from '../model/store';
 import { useRuntime } from '../runtime';
-import { IconButton, cx } from '../ui';
+import { IconButton, cx, tabKeyTarget } from '../ui';
 import { CodePanel } from './CodePanel';
 import { ConsolePanel } from './ConsolePanel';
 import { ProblemsPanel } from './ProblemsPanel';
@@ -41,6 +41,7 @@ export function BottomPanel() {
   const open = tab !== null;
   const newLogs = useNewLogCount(tab === 'console');
   const sectionRef = useRef<HTMLElement>(null);
+  const tabsRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
 
   const maxHeight = () => {
@@ -118,6 +119,21 @@ export function BottomPanel() {
     },
   ];
 
+  // Tabs: one Tab stop (the open tab, else the last one used); Left / Right / Home / End switch.
+  const stopTab = tab ?? lastTab;
+  const onTabsKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const buttons = Array.from(tabsRef.current?.querySelectorAll<HTMLElement>('[role="tab"]') ?? []);
+    const current = buttons.indexOf(e.target as HTMLElement);
+    if (current === -1) return;
+    const next = tabKeyTarget(e.key, current, tabs.length);
+    if (next === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    buttons[next]?.focus();
+    openBottomTab(tabs[next].value);
+  };
+
   return (
     <section
       ref={sectionRef}
@@ -141,7 +157,7 @@ export function BottomPanel() {
         />
       )}
       <div className="ub-sh-bottom-head">
-        <div className="ub-sh-bottom-tabs" role="tablist" aria-label="Bottom panel">
+        <div className="ub-sh-bottom-tabs" role="tablist" aria-label="Bottom panel" ref={tabsRef} onKeyDown={onTabsKey}>
           {tabs.map((t) => {
             const selected = tab === t.value;
             return (
@@ -149,7 +165,10 @@ export function BottomPanel() {
                 key={t.value}
                 type="button"
                 role="tab"
+                id={`ub-sh-bottom-tab-${t.value}`}
+                aria-controls={open ? 'ub-sh-bottom-panel' : undefined}
                 aria-selected={selected}
+                tabIndex={t.value === stopTab ? 0 : -1}
                 className={cx('ub-sh-bottom-tab', selected && 'ub-sh-bottom-tab--active')}
                 onClick={() => openBottomTab(t.value)}
               >
@@ -170,7 +189,7 @@ export function BottomPanel() {
         </IconButton>
       </div>
       {open && (
-        <div className="ub-sh-bottom-body" role="tabpanel">
+        <div className="ub-sh-bottom-body" role="tabpanel" id="ub-sh-bottom-panel" aria-labelledby={`ub-sh-bottom-tab-${tab}`}>
           {tab === 'code' && <CodePanel />}
           {tab === 'problems' && <ProblemsPanel />}
           {tab === 'console' && <ConsolePanel />}

@@ -4,16 +4,25 @@ import { CircleCheck, Plus, RotateCcw, Server, SquareFunction, Trash2, TriangleA
 import { DEFAULT_FUNCTION_CODE } from '../model/factory';
 import { useEditor } from '../model/store';
 import type { AppFunction, HttpMethod } from '../model/types';
+import { appFunctionsUnsupported } from '../model/validate';
 import { Badge, Button, Dialog, EmptyState, Field, Switch, TextArea, TextInput, cx, useToast } from '../ui';
 import { Callout, ChipInput, CommitInput, Snippet, ToggleChips } from './common';
 import { findFunctionUsages, revealNode } from './actions';
 import type { DialogComponentProps } from './dialogTypes';
-import { checkFunctionSyntax, validateEndpointPath, validateFileBase, validateSecretKey, validateUid } from './utils';
+import {
+  checkFunctionSyntax,
+  defaultEndpointPath,
+  functionFileNameError,
+  projectUidError,
+  validateEndpointPath,
+  validateSecretKey,
+} from './utils';
 
 const METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 
 export function FunctionsDialog({ open, onClose, arg }: DialogComponentProps) {
   const functions = useEditor((s) => s.project.functions);
+  const unsupported = useEditor((s) => appFunctionsUnsupported(s.project));
   const [selectedId, setSelectedId] = useState<string | null>(arg ?? null);
   useEffect(() => {
     if (open) setSelectedId(arg ?? useEditor.getState().project.functions[0]?.id ?? null);
@@ -52,13 +61,12 @@ export function FunctionsDialog({ open, onClose, arg }: DialogComponentProps) {
           {functions.length === 0 ? (
             <div className="ub-pn-muted ub-pn-pad">No functions yet.</div>
           ) : (
-            <div role="listbox" aria-label="Functions" className="ub-pn-nav">
+            <nav aria-label="Functions" className="ub-pn-nav">
               {functions.map((f) => (
                 <button
                   key={f.id}
                   type="button"
-                  role="option"
-                  aria-selected={selected?.id === f.id}
+                  aria-current={selected?.id === f.id ? 'true' : undefined}
                   className={cx('ub-pn-nav__item', selected?.id === f.id && 'ub-pn-nav__item--active')}
                   onClick={() => setSelectedId(f.id)}
                 >
@@ -70,10 +78,16 @@ export function FunctionsDialog({ open, onClose, arg }: DialogComponentProps) {
                   {f.endpoint && <Badge>endpoint</Badge>}
                 </button>
               ))}
-            </div>
+            </nav>
           )}
         </div>
         <div className="ub-pn-two-pane__main">
+          {unsupported && functions.length > 0 && (
+            <Callout tone="danger" icon={<TriangleAlert size={14} aria-hidden />} role="alert">
+              {unsupported}. These functions can’t be uploaded with this app type — switch to Private distribution with Static token
+              auth in App settings, or delete them.
+            </Callout>
+          )}
           {selected ? (
             <FunctionEditor
               key={selected.id}
@@ -113,7 +127,6 @@ function FunctionEditor({
   const project = useEditor((s) => s.project);
   const toast = useToast();
   const usages = useMemo(() => findFunctionUsages(project, fn.id), [project, fn.id]);
-  const others = project.functions.filter((f) => f.id !== fn.id);
   const [confirm, setConfirm] = useState<'delete' | 'reset' | null>(null);
   const syntaxError = useMemo(() => checkFunctionSyntax(fn.code), [fn.code]);
   const hasMain = /exports\.main\s*=|module\.exports\s*=|exports\[['"]main['"]\]\s*=/.test(fn.code);
@@ -134,7 +147,7 @@ const result = await hubspot.serverless('${fn.uid}', {
             code
             value={fn.uid}
             aria-label="Function UID"
-            validate={(v) => validateUid(v, others.map((f) => f.uid))}
+            validate={(v) => projectUidError(useEditor.getState().project, v, { kind: 'function', id: fn.id })}
             onCommit={(uid) => update({ uid })}
           />
         </Field>
@@ -144,7 +157,7 @@ const result = await hubspot.serverless('${fn.uid}', {
             value={fn.fileName}
             suffix=".js"
             aria-label="Function file name"
-            validate={(v) => (v.toLowerCase() === 'package' ? 'This name is reserved' : validateFileBase(v, others.map((f) => f.fileName)))}
+            validate={(v) => functionFileNameError(useEditor.getState().project, v, fn.id)}
             onCommit={(fileName) => update({ fileName })}
           />
         </Field>
@@ -223,7 +236,7 @@ const result = await hubspot.serverless('${fn.uid}', {
       <div className="ub-pn-block">
         <Switch
           checked={!!fn.endpoint}
-          onChange={(on) => update({ endpoint: on ? { path: fn.uid.replace(/[^A-Za-z0-9_-]+/g, '-'), methods: ['GET'] } : undefined })}
+          onChange={(on) => update({ endpoint: on ? { path: defaultEndpointPath(fn.uid), methods: ['GET'] } : undefined })}
           label="Expose as a public endpoint"
         />
         {fn.endpoint && (

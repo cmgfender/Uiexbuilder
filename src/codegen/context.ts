@@ -117,7 +117,7 @@ export class NameAllocator {
 }
 
 /** Module-level helpers generated code can use (declared once, only when used). */
-export type HelperName = 'toText' | 'asArray';
+export type HelperName = 'toText' | 'asArray' | 'readJson';
 
 /** How a data source is exposed in generated code. */
 export interface DataSourcePlan {
@@ -186,6 +186,27 @@ export function stateSetter(ctx: GenContext, stateName: string): string {
   return name;
 }
 
+/**
+ * `useState` type argument of a state variable. Primitive states keep their type (`| null` when
+ * the initial value is null); arrays are `any[]`; objects and `any` are `any` so they can feed
+ * typed props such as a DateInput value (a `Record<string, any>` is not assignable to
+ * `{ year; month; date }`).
+ */
+export function stateTypeArg(s: StateVar): string {
+  const initial = s.initial;
+  switch (s.type) {
+    case 'string':
+    case 'number':
+    case 'boolean':
+      if (initial === null) return `${s.type} | null`;
+      return typeof initial === s.type ? s.type : 'any';
+    case 'array':
+      return Array.isArray(initial) ? 'any[]' : 'any';
+    default:
+      return 'any';
+  }
+}
+
 export function capitalize(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
@@ -206,6 +227,8 @@ export const BASE_RESERVED = [
   'actions',
   'toText',
   'asArray',
+  'readJson',
+  'useRef',
   'ExtensionProps',
   'undefined',
   'NaN',
@@ -310,5 +333,8 @@ export function useHelper(ctx: GenContext, helper: HelperName): string {
 export function noteUserCode(ctx: GenContext, code: string): Set<string> {
   const ids = scanCode(code).identifiers;
   ids.forEach((id) => ctx.referenced.add(id));
+  // User code may call the interpolation helper `toText` (available in the preview too) — emit it,
+  // under its own name, unless the document declares a `toText` of its own.
+  if (ids.has('toText') && !ctx.shadowed.has('toText')) useHelper(ctx, 'toText');
   return ids;
 }

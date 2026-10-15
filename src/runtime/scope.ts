@@ -12,10 +12,13 @@
  */
 import { defaultMockData } from '../model/factory';
 import { extensionLocation } from '../model/rules';
-import type { Extension, JsonValue, Project, StateVar } from '../model/types';
+import { isPropertyName, tokenize } from '../model/jsTokens';
+import type { DataSource, Extension, JsonValue, Project, StateVar } from '../model/types';
 import { usableComputed } from '../power/computed';
-import { compileHelpers } from '../power/helpers';
+import { compileHelpers, helperNames } from '../power/helpers';
+import { codeExecutionAllowed } from '../model/trust';
 import { evaluate, type Scope } from './expr';
+import { guardLoops } from './loopGuard';
 import { isDeferredSource, mockDataForSource } from './mockData';
 import type { DataSourceState } from './types';
 
@@ -24,16 +27,21 @@ export function setterName(stateName: string): string {
   return `set${stateName.charAt(0).toUpperCase()}${stateName.slice(1)}`;
 }
 
-/** The HubSpot `context` object simulated for an extension (mock context + location + app info). */
+/**
+ * The HubSpot `context` object simulated for an extension (mock context + location + app info).
+ * Only app cards get `crm` (the record): HubSpot's SettingsContext / AppHomeContext have none, so
+ * `context.crm.objectId` fails in the preview of a settings or home page exactly as it would there.
+ */
 export function buildContext(project: Project, ext: Extension): Record<string, unknown> {
   const mock = ext.mock?.context ?? defaultMockData().context;
   const user = mock.user ?? defaultMockData().context.user;
+  const { crm, ...rest } = mock;
   return {
-    ...mock,
+    ...rest,
     // HubSpot's UserContext also carries these lists; the mock values take precedence.
     user: { emails: user.email ? [user.email] : [], teams: [], roles: [], permissions: [], ...user },
     portal: { ...mock.portal },
-    crm: { ...mock.crm },
+    ...(ext.kind === 'card' ? { crm: { ...crm } } : {}),
     location: extensionLocation(ext),
     extension: { appId: 1, appName: project.app.name, cardTitle: ext.name },
   };
@@ -81,11 +89,92 @@ export function reconcileStateValues(
 export interface DataSourceStatus {
   loading: boolean;
   error: string | null;
-  /** Has been run at least once (fetch/function sources that do not run on mount). */
+  /**
+   * Has finished loading at least once. While a source is loading for the first time it exposes
+   * the value HubSpot gives on the first render (see initialDataValue), not its mock data.
+   */
   loaded: boolean;
 }
 
-/** Resolves every data source's exposed value + status. Keyed by data source id. */
+/** Message of a data source simulated to fail (Mock data › Simulate › Error). */
+export const SIMULATED_ERROR = 'Simulated error (Mock data › Simulate)';
+
+/**
+ * The value a data source exposes before its first load completes, exactly as on HubSpot:
+ * useCrmProperties returns `{}`, useAssociations / useCrmSearch `[]`, and fetch / function
+ * sources start as `null`. Expressions such as `deals[0].properties.x` fail on this value.
+ */
+export function initialDataValue(ds: DataSource): unknown {
+  switch (ds.kind) {
+    case 'crmProperties':
+      return {};
+    case 'associations':
+    case 'crmSearch':
+      return [];
+    default:
+      return null;
+  }
+}
+
+/** The loaded value of a source simulated as "empty": no records, null properties / response. */
+function emptyDataValue(ds: DataSource): unknown {
+  if (ds.kind === 'crmProperties') return Object.fromEntries((ds.properties ?? []).filter(Boolean).map((p) => [p, null]));
+  return initialDataValue(ds);
+}
+
+/** Sources that load when the extension opens: CRM hooks and fetch / function sources set to run on open. */
+export function loadsOnOpen(ds: DataSource): boolean {
+  return !isDeferredSource(ds);
+}
+
+/**
+ * Status of every source that loads when the extension opens, at the moment it opens (the
+ * preview starts in this state, then RuntimeProvider completes each load after the simulated
+ * latency).
+ */
+export function initialLoadStatus(ext: Extension): Record<string, DataSourceStatus> {
+  const out: Record<string, DataSourceStatus> = {};
+  for (const ds of ext.dataSources ?? []) {
+    if (loadsOnOpen(ds)) out[ds.id] = { loading: true, error: null, loaded: false };
+  }
+  return out;
+}
+
+/**
+ * Other data sources whose values a fetch / function source's request reads (URL and header
+ * templates, body, parameters) — a "load on open" request waits for them, like generated code.
+ */
+export function requestDependencies(ext: Extension, ds: DataSource): DataSource[] {
+  if (ds.kind !== 'fetch' && ds.kind !== 'function') return [];
+  const codes: string[] = [];
+  const template = (v: unknown) => {
+    if (typeof v === 'string') for (const m of v.matchAll(/\{\{([\s\S]*?)\}\}/g)) codes.push(m[1]);
+  };
+  if (ds.kind === 'fetch') {
+    template(ds.url);
+    (ds.headers ?? []).forEach((h) => template(h?.value));
+    if ((ds.method ?? 'GET').toUpperCase() !== 'GET' && typeof ds.body === 'string') codes.push(ds.body);
+  } else if (typeof ds.parameters === 'string') {
+    codes.push(ds.parameters);
+  }
+  const ids = new Set<string>();
+  for (const code of codes) {
+    const tokens = tokenize(code);
+    tokens.forEach((t, i) => {
+      if (t.kind === 'ident' && !isPropertyName(tokens, i)) ids.add(t.text);
+    });
+  }
+  return (ext.dataSources ?? []).filter(
+    (other) => other.id !== ds.id && loadsOnOpen(other) && [other.name, `${other.name}Loading`, `${other.name}Error`].some((n) => ids.has(n)),
+  );
+}
+
+/**
+ * Resolves every data source's exposed value + status. Keyed by data source id.
+ *  - first load in progress: the initial value (`{}` / `[]` / `null`), loading
+ *  - fetch / function sources that do not load on open: `null` until run
+ *  - otherwise the mock data — or what `mock.simulate` asks for (loading / empty / error)
+ */
 export function resolveDataSources(
   ext: Extension,
   status: Record<string, DataSourceStatus | undefined>,
@@ -93,16 +182,32 @@ export function resolveDataSources(
   const out: Record<string, DataSourceState> = {};
   for (const ds of ext.dataSources ?? []) {
     const st = status[ds.id];
+    const simulate = ext.mock?.simulate?.[ds.id] ?? 'ok';
+    const loading = st?.loading ?? false;
     let data: unknown = null;
     let error = st?.error ?? null;
+    if (simulate === 'loading') {
+      out[ds.id] = { data: initialDataValue(ds), loading: true, error: null };
+      continue;
+    }
+    if (loading && !st?.loaded) {
+      out[ds.id] = { data: initialDataValue(ds), loading: true, error: null };
+      continue;
+    }
     if (!isDeferredSource(ds) || st?.loaded) {
-      try {
-        data = mockDataForSource(ext, ds);
-      } catch (e) {
-        error = e instanceof Error ? e.message : String(e);
+      if (simulate === 'empty') data = emptyDataValue(ds);
+      else if (simulate === 'error') {
+        data = initialDataValue(ds);
+        error = loading ? null : SIMULATED_ERROR;
+      } else {
+        try {
+          data = mockDataForSource(ext, ds);
+        } catch (e) {
+          error = e instanceof Error ? e.message : String(e);
+        }
       }
     }
-    out[ds.id] = { data, loading: st?.loading ?? false, error };
+    out[ds.id] = { data, loading, error };
   }
   return out;
 }
@@ -163,7 +268,8 @@ export function applyComputedValues(
     if (typeof c.expr === 'string' && c.expr.trim() !== '') {
       const r = evaluate(c.expr, evalScope);
       if (r.ok) value = r.value;
-      else errors[c.id] = r.error;
+      // Paused (untrusted) code is not an error of the computed value.
+      else if (!r.blocked) errors[c.id] = r.error;
     }
     computing = null;
     evalScope[c.name] = value;
@@ -178,7 +284,11 @@ export function applyComputedValues(
  */
 export function buildScopeWithDiagnostics({ project, extension, stateValues, setters, dataSources }: BaseScopeInput): ScopeWithDiagnostics {
   const scope: Scope = {};
-  const helpers = compileHelpers(extension.helpers);
+  // Helper code runs once per source text — only when the project's code is trusted, and with
+  // its loops guarded so a runaway loop throws instead of freezing the tab.
+  const helpers = codeExecutionAllowed()
+    ? compileHelpers(typeof extension.helpers === 'string' ? guardLoops(extension.helpers) : extension.helpers)
+    : { names: helperNames(extension.helpers), values: {} as Record<string, unknown>, error: null };
   for (const name of helpers.names) {
     if (name in helpers.values) scope[name] = helpers.values[name];
   }

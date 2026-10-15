@@ -5,7 +5,7 @@
  */
 import { create } from 'zustand';
 import { produce, type Draft } from 'immer';
-import { newId, toIdentifier, uniqueName } from './ids';
+import { isValidIdentifier, newId, toIdentifier } from './ids';
 import { createAppFunction, createExtension, createProject, type CreateExtensionOptions } from './factory';
 import {
   detach,
@@ -15,12 +15,17 @@ import {
   instantiateTemplate,
   moveNode as moveNodeOp,
   removeSubtree,
+  templateTypes,
   toTemplate,
+  uniquifyOverlayIds,
   type InsertTarget,
+  type OverlayIdPropOf,
 } from './tree';
-import { canAccept } from './rules';
+import { canAccept, isAvailableIn } from './rules';
 import { getComponent } from '../registry';
 import { uniqueComputedName } from '../power/computed';
+import { validateDeclaredName } from '../panels/names';
+import { setActiveCodeProject } from './trust';
 import type {
   ActionStep,
   AppConfig,
@@ -166,7 +171,38 @@ export function resolveCreateTemplate(type: string): NodeTemplate {
   return { type };
 }
 
+/** Overlay id prop of a component type (registry `overlay.idProp`). */
+const overlayIdPropOf: OverlayIdPropOf = (type) => getComponent(type)?.overlay?.idProp;
+
+/**
+ * Labels of components in `tpl` (root, descendants and slot content) that are not available in
+ * the extension's location — e.g. a CRM property list inside a pasted Tile on a settings page.
+ */
+export function unavailableComponents(ext: Extension, tpl: NodeTemplate): string[] {
+  const out: string[] = [];
+  for (const type of templateTypes(tpl)) {
+    const def = getComponent(type);
+    if (def && !isAvailableIn(def, ext) && !out.includes(def.label)) out.push(def.label);
+  }
+  return out;
+}
+
+/**
+ * The extension an undo / redo step changes, so the editor can show it: the active extension when
+ * it changed, else the first extension whose content differs (immer keeps untouched extensions
+ * referentially equal). Null when only project-level data changed.
+ */
+function changedExtensionId(from: Project, to: Project, activeId: string): string | null {
+  const before = new Map(from.extensions.map((e) => [e.id, e]));
+  const changed: string[] = [];
+  for (const e of to.extensions) if (before.get(e.id) !== e) changed.push(e.id);
+  if (changed.includes(activeId)) return activeId;
+  if (changed.length) return changed[0];
+  return null;
+}
+
 const initialProject = createProject();
+setActiveCodeProject(initialProject.id);
 
 export const useEditor = create<EditorState>()((set, get) => {
   const mutateActive = (recipe: (ext: Draft<Extension>, project: Draft<Project>) => void, opts?: CommitOptions) => {
@@ -190,7 +226,9 @@ export const useEditor = create<EditorState>()((set, get) => {
     lastCommitKey: null,
     lastCommitAt: 0,
 
-    loadProject: (project) =>
+    loadProject: (project) => {
+      // The code policy follows the shown project (imported, untrusted projects run no code).
+      setActiveCodeProject(project.id);
       set({
         project,
         activeExtensionId: project.extensions[0]?.id ?? '',
@@ -200,16 +238,20 @@ export const useEditor = create<EditorState>()((set, get) => {
         future: [],
         lastCommitKey: null,
         mode: 'design',
-      }),
+      });
+    },
     newProject: (project) => get().loadProject(project ?? createProject()),
 
     commit: (recipe, opts = {}) => {
       const { project, past, lastCommitKey, lastCommitAt } = get();
-      const next = produce(project, (draft) => {
+      const changed = produce(project, (draft) => {
         recipe(draft);
+      });
+      // A recipe that changes nothing is a no-op: no history entry, no timestamp, no autosave.
+      if (changed === project) return;
+      const next = produce(changed, (draft) => {
         draft.updatedAt = new Date().toISOString();
       });
-      if (next === project) return;
       if (opts.skipHistory) {
         set({ project: next });
         return;
@@ -229,28 +271,24 @@ export const useEditor = create<EditorState>()((set, get) => {
       const { past, project, future, activeExtensionId } = get();
       if (!past.length) return;
       const prev = past[past.length - 1];
-      const stillActive = prev.extensions.some((e) => e.id === activeExtensionId);
       set({
         project: prev,
         past: past.slice(0, -1),
         future: [project, ...future].slice(0, HISTORY_LIMIT),
         lastCommitKey: null,
-        activeExtensionId: stillActive ? activeExtensionId : prev.extensions[0]?.id ?? '',
-        selectedNodeId: validSelection(prev, get().selectedNodeId),
+        ...historyFocus(project, prev, activeExtensionId, get().selectedNodeId),
       });
     },
     redo: () => {
       const { past, project, future, activeExtensionId } = get();
       if (!future.length) return;
       const next = future[0];
-      const stillActive = next.extensions.some((e) => e.id === activeExtensionId);
       set({
         project: next,
         past: [...past, project].slice(-HISTORY_LIMIT),
         future: future.slice(1),
         lastCommitKey: null,
-        activeExtensionId: stillActive ? activeExtensionId : next.extensions[0]?.id ?? '',
-        selectedNodeId: validSelection(next, get().selectedNodeId),
+        ...historyFocus(project, next, activeExtensionId, get().selectedNodeId),
       });
     },
     canUndo: () => get().past.length > 0,
@@ -316,16 +354,13 @@ export const useEditor = create<EditorState>()((set, get) => {
         objectTypes: [...src.objectTypes],
         existing: get().project.extensions,
       });
-      // Rebuild nodes with fresh ids from the source tree.
-      const root = src.nodes[src.rootId];
-      const nodes: Record<NodeId, UINode> = { [copy.rootId]: { ...copy.nodes[copy.rootId], children: [] } };
-      for (const cid of root.children) {
-        const sub = instantiateTemplate(toTemplate(src, cid));
-        Object.assign(nodes, sub.nodes);
-        nodes[copy.rootId].children.push(sub.rootId);
-      }
+      // Rebuild the whole tree with fresh ids in one go, so close-overlay steps anywhere in the
+      // copy target the copied Modals / Panels (overlay ids stay unique per extension).
+      const sub = instantiateTemplate(toTemplate(src, src.rootId, overlayIdPropOf));
+      const nodes: Record<NodeId, UINode> = sub.nodes;
       const full: Extension = {
         ...copy,
+        rootId: sub.rootId,
         description: src.description,
         state: JSON.parse(JSON.stringify(src.state)),
         dataSources: JSON.parse(JSON.stringify(src.dataSources)),
@@ -338,11 +373,14 @@ export const useEditor = create<EditorState>()((set, get) => {
     },
 
     insertNode: (what, target, opts = {}) => {
-      const tpl = typeof what === 'string' ? resolveCreateTemplate(what) : what;
       const ext = selectActiveExtension(get());
+      // Copies keep working on their own: overlay ids are made unique (with their references).
+      const tpl = uniquifyOverlayIds(typeof what === 'string' ? resolveCreateTemplate(what) : what, ext, overlayIdPropOf);
       if (!opts.force) {
         const check = canAccept(ext, target.parentId, tpl.type, target.slot);
         if (!check.ok) return null;
+        // Nested components must be available here too (e.g. CRM components on a settings page).
+        if (unavailableComponents(ext, tpl).length) return null;
       }
       const sub = instantiateTemplate(tpl);
       mutateActive((d) => insertSubtree(d as Extension, sub, target));
@@ -380,7 +418,7 @@ export const useEditor = create<EditorState>()((set, get) => {
     duplicateNode: (id) => {
       let newRoot: NodeId | null = null;
       mutateActive((d) => {
-        newRoot = duplicateNodeOp(d as Extension, id);
+        newRoot = duplicateNodeOp(d as Extension, id, overlayIdPropOf);
       });
       if (newRoot) set({ selectedNodeId: newRoot });
       return newRoot;
@@ -467,7 +505,7 @@ export const useEditor = create<EditorState>()((set, get) => {
     copyNode: (id) => {
       const ext = selectActiveExtension(get());
       if (!ext.nodes[id] || id === ext.rootId) return;
-      set({ clipboard: toTemplate(ext, id) });
+      set({ clipboard: toTemplate(ext, id, overlayIdPropOf) });
     },
     cutNode: (id) => {
       get().copyNode(id);
@@ -496,10 +534,9 @@ export const useEditor = create<EditorState>()((set, get) => {
 
     addStateVar: (partial = {}) => {
       const ext = selectActiveExtension(get());
-      const taken = [...ext.state.map((s) => s.name), ...ext.dataSources.map((d) => d.name)];
       const v: StateVar = {
         id: newId('s'),
-        name: uniqueName(toIdentifier(partial.name ?? 'value'), taken),
+        name: freeStateName(ext, partial.name ?? 'value'),
         type: partial.type ?? 'string',
         initial: partial.initial ?? ((partial.type ?? 'string') === 'string' ? '' : null),
         ...(partial.description ? { description: partial.description } : {}),
@@ -554,6 +591,10 @@ export const useEditor = create<EditorState>()((set, get) => {
       mutateActive((d) => {
         d.dataSources = d.dataSources.filter((x) => x.id !== id);
         delete d.mock.dataSources[id];
+        if (d.mock.simulate) {
+          delete d.mock.simulate[id];
+          if (Object.keys(d.mock.simulate).length === 0) delete d.mock.simulate;
+        }
       }),
     addFunction: (name) => {
       const fn = createAppFunction(get().project.functions, name);
@@ -630,6 +671,43 @@ export const useEditor = create<EditorState>()((set, get) => {
       ),
   };
 });
+
+/**
+ * A state variable name for `requested`: kept as typed when it is a valid identifier (e.g.
+ * `first_name`), otherwise converted (`First name` -> `firstName`); then made unique against
+ * everything the extension declares (state + setters, data sources + Loading/Error/setters,
+ * computed values, helpers, reserved names) by appending 2, 3, ...
+ */
+export function freeStateName(ext: Extension, requested: string): string {
+  const trimmed = requested.trim();
+  const base = isValidIdentifier(trimmed) ? trimmed : toIdentifier(trimmed, 'value');
+  const entity = { kind: 'state' as const, id: '' };
+  if (!validateDeclaredName(ext, base, entity)) return base;
+  for (let i = 2; i < 1000; i++) {
+    if (!validateDeclaredName(ext, `${base}${i}`, entity)) return `${base}${i}`;
+  }
+  return `${base}_${Date.now().toString(36)}`;
+}
+
+/**
+ * After undo / redo: show the extension the step changed (otherwise the change happens out of
+ * view, or the active extension disappears) and keep the selection only when it still exists.
+ */
+function historyFocus(
+  from: Project,
+  to: Project,
+  activeId: string,
+  selectedId: NodeId | null,
+): Pick<EditorState, 'activeExtensionId' | 'selectedNodeId'> {
+  const changed = changedExtensionId(from, to, activeId);
+  const stillActive = to.extensions.some((e) => e.id === activeId);
+  let next = activeId;
+  if (changed && changed !== activeId && to.extensions.some((e) => e.id === changed)) next = changed;
+  else if (!stillActive) next = to.extensions[0]?.id ?? '';
+  const ext = to.extensions.find((e) => e.id === next);
+  const selection = next === activeId ? validSelection(to, selectedId) : null;
+  return { activeExtensionId: next, selectedNodeId: selection && ext?.nodes[selection] ? selection : null };
+}
 
 function validSelection(project: Project, id: NodeId | null): NodeId | null {
   if (!id) return null;

@@ -4,6 +4,7 @@
  */
 import { useEffect, useId, useMemo, useState } from 'react';
 import { RotateCcw, WandSparkles } from 'lucide-react';
+import { resolveCreateTemplate } from '../model/store';
 import type { Extension, JsonValue, NodeId } from '../model/types';
 import type { EnumOption, PropDef } from '../registry/types';
 import { Button, cx, IconButton, NumberField, Segmented, Select, Switch, TextArea } from '../ui';
@@ -110,6 +111,23 @@ export function LiteralEditor(props: LiteralEditorProps) {
   }
 }
 
+/**
+ * The text (no `prop`) or string prop value a component is created with (registry `create()` /
+ * `children.defaultText`, as inserted by the store), e.g. "Heading" for a Heading's text. Used to
+ * let a picked variable replace untouched default text.
+ */
+export function createdDefaultText(nodeType: string | undefined, prop?: string): string | undefined {
+  if (!nodeType) return undefined;
+  try {
+    const tpl = resolveCreateTemplate(nodeType);
+    if (tpl.type !== nodeType) return undefined;
+    const v = prop === undefined ? tpl.text : tpl.props?.[prop];
+    return typeof v === 'string' && v.trim() !== '' && !v.includes('{{') ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function isStringLike(def: PropDef): boolean {
   return def.type.kind === 'string' || def.type.kind === 'url' || def.type.kind === 'href';
 }
@@ -119,6 +137,8 @@ function isStringLike(def: PropDef): boolean {
 function StringEditor({ id, def, value, onChange, ext, nodeId, required }: LiteralEditorProps) {
   const type = def.type.kind === 'string' ? def.type : { kind: 'string' as const };
   const placeholder = type.placeholder ?? (typeof def.defaultValue === 'string' ? def.defaultValue : undefined);
+  const nodeType = nodeId ? ext.nodes[nodeId]?.type : undefined;
+  const createdText = useMemo(() => createdDefaultText(nodeType, def.name), [nodeType, def.name]);
   return (
     <TemplateInput
       id={id}
@@ -129,6 +149,7 @@ function StringEditor({ id, def, value, onChange, ext, nodeId, required }: Liter
       multiline={type.multiline}
       placeholder={placeholder}
       aria-label={def.label}
+      replaceableText={createdText}
     />
   );
 }

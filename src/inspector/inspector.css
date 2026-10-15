@@ -156,7 +156,7 @@
 }
 .ub-insp-tabs .ub-tab:focus-visible {
   outline: none;
-  box-shadow: inset var(--ub-focus);
+  box-shadow: var(--ub-focus-inset);
   border-radius: var(--ub-radius-sm) var(--ub-radius-sm) 0 0;
 }
 .ub-insp-tabcount {
@@ -214,7 +214,7 @@
 }
 .ub-insp-sec__toggle:focus-visible {
   outline: none;
-  box-shadow: inset var(--ub-focus);
+  box-shadow: var(--ub-focus-inset);
 }
 .ub-insp-sec__title {
   display: inline-flex;
@@ -1476,4 +1476,84 @@ textarea.ub-insp-expr__input {
   color: var(--ub-warning);
   font-size: 10px;
   font-weight: 600;
+}
+
+/* Request headers & timeout (Fetch URL action, External API data source) */
+.ub-insp-reqopts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.ub-insp-reqopts__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  padding: 2px 4px;
+  margin-left: -4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ub-text-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ub-insp-reqopts__toggle:hover {
+  color: var(--ub-text);
+}
+.ub-insp-reqopts__toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--ub-focus);
+}
+.ub-insp-reqopts__summary {
+  font-weight: 400;
+  color: var(--ub-text-3);
+}
+.ub-insp-reqopts__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.ub-insp-reqopts__row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr) auto;
+  gap: 4px;
+  align-items: start;
+}
+.ub-insp-reqopts__body > .ub-btn {
+  align-self: flex-start;
+}
+.ub-insp-reqopts__timeout {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ub-text-2);
+}
+.ub-insp-reqopts__timeout .ub-input {
+  width: 130px;
+}
+
+/* Custom code field with an "open in a large editor" button */
+.ub-insp-codefield {
+  position: relative;
+  min-width: 0;
+}
+.ub-insp-codefield__expand {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  background: var(--ub-surface);
+  opacity: 0.85;
+}
+.ub-insp-codefield__expand:hover,
+.ub-insp-codefield__expand:focus-visible {
+  opacity: 1;
+}
+.ub-insp-codefield textarea {
+  padding-right: 30px;
 }

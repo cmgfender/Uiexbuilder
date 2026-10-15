@@ -7,7 +7,10 @@ import { memo, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, X } from 'lucide-react';
 import type { ExtensionLocation } from '../model/types';
 import { cx } from '../ui';
-import { CHROME_ATTR } from './domHit';
+import { CHROME_ATTR, OBSTACLE_ATTR } from './domHit';
+
+/** Frame text the selection chrome avoids covering. */
+const OBSTACLE = { [OBSTACLE_ATTR]: '' };
 
 export interface FrameInfo {
   location: ExtensionLocation;
@@ -58,7 +61,11 @@ function Skeleton({ w, h = 8, round }: { w: number | string; h?: number; round?:
 }
 
 function AppCaption({ appName }: { appName: string }) {
-  return <span className="ub-cv-card__app">App: {appName || 'Untitled app'}</span>;
+  return (
+    <span className="ub-cv-card__app" {...OBSTACLE}>
+      App: {appName || 'Untitled app'}
+    </span>
+  );
 }
 
 function initials(name: string): string {
@@ -81,7 +88,9 @@ function SectionHeader({ info, collapsed, onToggle }: { info: FrameInfo; collaps
       {...{ [CHROME_ATTR]: '' }}
     >
       {collapsed ? <ChevronRight size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}
-      <span className="ub-cv-side-head__title">{info.extName || 'Untitled card'}</span>
+      <span className="ub-cv-side-head__title" {...OBSTACLE}>
+        {info.extName || 'Untitled card'}
+      </span>
       <AppCaption appName={info.appName} />
     </button>
   );
@@ -143,14 +152,16 @@ export const LocationFrame = memo(function LocationFrame({
             </div>
           </aside>
           <div className="ub-cv-rec-main">
-            <div className="ub-cv-rec-tabs" role="presentation">
+            <div className="ub-cv-rec-tabs" role="presentation" {...OBSTACLE}>
               <span className="ub-cv-rec-tab">Overview</span>
               <span className="ub-cv-rec-tab">Activities</span>
               <span className="ub-cv-rec-tab ub-cv-rec-tab--active">{info.extName || 'App tab'}</span>
             </div>
             <section className="ub-cv-card" style={{ width }} aria-label={`${info.extName} card`}>
               <header className="ub-cv-card__head">
-                <h3 className="ub-cv-card__title">{info.extName || 'Untitled card'}</h3>
+                <h3 className="ub-cv-card__title" {...OBSTACLE}>
+                  {info.extName || 'Untitled card'}
+                </h3>
                 <AppCaption appName={info.appName} />
               </header>
               {children}
@@ -217,8 +228,10 @@ export const LocationFrame = memo(function LocationFrame({
         <div className="ub-cv-loc ub-cv-loc--page" style={{ width }} data-location={location}>
           <header className="ub-cv-page-head">
             <div className="ub-cv-page-head__eyebrow">Settings</div>
-            <h2 className="ub-cv-page-head__title">{info.appName || 'Untitled app'}</h2>
-            <div className="ub-cv-page-tabs" role="presentation">
+            <h2 className="ub-cv-page-head__title" {...OBSTACLE}>
+              {info.appName || 'Untitled app'}
+            </h2>
+            <div className="ub-cv-page-tabs" role="presentation" {...OBSTACLE}>
               <span className="ub-cv-rec-tab ub-cv-rec-tab--active">{info.extName || 'Settings'}</span>
             </div>
           </header>
@@ -234,7 +247,9 @@ export const LocationFrame = memo(function LocationFrame({
         <div className="ub-cv-loc ub-cv-loc--page" style={{ width }} data-location={location}>
           <header className="ub-cv-page-head">
             <div className="ub-cv-page-head__eyebrow">App home</div>
-            <h2 className="ub-cv-page-head__title">{info.appName || 'Untitled app'}</h2>
+            <h2 className="ub-cv-page-head__title" {...OBSTACLE}>
+              {info.appName || 'Untitled app'}
+            </h2>
           </header>
           <section className="ub-cv-card ub-cv-card--page" aria-label={`${info.extName} page`}>
             {children}

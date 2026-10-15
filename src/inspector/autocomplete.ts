@@ -144,11 +144,15 @@ export function liveKeySuggestions(typed: string, scope: Scope | null | undefine
   }
   if (cur === null || typeof cur !== 'object') return [];
   const keys = Array.isArray(cur) ? ['length'] : Object.keys(cur).filter((k) => /^[A-Za-z_$][\w$]*$/.test(k));
-  return keys.slice(0, limit).map((k) => ({
-    name: `${base}.${k}`,
-    kind: 'property' as const,
-    detail: k === 'length' && Array.isArray(cur) ? 'number' : typeOfValue((cur as Record<string, unknown>)[k]),
-  }));
+  return keys.slice(0, limit).map((k) => {
+    const v = k === 'length' && Array.isArray(cur) ? cur.length : (cur as Record<string, unknown>)[k];
+    return {
+      name: `${base}.${k}`,
+      kind: 'property' as const,
+      detail: k === 'length' && Array.isArray(cur) ? 'number' : typeOfValue(v),
+      ...(v !== null && typeof v === 'object' ? { members: true } : {}),
+    };
+  });
 }
 
 /** Merges static and live suggestions (static first, de-duplicated by name). */
@@ -168,8 +172,47 @@ export function applyExpressionSuggestion(value: string, token: TokenInfo, name:
   return { value: next, cursor: token.start + name.length };
 }
 
+/**
+ * Looks up a dotted path (`record.firstname`) in the scope, own properties only (no getters are
+ * evaluated through the prototype chain, no calls).
+ */
+export function valueAtPath(scope: Scope | null | undefined, path: string): { found: boolean; value: unknown } {
+  if (!scope) return { found: false, value: undefined };
+  const parts = path.split('.');
+  let cur: unknown = scope;
+  for (const p of parts) {
+    if (cur === null || (typeof cur !== 'object' && typeof cur !== 'function')) return { found: false, value: undefined };
+    if (!Object.prototype.hasOwnProperty.call(cur, p)) return { found: false, value: undefined };
+    cur = (cur as Record<string, unknown>)[p];
+  }
+  return { found: true, value: cur };
+}
+
+/**
+ * Whether a suggestion's value is an object or array, i.e. the user most likely continues with
+ * `.member`. Uses the live value when the preview scope has one, else the declared shape.
+ */
+export function hasMembers(v: ScopeVariable, scope: Scope | null | undefined): boolean {
+  const live = valueAtPath(scope, v.name);
+  if (live.found && live.value !== undefined) return live.value !== null && typeof live.value === 'object';
+  return !!v.members;
+}
+
+export interface ApplyTemplateOptions {
+  /**
+   * Leave the caret right after the inserted name, inside `{{ name| }}`, so a member can be typed
+   * next (used for object / array values). The segment is still closed.
+   */
+  caretInside?: boolean;
+}
+
 /** Replaces the token with `name` inside a `{{ }}` segment, normalising to `{{ name }}`. */
-export function applyTemplateSuggestion(value: string, token: TemplateTokenInfo, name: string): ApplyResult {
+export function applyTemplateSuggestion(
+  value: string,
+  token: TemplateTokenInfo,
+  name: string,
+  opts: ApplyTemplateOptions = {},
+): ApplyResult {
   let start = token.start;
   // Normalise "{{name" / "{{   name" to "{{ name".
   const between = value.slice(token.segmentStart + 2, start);
@@ -182,10 +225,28 @@ export function applyTemplateSuggestion(value: string, token: TemplateTokenInfo,
   if (token.closed) rest = rest.replace(/^\s*\}\}/, '');
   const suffix = ' }}';
   const head = value.slice(0, start) + prefix + name;
-  return { value: head + suffix + rest, cursor: head.length + suffix.length };
+  return { value: head + suffix + rest, cursor: opts.caretInside ? head.length : head.length + suffix.length };
 }
 
 /** Inserts `text` at the selection (replacing it). */
 export function insertAt(value: string, selStart: number, selEnd: number, text: string): ApplyResult {
   return { value: value.slice(0, selStart) + text + value.slice(selEnd), cursor: selStart + text.length };
+}
+
+// Prose before / after an inserted `{{ variable }}` gets a separating space; URL-ish or code-ish
+// neighbours (`/`, `=`, `?`, `#`, `-`, `_`, quotes, brackets) are left alone.
+const SPACE_BEFORE_RE = /[\p{L}\p{N}.,!?:;)\]}]/u;
+const SPACE_AFTER_RE = /[\p{L}\p{N}({[]/u;
+
+/**
+ * Inserts `{{ name }}` into template text at the selection (a picked variable), separating it from
+ * adjoining words with a space: "Hello" + name -> "Hello {{ name }}", not "Hello{{ name }}".
+ */
+export function insertTemplateVariable(value: string, selStart: number, selEnd: number, name: string): ApplyResult {
+  const prev = selStart > 0 ? value[selStart - 1] : '';
+  const next = value[selEnd] ?? '';
+  const lead = prev && SPACE_BEFORE_RE.test(prev) ? ' ' : '';
+  const trail = next && SPACE_AFTER_RE.test(next) ? ' ' : '';
+  const res = insertAt(value, selStart, selEnd, `${lead}{{ ${name} }}${trail}`);
+  return { value: res.value, cursor: res.cursor - trail.length };
 }

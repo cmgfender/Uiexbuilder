@@ -26,6 +26,11 @@ export function nextZoom(z: number, dir: 1 | -1): number {
 interface PersistedView {
   zoom: number;
   chrome: boolean;
+  /**
+   * The zoom follows the window: 100%, or less when the card frame is wider than the stage. Any
+   * explicit zoom choice turns it off.
+   */
+  auto: boolean;
 }
 
 function loadView(): PersistedView {
@@ -33,12 +38,15 @@ function loadView(): PersistedView {
     const raw = window.localStorage.getItem(VIEW_KEY);
     if (raw) {
       const v = JSON.parse(raw) as Partial<PersistedView>;
-      return { zoom: clampZoom(typeof v.zoom === 'number' ? v.zoom : 1), chrome: v.chrome !== false };
+      const zoom = clampZoom(typeof v.zoom === 'number' ? v.zoom : 1);
+      // Views saved before `auto` existed: 100% was the default, anything else a choice.
+      const auto = typeof v.auto === 'boolean' ? v.auto : zoom === 1;
+      return { zoom: auto ? 1 : zoom, chrome: v.chrome !== false, auto };
     }
   } catch {
     /* storage unavailable */
   }
-  return { zoom: 1, chrome: true };
+  return { zoom: 1, chrome: true, auto: true };
 }
 
 function saveView(v: PersistedView): void {
@@ -52,11 +60,16 @@ function saveView(v: PersistedView): void {
 interface CanvasViewState {
   zoom: number;
   chrome: boolean;
+  /** See PersistedView.auto. */
+  auto: boolean;
   /** Sidebar-style frames: the card section is collapsed. */
   collapsed: boolean;
   /** Bumped to ask the mounted canvas to fit the frame to the stage width. */
   fitRequest: number;
+  /** An explicit zoom choice (turns automatic zoom off). */
   setZoom: (zoom: number) => void;
+  /** Automatic zoom (keeps `auto` on); ignored once the user picked a zoom. */
+  setAutoZoom: (zoom: number) => void;
   setChrome: (chrome: boolean) => void;
   setCollapsed: (collapsed: boolean) => void;
   requestFit: () => void;
@@ -68,13 +81,19 @@ export const useCanvasView = create<CanvasViewState>()((set, get) => ({
   fitRequest: 0,
   setZoom: (zoom) => {
     const z = clampZoom(zoom);
-    if (z === get().zoom) return;
+    if (z === get().zoom && !get().auto) return;
+    set({ zoom: z, auto: false });
+    saveView({ zoom: z, chrome: get().chrome, auto: false });
+  },
+  setAutoZoom: (zoom) => {
+    const z = clampZoom(zoom);
+    if (!get().auto || z === get().zoom) return;
     set({ zoom: z });
-    saveView({ zoom: z, chrome: get().chrome });
+    saveView({ zoom: z, chrome: get().chrome, auto: true });
   },
   setChrome: (chrome) => {
     set({ chrome });
-    saveView({ zoom: get().zoom, chrome });
+    saveView({ zoom: get().zoom, chrome, auto: get().auto });
   },
   setCollapsed: (collapsed) => set({ collapsed }),
   requestFit: () => set({ fitRequest: get().fitRequest + 1 }),
@@ -95,6 +114,8 @@ export interface MenuState {
   y: number;
   /** Node the menu is about; null for the canvas background menu. */
   nodeId: NodeId | null;
+  /** Opened from the keyboard (Shift+F10 / Menu key): focus moves into the menu and back after. */
+  keyboard?: boolean;
 }
 
 interface CanvasUiState {

@@ -31,7 +31,9 @@ import {
   applyTemplateSuggestion,
   expressionTokenAt,
   filterSuggestions,
+  hasMembers,
   insertAt,
+  insertTemplateVariable,
   liveKeySuggestions,
   mergeVariables,
   templateTokenAt,
@@ -139,9 +141,11 @@ interface AutocompleteOptions {
   vars: ScopeVariable[];
   scope: Scope;
   inputRef: React.RefObject<AnyInput>;
+  /** Template mode: a picked variable replaces the whole value while it still equals this text. */
+  replaceableText?: string;
 }
 
-function useAutocomplete({ mode, value, onChange, vars, scope, inputRef }: AutocompleteOptions) {
+function useAutocomplete({ mode, value, onChange, vars, scope, inputRef, replaceableText }: AutocompleteOptions) {
   const [ac, setAc] = useState<AcState | null>(null);
   const pendingCursor = useRef<number | null>(null);
 
@@ -181,14 +185,16 @@ function useAutocomplete({ mode, value, onChange, vars, scope, inputRef }: Autoc
     (state: AcState, index: number) => {
       const item = state.items[index];
       if (!item) return;
+      // Objects / arrays (a data source, an object state, `event`) are usually followed by a
+      // member: keep the caret inside `{{ record| }}` so typing `.` lists the members.
       const res =
         mode === 'expr'
           ? applyExpressionSuggestion(value, state.token, item.name)
-          : applyTemplateSuggestion(value, state.token as TemplateTokenInfo, item.name);
+          : applyTemplateSuggestion(value, state.token as TemplateTokenInfo, item.name, { caretInside: hasMembers(item, scope) });
       setAc(null);
       commit(res.value, res.cursor);
     },
-    [mode, value, commit],
+    [mode, value, commit, scope],
   );
 
   const onInputChange = (e: ChangeEvent<AnyInput>) => {
@@ -245,7 +251,11 @@ function useAutocomplete({ mode, value, onChange, vars, scope, inputRef }: Autoc
       res = tok ? applyExpressionSuggestion(value, tok, name) : insertAt(value, selStart, selEnd, name);
     } else {
       const tok = selStart === selEnd ? templateTokenAt(value, selStart) : null;
-      res = tok ? applyTemplateSuggestion(value, tok, name) : insertAt(value, selStart, selEnd, `{{ ${name} }}`);
+      if (tok) res = applyTemplateSuggestion(value, tok, name);
+      else if (replaceableText !== undefined && value === replaceableText) {
+        // Still the component's untouched default text ("Heading"): binding replaces it.
+        res = insertAt(value, 0, value.length, `{{ ${name} }}`);
+      } else res = insertTemplateVariable(value, selStart, selEnd, name);
     }
     setAc(null);
     commit(res.value, res.cursor);
@@ -254,8 +264,63 @@ function useAutocomplete({ mode, value, onChange, vars, scope, inputRef }: Autoc
   return { ac, setAc, close, accept, onInputChange, onKeyDown, insertVariable };
 }
 
+/**
+ * The viewport rectangle of the caret's line in a textarea (measured with a mirror element, so
+ * soft-wrapped lines count), spanning the field's width. Null for single-line inputs.
+ */
+function caretLineRect(field: AnyInput | null): { left: number; top: number; right: number; bottom: number; width: number } | null {
+  if (!field || field.tagName !== 'TEXTAREA' || typeof window === 'undefined') return null;
+  const box = field.getBoundingClientRect();
+  if (box.width <= 0) return null;
+  const cs = window.getComputedStyle(field);
+  const mirror = document.createElement('div');
+  for (const prop of [
+    'boxSizing',
+    'width',
+    'paddingTop',
+    'paddingRight',
+    'paddingBottom',
+    'paddingLeft',
+    'borderTopWidth',
+    'borderRightWidth',
+    'borderBottomWidth',
+    'borderLeftWidth',
+    'fontFamily',
+    'fontSize',
+    'fontWeight',
+    'fontStyle',
+    'letterSpacing',
+    'lineHeight',
+    'tabSize',
+    'textIndent',
+    'wordSpacing',
+  ] as const) {
+    mirror.style[prop] = cs[prop];
+  }
+  mirror.style.position = 'absolute';
+  mirror.style.visibility = 'hidden';
+  mirror.style.top = '0';
+  mirror.style.left = '-9999px';
+  mirror.style.whiteSpace = 'pre-wrap';
+  mirror.style.overflowWrap = 'break-word';
+  mirror.style.borderStyle = 'solid';
+  mirror.textContent = field.value.slice(0, field.selectionStart ?? field.value.length);
+  const marker = document.createElement('span');
+  marker.textContent = '\u200b';
+  mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+  const lineTop = marker.offsetTop;
+  const lineHeight = marker.offsetHeight || parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.4 || 16;
+  mirror.remove();
+  const top = box.top + lineTop - field.scrollTop;
+  // Keep the rectangle inside the field (a caret scrolled out of view anchors at the field's edge).
+  const clampedTop = Math.max(box.top, Math.min(top, box.bottom - lineHeight));
+  return { left: box.left, right: box.right, width: box.width, top: clampedTop, bottom: clampedTop + lineHeight };
+}
+
 function SuggestionList({
   anchor,
+  field,
   ac,
   listId,
   onPick,
@@ -263,6 +328,8 @@ function SuggestionList({
   onHover,
 }: {
   anchor: HTMLElement | null;
+  /** The text field: in a textarea the list opens under the caret's line, not under the whole box. */
+  field?: AnyInput | null;
   ac: AcState | null;
   listId: string;
   onPick: (index: number) => void;
@@ -273,6 +340,7 @@ function SuggestionList({
   useEffect(() => {
     activeRef.current?.scrollIntoView?.({ block: 'nearest' });
   }, [ac?.index]);
+  const multiLine = field?.tagName === 'TEXTAREA';
   return (
     <Popover
       anchor={anchor}
@@ -283,6 +351,8 @@ function SuggestionList({
       role="listbox"
       id={listId}
       aria-label="Suggestions"
+      anchorRect={multiLine ? () => caretLineRect(field ?? null) : undefined}
+      anchorKey={multiLine && ac ? `${ac.token.start}:${field?.value.length ?? 0}` : undefined}
     >
       {ac?.items.map((v, i) => (
         <div
@@ -307,6 +377,29 @@ function SuggestionList({
       ))}
     </Popover>
   );
+}
+
+/** Whether `code` refers to one of `names` as an identifier (not as a property, e.g. `x.error`). */
+function usesNameIn(code: string, names: string[] | undefined): boolean {
+  return !!names?.some((n) => new RegExp(`(?<![\\w$.])${n.replace(/\$/g, '\\$')}(?![\\w$])`).test(code));
+}
+
+/**
+ * Suggestion-list ARIA shared by single- and multi-line fields. A <textarea> keeps its implicit
+ * `textbox` role (multi-line editing stays available to screen readers); aria-autocomplete,
+ * aria-controls and aria-activedescendant are valid on textboxes.
+ */
+function suggestionAria(ac: AcState | null, listId: string) {
+  return {
+    'aria-autocomplete': 'list' as const,
+    'aria-controls': ac ? listId : undefined,
+    'aria-activedescendant': ac ? `${listId}-${ac.index}` : undefined,
+  };
+}
+
+/** Single-line fields are comboboxes (role + expanded state are not allowed on a textarea). */
+function comboboxAria(ac: AcState | null) {
+  return { role: 'combobox', 'aria-expanded': !!ac };
 }
 
 const KIND_GLYPH: Record<ScopeVariable['kind'], string> = {
@@ -363,7 +456,8 @@ export function ExpressionInput(props: ExpressionInputProps) {
   const listId = useId();
   const auto = useAutocomplete({ mode: 'expr', value, onChange, vars, scope, inputRef });
 
-  const settled = useSettled(value, 300);
+  // Wait for a pause in typing before showing a syntax error (half-typed code is not an error yet).
+  const settled = useSettled(value, 600);
   const error = useMemo(
     () => (settled.trim() ? (statements ? checkStatementsSyntax(settled) : checkExpressionSyntax(settled)) : null),
     [settled, statements],
@@ -388,11 +482,7 @@ export function ExpressionInput(props: ExpressionInputProps) {
     autoFocus: props.autoFocus,
     'aria-label': props['aria-label'],
     'aria-invalid': invalid || undefined,
-    role: 'combobox',
-    'aria-autocomplete': 'list' as const,
-    'aria-expanded': !!auto.ac,
-    'aria-controls': auto.ac ? listId : undefined,
-    'aria-activedescendant': auto.ac ? `${listId}-${auto.ac.index}` : undefined,
+    ...suggestionAria(auto.ac, listId),
     onChange: auto.onInputChange,
     onBlur: () => {
       auto.close();
@@ -423,7 +513,7 @@ export function ExpressionInput(props: ExpressionInputProps) {
             {...common}
           />
         ) : (
-          <input ref={inputRef as React.RefObject<HTMLInputElement>} type="text" {...common} />
+          <input ref={inputRef as React.RefObject<HTMLInputElement>} type="text" {...common} {...comboboxAria(auto.ac)} />
         )}
         <VariablePicker
           ext={ext}
@@ -445,6 +535,7 @@ export function ExpressionInput(props: ExpressionInputProps) {
       ) : null}
       <SuggestionList
         anchor={boxRef.current}
+        field={inputRef.current}
         ac={auto.ac}
         listId={listId}
         onPick={(i) => auto.ac && auto.accept(auto.ac, i)}
@@ -476,19 +567,26 @@ export interface TemplateInputProps {
   autoFocus?: boolean;
   onBlur?: () => void;
   className?: string;
+  /**
+   * Default text the field was created with (e.g. a Heading's "Heading"). While the value still
+   * equals it, picking a variable replaces the text instead of appending to it.
+   */
+  replaceableText?: string;
 }
 
 /** Text editor supporting {{ expression }} segments. */
 export function TemplateInput(props: TemplateInputProps) {
-  const { value, onChange, ext, nodeId, eventParams, placeholder, multiline, hidePreview, className } = props;
+  const { value, onChange, ext, nodeId, eventParams, placeholder, multiline, hidePreview, className, replaceableText } = props;
   const baseVars = useScopeVariables(ext, nodeId, eventParams);
   const vars = useMemo(() => baseVars.filter((x) => x.kind !== 'setter'), [baseVars]);
   const scope = usePreviewScope(ext, nodeId);
   const inputRef = useRef<AnyInput>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const listId = useId();
-  const auto = useAutocomplete({ mode: 'template', value, onChange, vars, scope, inputRef });
+  const auto = useAutocomplete({ mode: 'template', value, onChange, vars, scope, inputRef, replaceableText });
   const settled = useSettled(value, 250);
+  // Callers pass a new eventParams array on every render: key the preview by the names.
+  const paramsKey = eventParams?.join('\u0000') ?? '';
 
   const info = useMemo((): { error: string | null; preview: string | null } => {
     if (!hasTemplate(settled)) return { error: null, preview: null };
@@ -501,6 +599,8 @@ export function TemplateInput(props: TemplateInputProps) {
     if (single !== null) {
       const r = safeEvaluate(single, scope);
       if (!r) return { error: null, preview: null };
+      // Event parameters (`value`, `response`, `error`) only exist when the handler runs.
+      if (!r.ok && usesNameIn(single, eventParams)) return { error: null, preview: null };
       return { error: null, preview: r.ok ? formatPreviewValue(r.value, 160) : `(${r.error})` };
     }
     const text = parseTemplate(settled)
@@ -511,7 +611,7 @@ export function TemplateInput(props: TemplateInputProps) {
       })
       .join('');
     return { error: null, preview: text.length > 160 ? `${text.slice(0, 159)}…` : text };
-  }, [settled, scope, hidePreview]);
+  }, [settled, scope, hidePreview, paramsKey]);
 
   const invalid = !!props.invalid || (!!info.error && settled === value);
   const lines = value.split('\n').length;
@@ -524,11 +624,7 @@ export function TemplateInput(props: TemplateInputProps) {
     autoFocus: props.autoFocus,
     'aria-label': props['aria-label'],
     'aria-invalid': invalid || undefined,
-    role: 'combobox',
-    'aria-autocomplete': 'list' as const,
-    'aria-expanded': !!auto.ac,
-    'aria-controls': auto.ac ? listId : undefined,
-    'aria-activedescendant': auto.ac ? `${listId}-${auto.ac.index}` : undefined,
+    ...suggestionAria(auto.ac, listId),
     onChange: auto.onInputChange,
     onBlur: () => {
       auto.close();
@@ -545,7 +641,7 @@ export function TemplateInput(props: TemplateInputProps) {
         {multiline ? (
           <textarea ref={inputRef as React.RefObject<HTMLTextAreaElement>} rows={Math.min(10, Math.max(2, lines))} {...common} />
         ) : (
-          <input ref={inputRef as React.RefObject<HTMLInputElement>} type="text" {...common} />
+          <input ref={inputRef as React.RefObject<HTMLInputElement>} type="text" {...common} {...comboboxAria(auto.ac)} />
         )}
         <VariablePicker
           ext={ext}
@@ -568,6 +664,7 @@ export function TemplateInput(props: TemplateInputProps) {
       ) : null}
       <SuggestionList
         anchor={boxRef.current}
+        field={inputRef.current}
         ac={auto.ac}
         listId={listId}
         onPick={(i) => auto.ac && auto.accept(auto.ac, i)}
@@ -669,16 +766,14 @@ export function VariablePicker({
         width={280}
         maxHeight={340}
         align="end"
+        role="dialog"
         aria-label="Variables in scope"
+        autoFocus
       >
         <div
           className="ub-insp-vp"
           onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              e.stopPropagation();
-              close(true);
-            } else if (e.key === 'ArrowDown') {
+            if (e.key === 'ArrowDown') {
               e.preventDefault();
               setActive((a) => Math.min(flat.length - 1, a + 1));
             } else if (e.key === 'ArrowUp') {
@@ -695,7 +790,7 @@ export function VariablePicker({
             <Search size={13} aria-hidden />
             <input
               id={searchId}
-              autoFocus
+              data-autofocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search variables…"

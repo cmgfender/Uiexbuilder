@@ -8,12 +8,19 @@ import { smartInsertTarget } from '../dnd/dragState';
 import { createProject } from '../model/factory';
 import { newId } from '../model/ids';
 import { canAccept } from '../model/rules';
-import { selectActiveExtension, useEditor } from '../model/store';
+import { selectActiveExtension, unavailableComponents, useEditor } from '../model/store';
 import { insertSubtree, instantiateTemplate, type InsertTarget } from '../model/tree';
 import type { AppFunction, Extension, NodeId, NodeTemplate, Project, StateVar } from '../model/types';
+import { appFunctionsUnsupported } from '../model/validate';
 import { freshBlockTemplate, instantiateExtensionTemplate, templateConflict, type ExtensionTemplate } from './catalog';
 
 export type FlowResult<T = undefined> = { ok: true; value: T; message: string } | { ok: false; message: string };
+
+/** A note for the confirmation when a starter brings app functions the app can't upload. */
+function functionSupportNote(project: Project, functions: AppFunction[]): string {
+  const problem = functions.length ? appFunctionsUnsupported(project) : null;
+  return problem ? ` Note: ${problem} — see Problems.` : '';
+}
 
 function kindLabel(ext: Extension): string {
   return ext.kind === 'settings' ? 'settings page' : ext.kind === 'home' ? 'app home page' : 'card';
@@ -24,6 +31,11 @@ function kindLabel(ext: Extension): string {
  * target (inside the selected container, after the selection, or at the end). Missing state
  * variables (by name) are added in the same undo step. Overlay ids are made unique first.
  */
+/** “A”, “A and B”, “A, B and C”. */
+function listLabels(labels: string[]): string {
+  return labels.length <= 1 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+}
+
 export function insertBlock(
   template: NodeTemplate,
   state: Array<Omit<StateVar, 'id'>> | undefined,
@@ -34,6 +46,10 @@ export function insertBlock(
   const ext = selectActiveExtension(editor);
   if (!ext) return { ok: false, message: 'There is no card to add the block to.' };
   const tpl = freshBlockTemplate(template, ext);
+  const unavailable = unavailableComponents(ext, tpl);
+  if (unavailable.length) {
+    return { ok: false, message: `“${label}” contains ${listLabels(unavailable)}, which ${unavailable.length === 1 ? 'isn’t' : 'aren’t'} available on this ${kindLabel(ext)}.` };
+  }
   let target: InsertTarget | null;
   if (at) {
     const check = canAccept(ext, at.parentId, tpl.type, at.slot);
@@ -78,7 +94,7 @@ export function addTemplateToProject(tpl: ExtensionTemplate): FlowResult<string>
     useEditor.getState().setActiveExtension(extension.id);
   }
   const fnNote = functions.length ? ` with app function ${functions.map((f) => `“${f.uid}”`).join(', ')}` : '';
-  return { ok: true, value: extension.id, message: `Added “${extension.name}”${fnNote}.` };
+  return { ok: true, value: extension.id, message: `Added “${extension.name}”${fnNote}.${functionSupportNote(editor.project, functions)}` };
 }
 
 /** Replaces the active extension with a starter (one undo step). */
@@ -101,7 +117,11 @@ export function replaceActiveWithTemplate(tpl: ExtensionTemplate): FlowResult<st
     d.functions.push(...(functions as Draft<AppFunction>[]));
   });
   useEditor.getState().setActiveExtension(extension.id);
-  return { ok: true, value: extension.id, message: `Replaced “${current.name}” with “${tpl.name}”.` };
+  return {
+    ok: true,
+    value: extension.id,
+    message: `Replaced “${current.name}” with “${tpl.name}”.${functionSupportNote(editor.project, functions)}`,
+  };
 }
 
 /** A new project named `appName` whose only extension comes from `tpl` (plus its functions). */

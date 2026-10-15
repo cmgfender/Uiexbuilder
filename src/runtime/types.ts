@@ -41,6 +41,8 @@ export interface RuntimeAlert {
   type: AlertType;
   title?: string;
   message: string;
+  /** How many times this alert was added in a row (shown as ×N when above 1). */
+  count?: number;
 }
 
 export interface RuntimeLogEntry {
@@ -109,6 +111,8 @@ export interface NodeRendererProps {
   scope?: Scope;
   /** For overlay nodes rendered directly: 'inline' (designer storyboard) or 'open'. */
   overlayPresentation?: 'inline' | 'open';
+  /** Nesting depth (set by the renderer for children; guards malformed, cyclic trees). */
+  depth?: number;
 }
 
 export interface DropPlaceholderProps {

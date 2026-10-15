@@ -371,6 +371,85 @@ export function generateSearchRows(ds: CrmSearchSource): MockCrmSearchResult[] {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Formatted values (propertiesToFormat: 'all')
+// ---------------------------------------------------------------------------
+
+const ENUM_LABELS: Record<string, Record<string, string>> = {
+  dealstage: {
+    appointmentscheduled: 'Appointment scheduled',
+    qualifiedtobuy: 'Qualified to buy',
+    presentationscheduled: 'Presentation scheduled',
+    decisionmakerboughtin: 'Decision maker bought-in',
+    contractsent: 'Contract sent',
+    closedwon: 'Closed won',
+    closedlost: 'Closed lost',
+  },
+  lifecyclestage: {
+    subscriber: 'Subscriber',
+    lead: 'Lead',
+    marketingqualifiedlead: 'Marketing qualified lead',
+    salesqualifiedlead: 'Sales qualified lead',
+    opportunity: 'Opportunity',
+    customer: 'Customer',
+    evangelist: 'Evangelist',
+    other: 'Other',
+  },
+  hs_pipeline_stage: { '1': 'New', '2': 'Waiting on contact', '3': 'Waiting on us', '4': 'Closed' },
+  pipeline: { default: 'Sales Pipeline', '0': 'Support Pipeline' },
+  hs_pipeline: { default: 'Sales Pipeline', '0': 'Support Pipeline' },
+};
+
+/** Enumeration properties whose internal values are UPPER_SNAKE_CASE words (labels are derived). */
+const WORD_ENUMS = new Set(['hs_lead_status', 'hs_ticket_priority', 'industry', 'hs_task_status', 'hs_task_priority']);
+const CURRENCY_PROPS = new Set(['amount', 'hs_acv', 'hs_arr', 'hs_mrr', 'hs_tcv', 'price', 'annualrevenue', 'amount_in_home_currency', 'hs_amount_paid']);
+const NUMBER_PROPS = new Set(['numberofemployees', 'quantity', 'hs_num_open_deals', 'num_associated_contacts']);
+
+function titleWords(value: string): string {
+  const words = value.toLowerCase().split(/_+/).filter(Boolean);
+  return words.map((w, i) => (i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w)).join(' ');
+}
+
+/**
+ * A CRM property value as HubSpot returns it with `propertiesToFormat: 'all'`: currency amounts
+ * ($48,000.00), grouped numbers, dates (1/14/2026) and option labels (contractsent -> Contract
+ * sent). Values that do not look like the property's raw format are returned unchanged.
+ */
+export function formatPropertyValue(property: string, value: string | null): string | null {
+  if (value === null || value === undefined) return value;
+  const p = property.toLowerCase();
+  const raw = String(value);
+  const labels = ENUM_LABELS[p];
+  if (labels) return labels[raw] ?? raw;
+  if (WORD_ENUMS.has(p)) return /^[A-Z0-9_]+$/.test(raw) ? titleWords(raw) : raw;
+  const num = raw.trim() !== '' && /^-?\d+(\.\d+)?$/.test(raw.trim()) ? Number(raw) : NaN;
+  if (CURRENCY_PROPS.has(p) && Number.isFinite(num)) {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(num);
+  }
+  if (NUMBER_PROPS.has(p) && Number.isFinite(num)) return new Intl.NumberFormat('en-US').format(num);
+  if (/(date|_at$|lastmodified|timestamp)/.test(p) && /^\d{4}-\d{2}-\d{2}/.test(raw) && !Number.isNaN(Date.parse(raw))) {
+    return new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: 'numeric', month: 'numeric', day: 'numeric' }).format(new Date(raw));
+  }
+  return raw;
+}
+
+function formatProperties(props: unknown): unknown {
+  if (!props || typeof props !== 'object' || Array.isArray(props)) return props;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(props as Record<string, unknown>)) out[k] = typeof v === 'string' ? formatPropertyValue(k, v) : v;
+  return out;
+}
+
+/** Applies formatPropertyValue to `properties` of association / search result rows. */
+function formatRows(rows: unknown): unknown {
+  if (!Array.isArray(rows)) return rows;
+  return rows.map((row) =>
+    row && typeof row === 'object' && !Array.isArray(row) && 'properties' in row
+      ? { ...(row as Record<string, unknown>), properties: formatProperties((row as { properties: unknown }).properties) }
+      : row,
+  );
+}
+
 /** Deep copy of a JSON mock so previews / custom code can never mutate the (frozen) document. */
 function cloneJson<T extends JsonValue | undefined>(value: T): T {
   if (value === undefined || value === null || typeof value !== 'object') return value;
@@ -388,6 +467,7 @@ export function hasConfiguredMock(ext: Extension, dataSourceId: string): boolean
  *  - associations / crmSearch: mock.dataSources[id] if present, else generated rows
  *  - fetch: mock.dataSources[id] ?? null
  *  - function: mock.dataSources[id] ?? the function's mock return (mock.functions) ?? null
+ * CRM sources with `formatted` get formatted property values (see formatPropertyValue).
  */
 export function mockDataForSource(ext: Extension, ds: DataSource): unknown {
   const mock = ext.mock;
@@ -399,13 +479,18 @@ export function mockDataForSource(ext: Extension, ds: DataSource): unknown {
         if (!prop) continue;
         const v = mock?.properties?.[prop];
         out[prop] = v === undefined || v === null ? null : String(v);
+        if (ds.formatted) out[prop] = formatPropertyValue(prop, out[prop]);
       }
       return out;
     }
-    case 'associations':
-      return configured !== undefined ? cloneJson(configured) : generateAssociationRows(ds, ext);
-    case 'crmSearch':
-      return configured !== undefined ? cloneJson(configured) : generateSearchRows(ds);
+    case 'associations': {
+      const rows = configured !== undefined ? cloneJson(configured) : generateAssociationRows(ds, ext);
+      return ds.formatted ? formatRows(rows) : rows;
+    }
+    case 'crmSearch': {
+      const rows = configured !== undefined ? cloneJson(configured) : generateSearchRows(ds);
+      return ds.formatted ? formatRows(rows) : rows;
+    }
     case 'fetch':
       return configured !== undefined ? cloneJson(configured) : null;
     case 'function': {

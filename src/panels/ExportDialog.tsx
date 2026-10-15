@@ -18,7 +18,7 @@ import { downloadFile, serializeProject } from '../model/persistence';
 import { useEditor } from '../model/store';
 import type { Extension } from '../model/types';
 import { validateProject } from '../model/validate';
-import { Badge, Button, Dialog, Switch, Tabs, cx, useToast } from '../ui';
+import { Badge, Button, Dialog, Switch, Tabs, cx, tabPanelProps, useToast } from '../ui';
 import { CodeViewer } from '../ui/CodeViewer';
 import { Callout, CopyButton, Snippet } from './common';
 import type { DialogComponentProps } from './dialogTypes';
@@ -42,6 +42,8 @@ export function ExportDialog({ open, onClose, arg }: DialogComponentProps) {
     <Dialog open={open} onClose={onClose} title="Export project" wide>
       <Tabs<Tab>
         className="ub-pn-dialog-tabs"
+        idBase="ub-pn-export"
+        aria-label="Export sections"
         value={tab}
         onChange={setTab}
         tabs={[
@@ -50,7 +52,7 @@ export function ExportDialog({ open, onClose, arg }: DialogComponentProps) {
           { value: 'deploy', label: 'Deploy' },
         ]}
       />
-      <div className="ub-pn-dialog-pane" role="tabpanel">
+      <div className="ub-pn-dialog-pane" {...tabPanelProps('ub-pn-export', tab)}>
         {tab === 'download' && <DownloadTab onClose={onClose} onShowDeploy={() => setTab('deploy')} />}
         {tab === 'files' && <FilesTab />}
         {tab === 'deploy' && <DeployTab />}
@@ -351,13 +353,14 @@ function FilesTab() {
 function TreeView({ dir, depth, selected, onSelect }: { dir: TreeDir; depth: number; selected: string; onSelect: (path: string) => void }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   return (
-    <ul className="ub-pn-tree" role={depth === 0 ? 'tree' : 'group'}>
+    <ul className="ub-pn-tree" aria-label={depth === 0 ? 'Project files' : undefined}>
       {dir.dirs.map((d) => {
         const isOpen = !collapsed.has(d.path);
         return (
-          <li key={d.path} role="treeitem" aria-expanded={isOpen}>
+          <li key={d.path}>
             <button
               type="button"
+              aria-expanded={isOpen}
               className="ub-pn-tree__item ub-pn-tree__item--dir"
               style={{ paddingLeft: 8 + depth * 12 }}
               onClick={() =>
@@ -380,9 +383,10 @@ function TreeView({ dir, depth, selected, onSelect }: { dir: TreeDir; depth: num
         const Icon = fileIcon(f.path);
         const name = f.path.split('/').pop();
         return (
-          <li key={f.path} role="treeitem" aria-selected={f.path === selected}>
+          <li key={f.path}>
             <button
               type="button"
+              aria-current={f.path === selected ? 'true' : undefined}
               className={cx('ub-pn-tree__item', f.path === selected && 'ub-pn-tree__item--active')}
               style={{ paddingLeft: 8 + depth * 12 }}
               onClick={() => onSelect(f.path)}

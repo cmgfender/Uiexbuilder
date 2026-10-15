@@ -52,6 +52,8 @@ export interface RuntimeControls {
   hideTooltip(nodeId: NodeId): void;
   /** Called by PreviewHost on mount; returns the unregister function. */
   registerHost(): () => void;
+  /** A node failed to render (logged to the console once per node and message). */
+  reportNodeError?(nodeId: NodeId, message: string): void;
 }
 
 /** RuntimeApi plus the host-only state PreviewHost needs. */

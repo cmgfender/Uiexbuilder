@@ -25,7 +25,18 @@ export {
   type ShortcutGroup,
 } from './shortcuts';
 export { useDialogs, type DialogName } from './dialogs';
-export { bootstrapEditor, useAutosave } from './persistence';
+export {
+  bootstrapEditor,
+  useAutosave,
+  saveCurrentProject,
+  readBootGuard,
+  type BootResult,
+  type BootGuard,
+  type SaveOutcome,
+} from './persistence';
+export { EditorErrorBoundary, RecoveryScreen, StartupRecovery } from './Recovery';
+export { importProjectFromText, importMessage, ImportConflictDialog, type ImportResult, type ImportOutcome } from './importProject';
+export { ProjectConflictDialog, showProjectConflict } from './ProjectConflictDialog';
 export { useProblems, navigateToIssue } from './problems';
 export {
   useShell,
@@ -34,4 +45,6 @@ export {
   showLeftTab,
   showRightTab,
   focusPaletteSearch,
+  isLeftCollapsed,
+  setLeftSidebarOpen,
 } from './shellStore';

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createAppFunction, createExtension, createProject } from './factory';
 import type { ActionStep, AppFunction, ComputedValue, DataSource, Extension, NodeTemplate, Project, StateVar } from './types';
-import { countIssues, scanReferences, validateProject, type Issue } from './validate';
+import { appFunctionsUnsupported, closestName, countIssues, editDistance, scanReferences, validateProject, type Issue } from './validate';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -460,6 +460,34 @@ describe('node rules', () => {
     expect(issues.filter((i) => i.rule === 'unknown-state')).toHaveLength(2);
   });
 
+  it('warns about a “Set variable” action without a new value', () => {
+    const state = [
+      { name: 'value', type: 'string' as const, initial: 'hello' },
+      { name: 'items', type: 'array' as const, initial: [] },
+    ];
+    const button = (steps: ActionStep[]): NodeTemplate => ({ type: 'Button', text: 'Go', events: { onClick: steps } });
+    const ok = doc([button([step({ type: 'setState', state: 'value', value: "''" }), step({ type: 'setState', state: 'items', value: 'undefined' })])], { state });
+    expect(only(ok.project, 'set-state-value')).toEqual([]);
+    const bad = doc(
+      [
+        button([
+          step({ type: 'setState', state: 'value', value: '' }),
+          step({ type: 'if', condition: 'true', then: [step({ type: 'setState', state: 'items', value: '  ' })], else: [] }),
+          // A missing variable is reported as unknown-state only.
+          step({ type: 'setState', state: '', value: '' }),
+        ]),
+      ],
+      { state },
+    );
+    const issues = only(bad.project, 'set-state-value');
+    expect(issues.map((i) => [i.severity, i.field, i.subject])).toEqual([
+      ['warning', 'event:onClick', 'value'],
+      ['warning', 'event:onClick', 'items'],
+    ]);
+    expect(issues[0].message).toContain("''");
+    expect(issues[1].message).toContain('[]');
+  });
+
   it('warns that refreshObjectProperties is skipped outside CRM cards', () => {
     const content: NodeTemplate[] = [{ type: 'Button', text: 'R', events: { onClick: [step({ type: 'refreshObjectProperties' })] } }];
     expect(only(doc(content).project, 'refresh-unsupported')).toEqual([]);
@@ -525,6 +553,59 @@ describe('node rules', () => {
     const unknown = only(bad.project, 'unknown-name');
     expect(unknown.map((i) => i.message.match(/“(\w+)”/)?.[1])).toEqual(['cuont', 'setCount', 'value', 'actions', 'error']);
     expect(unknown.every((i) => i.severity === 'warning')).toBe(true);
+  });
+
+  it('suggests the closest name in scope for a misspelt name (did you mean)', () => {
+    const state = [
+      { name: 'count', type: 'number' as const, initial: 0 },
+      { name: 'total', type: 'number' as const, initial: 0 },
+    ];
+    const dataSources: DataSource[] = [{ id: 'd_c', kind: 'crmProperties', name: 'record', properties: ['email'] }];
+    const { project } = doc(
+      [
+        { type: 'Text', text: 'Email: {{ recrd.email }} {{ cuont }} {{ Record }} {{ Mth.max(1, 2) }} {{ ture }} {{ setCuont }} {{ zzzzzz }}' },
+        {
+          type: 'Flex',
+          repeat: { items: 'record.tags ?? []', itemName: 'tag', indexName: 'i' },
+          children: [{ type: 'Text', text: '{{ tga }}' }],
+        },
+        {
+          type: 'Button',
+          text: 'x',
+          events: { onClick: [step({ type: 'custom', code: 'setCuont(1); actoins.addAlert({ message: "x" });' })] },
+        },
+      ],
+      { state, dataSources },
+    );
+    const unknown = only(project, 'unknown-name');
+    const byName = new Map(unknown.map((i) => [i.subject, i]));
+    expect(byName.get('recrd')?.suggestion).toBe('record');
+    expect(byName.get('recrd')?.message).toBe('Unknown name “recrd” in the text. Did you mean “record”?');
+    expect(byName.get('cuont')?.suggestion).toBe('count'); // transposition counts as one edit
+    expect(byName.get('Record')?.suggestion).toBe('record'); // case-only difference
+    expect(byName.get('Mth')?.suggestion).toBe('Math'); // globals
+    expect(byName.get('ture')?.suggestion).toBe('true');
+    expect(byName.get('tga')?.suggestion).toBe('tag'); // repeat item in scope
+    expect(byName.get('actoins')?.suggestion).toBe('actions'); // custom-code names
+    // Setters are only in scope in handlers: no suggestion in render text, one in custom code.
+    const setters = unknown.filter((i) => i.subject === 'setCuont');
+    expect(setters.map((i) => i.suggestion ?? null).sort()).toEqual(['setCount', null].sort());
+    const far = byName.get('zzzzzz');
+    expect(far?.suggestion).toBeUndefined();
+    expect(far?.message).toContain('Check the spelling');
+  });
+
+  it('does not suggest names that are out of scope where the name is used', () => {
+    const dataSources: DataSource[] = [
+      { id: 'd_f', kind: 'fetch', name: 'api', url: 'https://api.example.com/{{ totl }}', method: 'GET', runOnMount: true },
+    ];
+    const { project } = doc([{ type: 'Text', text: '{{ totl }}' }], { dataSources, computed: [{ id: 'c_1', name: 'total', expr: '1 + 1' }] });
+    const issues = validateProject(project);
+    // Data sources load before computed values: the computed `total` is no candidate there.
+    const inSource = issues.find((i) => i.rule === 'unknown-name' && i.field === 'dataSource:d_f');
+    expect(inSource?.suggestion).toBeUndefined();
+    const inText = issues.find((i) => i.rule === 'unknown-name' && i.field === 'text');
+    expect(inText?.suggestion).toBe('total');
   });
 });
 
@@ -594,10 +675,9 @@ describe('state and data rules', () => {
     );
     expect(issues.filter((i) => i.rule === 'data-source-properties').map((i) => i.field)).toEqual(['dataSource:d1']);
     expect(issues.filter((i) => i.rule === 'data-source-config').map((i) => i.field)).toEqual(['dataSource:d2']);
-    expect(issues.filter((i) => i.rule === 'fetch-url').map((i) => [i.field, i.severity])).toEqual([
-      ['dataSource:d3', 'warning'],
-      ['dataSource:d4', 'warning'],
-    ]);
+    expect(issues.filter((i) => i.rule === 'fetch-url').map((i) => [i.field, i.severity])).toEqual([['dataSource:d3', 'warning']]);
+    // A host built from an expression can't be permitted automatically.
+    expect(issues.filter((i) => i.rule === 'dynamic-url-origin').map((i) => [i.field, i.severity])).toEqual([['dataSource:d4', 'warning']]);
   });
 
   it('warns about record data sources outside CRM cards', () => {
@@ -646,6 +726,56 @@ describe('state and data rules', () => {
     expect(only(doc([], { helpers: 'function money(v { }' }).project, 'helpers-syntax')).toHaveLength(1);
   });
 
+  it('only allows app functions in private apps with static auth (HubSpot component catalog)', () => {
+    const { project } = doc([{ type: 'Text', text: 'x' }], { functions: [fn('f1', 'get_quote'), fn('f2', 'get_tax')] });
+    project.app.redirectUrls = ['https://example.com/oauth'];
+    expect(only(project, 'function-app-type')).toEqual([]);
+    expect(appFunctionsUnsupported(project)).toBeNull();
+
+    project.app.authType = 'oauth';
+    let issues = only(project, 'function-app-type');
+    expect(issues.map((i) => [i.severity, i.field])).toEqual([
+      ['error', 'function:f1'],
+      ['error', 'function:f2'],
+    ]);
+    expect(issues[0].message).toMatch(/static token auth/);
+
+    project.app.distribution = 'marketplace';
+    issues = only(project, 'function-app-type');
+    expect(issues).toHaveLength(2);
+    expect(issues[0].message).toMatch(/marketplace apps/);
+    expect(rules(validateProject(project))).not.toContain('marketplace-auth');
+
+    // Platform 2025.2 offered (endpoint) functions to OAuth private apps too.
+    project.app.distribution = 'private';
+    project.platformVersion = '2025.2';
+    expect(only(project, 'function-app-type')).toEqual([]);
+    project.functions = [];
+    project.app.authType = 'oauth';
+    project.platformVersion = '2026.03';
+    expect(only(project, 'function-app-type')).toEqual([]);
+  });
+
+  it('warns that platform 2025.2 only has endpoint functions and no hubspot.serverless', () => {
+    const withEndpoint = (f: AppFunction): AppFunction => ({ ...f, endpoint: { path: '/api/quote', methods: ['GET'] } });
+    const { project } = doc(
+      [{ type: 'Button', text: 'Go', events: { onClick: [step({ type: 'runFunction', functionId: 'f_called' })] } }],
+      { functions: [fn('f_private', 'private_fn'), withEndpoint(fn('f_endpoint', 'endpoint_fn')), withEndpoint(fn('f_called', 'called_fn'))] },
+    );
+    expect(only(project, 'function-platform')).toEqual([]);
+    project.platformVersion = '2025.2';
+    const issues = only(project, 'function-platform');
+    expect(issues.map((i) => [i.severity, i.field])).toEqual([
+      ['warning', 'function:f_private'],
+      ['warning', 'function:f_called'],
+    ]);
+    expect(issues[0].message).toMatch(/no endpoint/);
+    expect(issues[1].message).toMatch(/hubspot\.serverless/);
+    // A function data source counts as running it from a card too.
+    project.extensions[0].dataSources = [{ id: 'd_fn', kind: 'function', name: 'quote', functionId: 'f_endpoint', runOnMount: true }];
+    expect(only(project, 'function-platform').map((i) => i.field)).toContain('function:f_endpoint');
+  });
+
   it('checks app functions', () => {
     const good = doc([], { functions: [fn('f1', 'get_quote')] });
     expect(validateProject(good.project).filter((i) => i.field?.startsWith('function:'))).toEqual([]);
@@ -657,6 +787,39 @@ describe('state and data rules', () => {
     expect(issues.find((i) => i.rule === 'function-syntax')?.field).toBe('function:f1');
     expect(issues.find((i) => i.rule === 'function-main')?.field).toBe('function:f2');
     expect(issues.find((i) => i.rule === 'invalid-file-name')?.field).toBe('function:f3');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Suggestions
+// ---------------------------------------------------------------------------
+
+describe('closestName / editDistance', () => {
+  it('measures optimal string alignment distance with a cutoff', () => {
+    expect(editDistance('record', 'record')).toBe(0);
+    expect(editDistance('recrd', 'record')).toBe(1);
+    expect(editDistance('cuont', 'count')).toBe(1);
+    expect(editDistance('kitten', 'sitting')).toBe(3);
+    expect(editDistance('a', 'abcdef', 2)).toBe(3);
+    expect(editDistance('abcdef', 'uvwxyz', 1)).toBe(2);
+  });
+
+  it('picks one unambiguous close name', () => {
+    expect(closestName('recrd', ['count', 'record', 'recordLoading'])).toBe('record');
+    expect(closestName('COUNT', ['count'])).toBe('count');
+    // Short names only match case-insensitively; 3–5 characters allow one edit, longer two.
+    expect(closestName('ab', ['abc'])).toBeUndefined();
+    expect(closestName('Id', ['id'])).toBe('id');
+    expect(closestName('cnt', ['count'])).toBeUndefined();
+    expect(closestName('amonut', ['amount'])).toBe('amount');
+    expect(closestName('dealAmont', ['dealAmount'])).toBe('dealAmount');
+    // Case is an edit unless it is the only difference.
+    expect(closestName('data', ['Date'])).toBeUndefined();
+    // Ties are ambiguous: no guess.
+    expect(closestName('cout', ['cost', 'coat'])).toBeUndefined();
+    // Sharing the first letter breaks a tie.
+    expect(closestName('cout', ['count', 'bout'])).toBe('count');
+    expect(closestName('', ['a'])).toBeUndefined();
   });
 });
 
@@ -728,5 +891,112 @@ describe('performance', () => {
     runs.sort((a, b) => a - b);
     // Target is < 20 ms; the bound is generous for slow CI machines.
     expect(runs[2]).toBeLessThan(100);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Integration rules (deploy / UX review)
+// ---------------------------------------------------------------------------
+
+describe('deploy safety rules', () => {
+  it('reports context.crm on settings and app home pages only', () => {
+    const content: NodeTemplate[] = [{ type: 'Text', text: 'Record {{ context.crm.objectId }}' }];
+    expect(only(doc(content).project, 'context-location')).toEqual([]);
+    for (const kind of ['settings', 'home'] as const) {
+      const issues = only(doc(content, { kind }).project, 'context-location');
+      expect(issues).toHaveLength(1);
+      expect(issues[0].severity).toBe('error');
+      expect(issues[0].message).toContain('only exists on app cards');
+    }
+    // Custom code and computed values are checked too; other context members are fine.
+    const custom = doc([{ type: 'Button', text: 'Go', events: { onClick: [step({ type: 'custom', code: 'const id = context?.crm.objectId;' })] } }], {
+      kind: 'settings',
+      computed: [{ id: 'c1', name: 'who', expr: 'context.user.email' }],
+    });
+    expect(only(custom.project, 'context-location')).toHaveLength(1);
+  });
+
+  it('warns about reading fetch / function data before it has loaded', () => {
+    const ds: DataSource[] = [{ id: 'd1', kind: 'fetch', name: 'weather', url: 'https://api.example.com/w', method: 'GET', runOnMount: true }];
+    const unguarded = doc([{ type: 'Text', text: 'Now {{ weather.temperature }}' }], { dataSources: ds });
+    const issues = only(unguarded.project, 'unguarded-async-data');
+    expect(issues).toHaveLength(1);
+    expect(issues[0].message).toContain('weather?.temperature');
+    // Optional chaining, an in-expression check or a guarding condition are fine.
+    expect(only(doc([{ type: 'Text', text: 'Now {{ weather?.temperature }}' }], { dataSources: ds }).project, 'unguarded-async-data')).toEqual([]);
+    expect(only(doc([{ type: 'Text', text: '{{ weather && weather.temperature }}' }], { dataSources: ds }).project, 'unguarded-async-data')).toEqual([]);
+    expect(
+      only(doc([{ type: 'Flex', condition: '!weatherLoading && weather', children: [{ type: 'Text', text: '{{ weather.temperature }}' }] }], { dataSources: ds }).project, 'unguarded-async-data'),
+    ).toEqual([]);
+    // Computed values render first too; handlers run later and are not flagged.
+    expect(only(doc([], { dataSources: ds, computed: [{ id: 'c1', name: 't', expr: 'weather.temperature * 2' }] }).project, 'unguarded-async-data')).toHaveLength(1);
+    const handler = doc([{ type: 'Button', text: 'Go', events: { onClick: [step({ type: 'log', level: 'info', message: '{{ weather.temperature }}' })] } }], { dataSources: ds });
+    expect(only(handler.project, 'unguarded-async-data')).toEqual([]);
+    // CRM record properties are {} while loading, so reading a property is safe.
+    const crm: DataSource[] = [{ id: 'd1', kind: 'crmProperties', name: 'record', properties: ['email'] }];
+    expect(only(doc([{ type: 'Text', text: '{{ record.email }}' }], { dataSources: crm }).project, 'unguarded-async-data')).toEqual([]);
+  });
+
+  it('suggests the origin of a request whose host comes from a variable', () => {
+    const base = doc([{ type: 'Button', text: 'Go', events: { onClick: [step({ type: 'fetch', url: '{{ apiBase }}/items', method: 'GET' })] } }], {
+      state: [{ name: 'apiBase', type: 'string', initial: 'https://api.acme.io' }],
+    });
+    const issues = only(base.project, 'dynamic-url-origin');
+    expect(issues).toHaveLength(1);
+    expect(issues[0].subject).toBe('https://api.acme.io');
+    expect(issues[0].id.split('|').slice(4).join('|')).toMatch(/^fetch:/);
+    expect(only(base.project, 'fetch-url')).toEqual([]);
+    base.project.app.permittedUrls.fetch = ['https://api.acme.io'];
+    expect(only(base.project, 'dynamic-url-origin')).toEqual([]);
+    // Images report the img kind.
+    const img = doc([{ type: 'Image', props: { src: '{{ logo }}', alt: 'Logo' } }], { state: [{ name: 'logo', type: 'string', initial: 'https://cdn.acme.io/logo.png' }] });
+    const imgIssues = only(img.project, 'dynamic-url-origin');
+    expect(imgIssues.map((i) => [i.field, i.subject])).toEqual([['src', 'https://cdn.acme.io']]);
+    expect(imgIssues[0].id).toContain('|img:');
+  });
+
+  it('flags likely typos of standard CRM properties but not custom ones', () => {
+    const ds = (properties: string[]): DataSource[] => [{ id: 'd1', kind: 'crmProperties', name: 'record', properties }];
+    const typo = only(doc([], { dataSources: ds(['email', 'lifecyclestag']) }).project, 'data-source-properties');
+    expect(typo.map((i) => [i.subject, i.suggestion])).toEqual([['lifecyclestag', 'lifecyclestage']]);
+    expect(only(doc([], { dataSources: ds(['email', 'my_custom_score']) }).project, 'data-source-properties')).toEqual([]);
+  });
+
+  it('checks endpoint paths of app functions', () => {
+    const withPath = (path: string, methods: AppFunction['endpoint'] extends infer E ? (E extends { methods: infer M } ? M : never) : never = ['GET']) => {
+      const f = fn('f1', 'status_fn', 'exports.main = async () => ({ statusCode: 200 });');
+      f.endpoint = { path, methods };
+      return doc([], { functions: [f] }).project;
+    };
+    expect(only(withPath('/api/status'), 'endpoint-path')).toEqual([]);
+    expect(only(withPath('api/status'), 'endpoint-path')).toEqual([]);
+    expect(only(withPath('/api/'), 'endpoint-path').map((i) => i.severity)).toEqual(['error']);
+    expect(only(withPath(''), 'endpoint-path').map((i) => i.severity)).toEqual(['error']);
+    expect(only(withPath('/ok', []), 'endpoint-path').map((i) => i.severity)).toEqual(['warning']);
+  });
+
+  it('warns when “Copy to clipboard” has nothing to copy', () => {
+    const p = doc([{ type: 'Button', text: 'Copy', events: { onClick: [step({ type: 'copyToClipboard', text: '' })] } }]).project;
+    expect(only(p, 'empty-copy').map((i) => i.severity)).toEqual(['warning']);
+  });
+
+  it('warns when “Set variable” stores a value of another type', () => {
+    const state: DocOptions['state'] = [
+      { name: 'name', type: 'string', initial: '' },
+      { name: 'count', type: 'number', initial: 0 },
+    ];
+    const set = (value: string, target = 'name') =>
+      only(doc([{ type: 'Button', text: 'Go', events: { onClick: [step({ type: 'setState', state: target, value })] } }], { state }).project, 'set-state-type');
+    expect(set('count + 1')).toHaveLength(1);
+    expect(set('count + 1')[0].message).toContain('String(');
+    expect(set("'Ada'")).toEqual([]);
+    expect(set('String(count)')).toEqual([]);
+    expect(set('count + 1', 'count')).toEqual([]);
+    expect(set('null')).toEqual([]);
+    // The event param `value` of an input shadows a state variable of that name.
+    const shadow = doc([{ type: 'Input', props: { label: 'N', name: 'n' }, events: { onChange: [step({ type: 'setState', state: 'name', value: 'value' })] } }], {
+      state: [...state, { name: 'value', type: 'number', initial: 0 }],
+    });
+    expect(only(shadow.project, 'set-state-type')).toEqual([]);
   });
 });

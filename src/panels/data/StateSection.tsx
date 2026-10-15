@@ -156,7 +156,7 @@ function StateRow({
           </Field>
           <div className="ub-pn-hint">
             Show it with <Snippet code={`{{ ${v.name} }}`} /> in text, use <Snippet code={v.name} /> in expressions, and set it with a
-            “Set state” action or <Snippet code={`${setterOf(v.name)}(…)`} /> in custom code.
+            “Set variable” action or <Snippet code={`${setterOf(v.name)}(…)`} /> in custom code.
           </div>
           <div className="ub-pn-row ub-pn-row--end">
             <DeleteGuard ext={ext} name={v.name} noun="variable" onDelete={() => useEditor.getState().removeStateVar(v.id)} />

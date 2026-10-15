@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Search } from 'lucide-react';
+import { useCanvasView } from '../canvas/stores';
 import { useEditor } from '../model/store';
 import { BLOCK_TEMPLATES } from '../templates/catalog';
 import { useUserBlocks } from '../templates/userBlocks';
@@ -80,6 +81,7 @@ function PaletteDialog() {
   const mode = useEditor((s) => s.mode);
   const past = useEditor((s) => s.past);
   const future = useEditor((s) => s.future);
+  const zoom = useCanvasView((s) => s.zoom);
   const userBlocks = useUserBlocks();
 
   const blocks = useMemo<PaletteBlock[]>(
@@ -98,8 +100,8 @@ function PaletteDialog() {
     [userBlocks],
   );
   const commands = useMemo(
-    () => buildCommands({ state: { project, activeExtensionId, selectedNodeId, mode, past, future }, blocks }),
-    [project, activeExtensionId, selectedNodeId, mode, past, future, blocks],
+    () => buildCommands({ state: { project, activeExtensionId, selectedNodeId, mode, past, future }, blocks, zoom }),
+    [project, activeExtensionId, selectedNodeId, mode, past, future, blocks, zoom],
   );
 
   const [recent, setRecent] = useState<string[]>(readRecent);

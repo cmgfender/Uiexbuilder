@@ -24,6 +24,11 @@ export const CHROME_ATTR = 'data-cv-chrome';
 export const CARD_ROOT_ATTR = 'data-cv-card-root';
 /** Storyboard frame bodies (overlay content rendered inline). */
 export const STORYBOARD_ATTR = 'data-cv-storyboard';
+/**
+ * Frame text around the card (card title, app caption, record tabs, storyboard titles) that the
+ * selection chrome should avoid covering, like the components themselves.
+ */
+export const OBSTACLE_ATTR = 'data-cv-obstacle';
 
 export function toRect(r: DOMRect | Rect): Rect {
   return { left: r.left, top: r.top, width: r.width, height: r.height };

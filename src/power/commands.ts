@@ -20,10 +20,12 @@ import {
   Layers,
   LayoutPanelTop,
   LayoutTemplate,
+  Maximize2,
   Navigation,
   Package,
   Plus,
   Redo2,
+  ScanSearch,
   Settings,
   Sigma,
   SquareFunction,
@@ -35,10 +37,13 @@ import {
   Variable,
   Puzzle,
   ArrowRightLeft,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
-import * as shortcutsModule from '../shell/shortcuts';
-import { useDialogs, type DialogName } from '../shell/dialogs';
+import { MAX_ZOOM, MIN_ZOOM, nextZoom, useCanvasView } from '../canvas/stores';
 import { generateNodeJsx } from '../codegen';
+import { smartInsertTarget } from '../dnd/dragState';
+import { availableActionKinds, createStep, eventWhen, type ActionContext } from '../inspector/actionModel';
 import { canAccept, isAvailableIn } from '../model/rules';
 import { selectActiveExtension, useEditor, type EditorState } from '../model/store';
 import { buildParentIndex, findParent, nodeLabel, walk } from '../model/tree';
@@ -46,24 +51,18 @@ import type { DataSourceKind, Extension, ExtensionKind, NodeId, NodeTemplate, St
 import { addDataSourceOfKind } from '../panels/actions';
 import { DATA_SOURCE_KINDS } from '../panels/dataSourceMeta';
 import { getComponent, listComponents } from '../registry';
-import * as templateActions from '../templates/actions';
-import {
-  copyToClipboard,
-  explainNoTarget,
-  goToNode,
-  insertBlock as insertBlockFallback,
-  insertComponent,
-  insertTargetFor,
-  showBottomPanel,
-  showLeftPanel,
-  type Notify,
-} from './actions';
+import { explainNoTarget, historyStep, insertComponent, paletteInsertTarget } from '../shell/actions';
+import { useDialogs, type DialogName } from '../shell/dialogs';
+import { showRightTab } from '../shell/shellStore';
+import { formatShortcut, SHORTCUTS } from '../shell/shortcuts';
+import { insertBlock } from '../templates/actions';
+import { copyToClipboard, ensureDesignMode, goToNode, showBottomPanel, showLeftPanel, type Notify } from './actions';
 import { usePowerUi } from './uiStore';
 
-export type CommandGroup = 'Actions' | 'Insert' | 'Blocks' | 'Go to' | 'Extensions' | 'Data' | 'View' | 'Project';
+export type CommandGroup = 'Actions' | 'Events' | 'Insert' | 'Blocks' | 'Go to' | 'Extensions' | 'Data' | 'View' | 'Project';
 
 /** Display order of groups when the query is empty (search results are ordered by score). */
-export const GROUP_ORDER: CommandGroup[] = ['Actions', 'Data', 'View', 'Project', 'Extensions', 'Blocks', 'Insert', 'Go to'];
+export const GROUP_ORDER: CommandGroup[] = ['Actions', 'Data', 'View', 'Project', 'Extensions', 'Events', 'Blocks', 'Insert', 'Go to'];
 
 export interface CommandEnv {
   /** Shows a short message (toast). */
@@ -103,27 +102,18 @@ export interface PaletteBlock {
 export interface CommandSources {
   state: Pick<EditorState, 'project' | 'activeExtensionId' | 'selectedNodeId' | 'mode' | 'past' | 'future'>;
   blocks: PaletteBlock[];
+  /** Canvas zoom (1 = 100%); defaults to the canvas view store's current zoom. */
+  zoom?: number;
 }
 
 // ---------------------------------------------------------------------------
 // Shortcut hints (the shell module documents every binding in SHORTCUTS)
 // ---------------------------------------------------------------------------
 
-interface ShortcutsApi {
-  SHORTCUTS?: Array<{ id: string; keys: string }>;
-  formatShortcut?: (keys: string) => string;
-}
-const shortcutsApi = shortcutsModule as unknown as ShortcutsApi;
-
 /** Formatted shortcut of a SHORTCUTS id, or undefined when the shell does not define it. */
 export function shortcutHint(id: string): string | undefined {
-  const def = Array.isArray(shortcutsApi.SHORTCUTS) ? shortcutsApi.SHORTCUTS.find((s) => s.id === id) : undefined;
-  if (!def) return undefined;
-  try {
-    return typeof shortcutsApi.formatShortcut === 'function' ? shortcutsApi.formatShortcut(def.keys) : def.keys;
-  } catch {
-    return def.keys;
-  }
+  const def = SHORTCUTS.find((s) => s.id === id);
+  return def ? formatShortcut(def.keys) : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -224,7 +214,7 @@ function selectionCommands(ext: Extension, selected: NodeId | null): Command[] {
       group: 'Actions',
       icon: ClipboardCopy,
       subtitle,
-      keywords: ['code', 'tsx', 'clipboard', 'export', 'react'],
+      keywords: ['copy code', 'code', 'jsx', 'tsx', 'snippet', 'markup', 'clipboard', 'export', 'react'],
       disabledReason: !node ? noSelection : undefined,
       run: async ({ notify }) => {
         const { project } = useEditor.getState();
@@ -251,7 +241,7 @@ function generalCommands(src: CommandSources, ext: Extension): Command[] {
       shortcut: shortcutHint('undo'),
       keywords: ['back', 'revert'],
       disabledReason: state.past.length ? undefined : 'Nothing to undo',
-      run: () => useEditor.getState().undo(),
+      run: ({ notify }) => historyStep('undo', notify),
     },
     {
       id: 'action:redo',
@@ -261,7 +251,7 @@ function generalCommands(src: CommandSources, ext: Extension): Command[] {
       shortcut: shortcutHint('redo'),
       keywords: ['again', 'forward'],
       disabledReason: state.future.length ? undefined : 'Nothing to redo',
-      run: () => useEditor.getState().redo(),
+      run: ({ notify }) => historyStep('redo', notify),
     },
     {
       id: 'action:togglePreview',
@@ -284,16 +274,17 @@ function insertCommands(ext: Extension, selected: NodeId | null): Command[] {
   const out: Command[] = [];
   for (const def of listComponents()) {
     if (def.hiddenFromPalette || def.deprecated || !isAvailableIn(def, ext)) continue;
-    const target = insertTargetFor(ext, selected, def.type);
+    const target = paletteInsertTarget(ext, selected, def.type);
     out.push({
       id: `insert:${def.type}`,
       title: `Insert ${def.label}`,
       group: 'Insert',
       icon: def.icon,
       subtitle: def.description,
-      keywords: [def.type, def.category, 'add', 'component', ...(def.keywords ?? [])],
+      keywords: [def.type, def.category, 'add', 'new', 'component', ...(def.keywords ?? [])],
       disabledReason: target ? undefined : explainNoTarget(ext, def.type),
       run: ({ notify }) => {
+        ensureDesignMode();
         insertComponent(def.type, notify);
       },
     });
@@ -301,36 +292,28 @@ function insertCommands(ext: Extension, selected: NodeId | null): Command[] {
   return out;
 }
 
-type BlockFlow = (
-  template: NodeTemplate,
-  state: Array<Omit<StateVar, 'id'>> | undefined,
-  label: string,
-) => { ok: boolean; message: string };
-
-/** The templates module's block insertion (single undo step, unique overlay ids) when available. */
-const templateInsertBlock = (templateActions as unknown as { insertBlock?: unknown }).insertBlock;
-
+/**
+ * Inserts a block (template subtree) with the state it needs in one undo step, at the smart
+ * target (into / after the selection), through the templates module like the canvas does.
+ */
 export function runInsertBlock(block: PaletteBlock, notify: Notify): void {
-  if (useEditor.getState().mode !== 'design') useEditor.getState().setMode('design');
-  if (typeof templateInsertBlock === 'function') {
-    const res = (templateInsertBlock as BlockFlow)(block.template, block.state, block.name);
-    if (res && typeof res.message === 'string' && res.message) notify(res.message);
-    return;
-  }
-  insertBlockFallback({ template: block.template, label: block.name, state: block.state }, notify);
+  ensureDesignMode();
+  const res = insertBlock(block.template, block.state, block.name);
+  if (res.message) notify(res.message);
 }
 
 function blockCommands(blocks: PaletteBlock[], ext: Extension, selected: NodeId | null): Command[] {
   return blocks.map((b) => {
     const def = getComponent(b.template.type);
-    const target = def && isAvailableIn(def, ext) ? insertTargetFor(ext, selected, b.template.type) : null;
+    // The same target the templates module's insertBlock uses (into / after the selection).
+    const target = def && isAvailableIn(def, ext) ? smartInsertTarget(ext, selected, b.template.type) : null;
     return {
       id: `${b.user ? 'userblock' : 'block'}:${b.id}`,
       title: `Insert block: ${b.name}`,
       group: 'Blocks' as const,
       icon: b.icon ?? (b.user ? Puzzle : Blocks),
       subtitle: b.user ? 'Saved block' : b.description,
-      keywords: ['block', 'template', 'snippet', ...(b.keywords ?? [])],
+      keywords: ['block', 'template', 'snippet', 'insert', ...(b.keywords ?? [])],
       disabledReason: target ? undefined : `“${b.name}” can't be added here`,
       run: ({ notify }) => runInsertBlock(b, notify),
     };
@@ -366,6 +349,7 @@ function goToCommands(ext: Extension): Command[] {
 
 function extensionCommands(src: CommandSources): Command[] {
   const { project, activeExtensionId } = src.state;
+  const active = project.extensions.find((e) => e.id === activeExtensionId);
   const out: Command[] = [];
   for (const e of project.extensions) {
     if (e.id === activeExtensionId) continue;
@@ -417,17 +401,45 @@ function extensionCommands(src: CommandSources): Command[] {
       run: ({ notify }) => add('home', notify),
     },
     {
+      id: 'ext:duplicate',
+      title: active?.kind === 'card' ? 'Duplicate this card' : 'Duplicate this extension',
+      group: 'Extensions',
+      icon: CopyPlus,
+      subtitle: active ? `Opens a copy of “${active.name}”` : undefined,
+      keywords: ['copy', 'clone', 'duplicate card', 'extension', 'card'],
+      disabledReason: !active
+        ? 'There is no extension to duplicate'
+        : active.kind !== 'card'
+          ? `A project can only have one ${KIND_LABELS[active.kind].toLowerCase()}`
+          : undefined,
+      run: ({ notify }) => {
+        if (!active) return;
+        const id = useEditor.getState().duplicateExtension(active.id);
+        if (!id) return;
+        notify(`Duplicated “${active.name}” as “${selectActiveExtension(useEditor.getState()).name}”`);
+      },
+    },
+    {
       id: 'dialog:extensionSettings',
       title: 'Manage extensions',
       group: 'Extensions',
       icon: ArrowRightLeft,
-      subtitle: 'Rename, move or remove cards and pages',
-      keywords: ['extensions', 'cards', 'rename', 'remove', 'location'],
+      subtitle: 'Rename, duplicate, move or remove cards and pages',
+      keywords: ['extensions', 'cards', 'rename', 'duplicate', 'remove', 'delete', 'location'],
       run: () => openDialog('extensionSettings'),
     },
   );
   return out;
 }
+
+/** Search words per data source kind (only the API source matches "fetch"). */
+const DATA_SOURCE_KEYWORDS: Partial<Record<DataSourceKind, string[]>> = {
+  crmProperties: ['crmProperties', 'record', 'properties', 'fields', 'useCrmProperties'],
+  associations: ['associations', 'associated', 'related', 'useAssociations'],
+  crmSearch: ['crmSearch', 'search', 'query', 'filter', 'list', 'useCrmSearch'],
+  fetch: ['fetch', 'api', 'http', 'rest', 'url', 'request', 'external', 'hubspot.fetch'],
+  function: ['function', 'serverless', 'backend', 'server', 'hubspot.serverless'],
+};
 
 function dataCommands(ext: Extension): Command[] {
   const crm = ext.kind === 'card';
@@ -438,7 +450,7 @@ function dataCommands(ext: Extension): Command[] {
       group: 'Data',
       icon: Variable,
       subtitle: 'A value that changes while the card is open',
-      keywords: ['useState', 'variable', 'new'],
+      keywords: ['useState', 'variable', 'new variable', 'new', 'state', 'value', 'store'],
       run: ({ notify }) => {
         const v = useEditor.getState().addStateVar({ name: 'value', type: 'string', initial: '' });
         showLeftPanel('data');
@@ -453,7 +465,7 @@ function dataCommands(ext: Extension): Command[] {
       group: 'Data',
       icon: info.icon ?? Database,
       subtitle: info.description,
-      keywords: ['data', 'source', 'fetch', 'load', info.kind],
+      keywords: ['data', 'source', 'load', 'new', ...(DATA_SOURCE_KEYWORDS[info.kind] ?? [info.kind])],
       disabledReason: info.crmOnly && !crm ? 'Only available on app cards (CRM records)' : undefined,
       run: ({ notify }) => {
         showLeftPanel('data');
@@ -469,7 +481,7 @@ function dataCommands(ext: Extension): Command[] {
       group: 'Data',
       icon: Sigma,
       subtitle: 'Derive a value from state and data',
-      keywords: ['derived', 'formula', 'calculate', 'expression', 'new'],
+      keywords: ['computed', 'derived', 'formula', 'calculate', 'expression', 'new', 'useMemo'],
       run: () => {
         const c = useEditor.getState().addComputed();
         showLeftPanel('data');
@@ -492,7 +504,7 @@ function dataCommands(ext: Extension): Command[] {
   return out;
 }
 
-function viewCommands(): Command[] {
+function viewCommands(zoom: number): Command[] {
   const bottom = (id: 'code' | 'problems' | 'console', title: string, icon: LucideIcon, keywords: string[]): Command => ({
     id: `view:${id}`,
     title,
@@ -525,7 +537,95 @@ function viewCommands(): Command[] {
     left('layers', 'Show layers', Layers, 'tabLayers', ['tree', 'outline', 'hierarchy']),
     left('templates', 'Show templates', LayoutTemplate, 'tabTemplates', ['blocks', 'starters']),
     left('data', 'Show data', Database, 'tabData', ['state', 'data sources', 'computed', 'helpers', 'mock']),
+    ...zoomCommands(zoom),
   ];
+}
+
+const pct = (z: number) => `${Math.round(z * 100)}%`;
+
+function zoomCommands(zoom: number): Command[] {
+  const view = () => useCanvasView.getState();
+  const now = `The canvas is at ${pct(zoom)}`;
+  return [
+    {
+      id: 'view:zoomIn',
+      title: 'Zoom in',
+      group: 'View',
+      icon: ZoomIn,
+      subtitle: now,
+      keywords: ['zoom', 'bigger', 'larger', 'magnify', 'enlarge', 'canvas', 'scale'],
+      disabledReason: zoom >= MAX_ZOOM - 0.001 ? `Already at the largest zoom (${pct(MAX_ZOOM)})` : undefined,
+      run: () => view().setZoom(nextZoom(view().zoom, 1)),
+    },
+    {
+      id: 'view:zoomOut',
+      title: 'Zoom out',
+      group: 'View',
+      icon: ZoomOut,
+      subtitle: now,
+      keywords: ['zoom', 'smaller', 'shrink', 'canvas', 'scale'],
+      disabledReason: zoom <= MIN_ZOOM + 0.001 ? `Already at the smallest zoom (${pct(MIN_ZOOM)})` : undefined,
+      run: () => view().setZoom(nextZoom(view().zoom, -1)),
+    },
+    {
+      id: 'view:zoomReset',
+      title: 'Zoom to 100%',
+      group: 'View',
+      icon: ScanSearch,
+      subtitle: now,
+      keywords: ['zoom', 'reset zoom', 'actual size', '100', 'canvas', 'scale'],
+      disabledReason: Math.abs(zoom - 1) < 0.001 ? 'The canvas is already at 100%' : undefined,
+      run: () => view().setZoom(1),
+    },
+    {
+      id: 'view:zoomFit',
+      title: 'Zoom to fit width',
+      group: 'View',
+      icon: Maximize2,
+      subtitle: 'Scale the card so it fits the canvas',
+      keywords: ['zoom', 'fit', 'fit to width', 'canvas', 'scale', 'screen'],
+      run: () => view().requestFit(),
+    },
+  ];
+}
+
+/**
+ * "Add action: …" for the selected component: appends a step (with the inspector's smart
+ * defaults) to its first event — the click of a button, the change of an input — and opens the
+ * Events tab to configure it. Listed (disabled, with the reason) when nothing with events is
+ * selected, so searching "fetch" or "alert" still explains how to get there.
+ */
+function eventCommands(ext: Extension, selected: NodeId | null): Command[] {
+  const node = selected ? ext.nodes[selected] : undefined;
+  const def = node ? getComponent(node.type) : undefined;
+  const ev = def?.events?.[0];
+  const label = node ? nodeTitle(ext, node.id) : '';
+  const disabledReason = !node
+    ? 'Select a button, input or other interactive component first'
+    : !ev
+      ? `${typeLabel(node.type)} has no events — select a button, link or input`
+      : undefined;
+  const subtitle = node && ev ? `${eventWhen(ev.label)} — ${label}${def!.events!.length > 1 ? ` (${ev.name})` : ''}` : undefined;
+  return availableActionKinds(ext).map((kind) => ({
+    id: `event:add:${kind.type}`,
+    title: `Add action: ${kind.label}`,
+    group: 'Events' as const,
+    icon: kind.icon,
+    subtitle: subtitle ?? kind.description,
+    keywords: ['action', 'event', 'handler', 'when', 'on click', kind.type, kind.group.toLowerCase(), ...(ev ? [ev.name] : [])],
+    disabledReason,
+    run: ({ notify }) => {
+      if (!node || !ev) return;
+      const editor = useEditor.getState();
+      const current = selectActiveExtension(editor);
+      const steps = current.nodes[node.id]?.events?.[ev.name] ?? [];
+      const ctx: ActionContext = { project: editor.project, ext: current, nodeId: node.id, eventParams: ev.params.map((p) => p.name) };
+      editor.setEvent(node.id, ev.name, [...steps, createStep(kind.type, ctx)]);
+      ensureDesignMode();
+      showRightTab('events');
+      notify(`Added “${kind.label}” to ${label} (${eventWhen(ev.label).toLowerCase()})`);
+    },
+  }));
 }
 
 function projectCommands(): Command[] {
@@ -554,12 +654,14 @@ export function buildCommands(src: CommandSources): Command[] {
   const ext = selectActiveExtension(src.state);
   if (!ext) return [];
   const selected = src.state.selectedNodeId && ext.nodes[src.state.selectedNodeId] ? src.state.selectedNodeId : null;
+  const zoom = src.zoom ?? useCanvasView.getState().zoom;
   return [
     ...generalCommands(src, ext),
     ...dataCommands(ext),
-    ...viewCommands(),
+    ...viewCommands(zoom),
     ...projectCommands(),
     ...extensionCommands(src),
+    ...eventCommands(ext, selected),
     ...blockCommands(src.blocks, ext, selected),
     ...insertCommands(ext, selected),
     ...goToCommands(ext),

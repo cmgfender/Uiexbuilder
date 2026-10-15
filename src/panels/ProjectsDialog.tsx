@@ -1,15 +1,10 @@
 /** Open saved projects, import a builder file (.uiex.json) or start a blank project. */
 import { useEffect, useRef, useState } from 'react';
 import { FilePlus2, FolderInput, FolderOpen, Trash2, TriangleAlert } from 'lucide-react';
-import {
-  deleteSavedProject,
-  listSavedProjects,
-  loadSavedProject,
-  parseProjectJson,
-  saveProject,
-  type ProjectSummary,
-} from '../model/persistence';
+import { deleteSavedProject, listSavedProjects, loadSavedProject, type ProjectSummary } from '../model/persistence';
 import { useEditor } from '../model/store';
+import { importMessage, importProjectFromText } from '../shell/importProject';
+import { saveCurrentProject } from '../shell/persistence';
 import { Badge, Button, Dialog, EmptyState, IconButton, useToast } from '../ui';
 import { Callout } from './common';
 import type { DialogComponentProps } from './dialogTypes';
@@ -25,8 +20,9 @@ export function ProjectsDialog({ open, onClose }: DialogComponentProps) {
 
   useEffect(() => {
     if (!open) return;
-    // Persist the current project first so the list (and switching back) is up to date.
-    saveProject(useEditor.getState().project);
+    // Persist the current project first so the list (and switching back) is up to date. Never
+    // overwrites a newer version another tab saved (the conflict dialog asks instead).
+    saveCurrentProject();
     setProjects(listSavedProjects());
     setConfirmId(null);
     setError(null);
@@ -36,8 +32,13 @@ export function ProjectsDialog({ open, onClose }: DialogComponentProps) {
 
   const refresh = () => setProjects(listSavedProjects());
 
+  const CONFLICT = 'The open project changed in another tab — choose which version to keep first (see the save status in the top bar).';
+
   const openProject = (id: string) => {
-    saveProject(useEditor.getState().project);
+    if (saveCurrentProject() === 'conflict') {
+      setError(CONFLICT);
+      return;
+    }
     const project = loadSavedProject(id);
     if (!project) {
       setError('This project could not be loaded — its saved data is missing or damaged.');
@@ -48,6 +49,9 @@ export function ProjectsDialog({ open, onClose }: DialogComponentProps) {
     onClose();
   };
 
+  // One import path for every import button (shell/importProject): saves the open project first,
+  // asks before replacing a different saved version of the same project (or imports a copy) and
+  // keeps code from the file untrusted.
   const importFile = async (file: File) => {
     setError(null);
     let text: string;
@@ -57,16 +61,13 @@ export function ProjectsDialog({ open, onClose }: DialogComponentProps) {
       setError(`Could not read ${file.name}.`);
       return;
     }
-    const parsed = parseProjectJson(text);
-    if (!parsed.ok) {
-      setError(`${file.name} is not a valid builder file: ${parsed.error}`);
+    const res = await importProjectFromText(text, { fileName: file.name });
+    if (!res.ok) {
+      setError(`Couldn’t import ${file.name}: ${res.error}`);
       return;
     }
-    saveProject(useEditor.getState().project);
-    useEditor.getState().loadProject(parsed.project);
-    saveProject(parsed.project);
-    toast(`Imported “${parsed.project.app.name}”`);
-    onClose();
+    toast(importMessage(res));
+    if (res.outcome !== 'cancelled') onClose();
   };
 
   return (
@@ -84,7 +85,10 @@ export function ProjectsDialog({ open, onClose }: DialogComponentProps) {
             variant="primary"
             icon={<FilePlus2 size={14} aria-hidden />}
             onClick={() => {
-              saveProject(useEditor.getState().project);
+              if (saveCurrentProject() === 'conflict') {
+                setError(CONFLICT);
+                return;
+              }
               useEditor.getState().newProject();
               toast('Started a new blank project');
               onClose();

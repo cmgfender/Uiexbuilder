@@ -6,18 +6,25 @@
  *    preview runtime (or the error it raised), description, reorder and delete.
  *  - HelpersSection: module-level helper functions — a code editor with a syntax check, an
  *    "insert examples" button and the list of helper names it declares.
+ *
+ * Both offer "Open in a large editor" (CodeEditorDialog): the helpers in a highlighted editor with
+ * line numbers, a computed expression in a roomy expression field with autocomplete — bound live
+ * to the same store value, for code that does not fit the sidebar.
  */
-import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, CircleAlert, Plus, Sigma, SquareFunction, Trash2, WandSparkles } from 'lucide-react';
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, CircleAlert, Maximize2, Plus, Sigma, SquareFunction, Trash2, WandSparkles } from 'lucide-react';
 import { selectActiveExtension, useActiveExtension, useEditor } from '../model/store';
 import type { ComputedValue, Extension } from '../model/types';
-import { findUsages } from '../panels/findUsages';
+import { findUsages, renameConflictMessage } from '../panels/findUsages';
 import { buildScopeWithDiagnostics, initialStateValues, resolveDataSources, useOptionalRuntime, type Scope, type ScopeDiagnostics } from '../runtime';
 import { ExpressionInput } from '../inspector/controls';
 import { Badge, Button, Field, IconButton, Section, TextInput, cx, useToast } from '../ui';
 import { renameComputed } from './actions';
+import { CodeEditor, CodeEditorDialog, handleCodeKeyDown } from './CodeEditor';
 import { usableComputed, validateComputedName } from './computed';
 import { appendHelperExamples, checkHelpersSyntax, compileHelpers, helperNames } from './helpers';
+import { codeExecutionAllowed } from '../model/trust';
+import { guardLoops } from '../runtime/loopGuard';
 import { usePowerUi } from './uiStore';
 import './power.css';
 
@@ -341,6 +348,26 @@ const ComputedRow = memo(function ComputedRow({
       </span>
     );
 
+  const [bigEditor, setBigEditor] = useState(false);
+  const valueLine = (
+    <div className={cx('ub-pw-value', error && 'ub-pw-value--error')} role="status" aria-live="polite">
+      {inactive ? (
+        'Not available: rename it so it does not clash with another name.'
+      ) : error ? (
+        <>
+          <CircleAlert size={12} aria-hidden /> {error}
+        </>
+      ) : empty ? (
+        'Write a JavaScript expression using state, data, helpers or the values above.'
+      ) : (
+        <>
+          <span className="ub-pw-value__label">Value now</span>
+          <code>{formatValue(value, 200)}</code>
+        </>
+      )}
+    </div>
+  );
+
   const move = (delta: number) => store().moveComputed(c.id, index + delta);
   const remove = () => {
     const usages = findUsages(ext, c.name).map((u) => u.location);
@@ -379,11 +406,26 @@ const ComputedRow = memo(function ComputedRow({
               id={`${uid}-name`}
               inputRef={nameRef}
               value={c.name}
-              validate={(name) => validateComputedName(selectActiveExtension(useEditor.getState()), name, c.id)}
+              validate={(name) => {
+                const current = selectActiveExtension(useEditor.getState());
+                const problem = validateComputedName(current, name, c.id);
+                if (problem) return problem;
+                // A repeat item, event param or custom-code name would capture the new name where
+                // the computed value is used (renames are scope-aware, see panels/findUsages).
+                return c.name && name.trim() !== c.name ? renameConflictMessage(current, c.name, name.trim()) : null;
+              }}
               onCommit={(name) => onRenamed(renameComputed(c.id, name), name)}
             />
           </Field>
-          <Field label="Expression" htmlFor={`${uid}-expr`}>
+          <Field
+            label="Expression"
+            htmlFor={`${uid}-expr`}
+            actions={
+              <IconButton label={`Open ${c.name || 'the expression'} in a large editor`} size="sm" className="ub-pw-icon" onClick={() => setBigEditor(true)}>
+                <Maximize2 size={13} aria-hidden />
+              </IconButton>
+            }
+          >
             <ExpressionInput
               id={`${uid}-expr`}
               ext={ext}
@@ -394,22 +436,7 @@ const ComputedRow = memo(function ComputedRow({
               aria-label={`Expression of ${c.name}`}
               onChange={(expr) => store().updateComputed(c.id, { expr })}
             />
-            <div className={cx('ub-pw-value', error && 'ub-pw-value--error')} role="status" aria-live="polite">
-              {inactive ? (
-                'Not available: rename it so it does not clash with another name.'
-              ) : error ? (
-                <>
-                  <CircleAlert size={12} aria-hidden /> {error}
-                </>
-              ) : empty ? (
-                'Write a JavaScript expression using state, data, helpers or the values above.'
-              ) : (
-                <>
-                  <span className="ub-pw-value__label">Value now</span>
-                  <code>{formatValue(value, 200)}</code>
-                </>
-              )}
-            </div>
+            {valueLine}
           </Field>
           <Field label="Description" htmlFor={`${uid}-desc`} hint="Optional — shown as a comment in the generated code.">
             <TextInput
@@ -423,6 +450,40 @@ const ComputedRow = memo(function ComputedRow({
             Use <code>{`{{ ${c.name} }}`}</code> in text or <code>{c.name}</code> in expressions. Computed values below this one can use
             it; data sources cannot.
           </div>
+          {bigEditor && (
+            <CodeEditorDialog
+              open
+              onClose={() => setBigEditor(false)}
+              title={
+                <span className="ub-pw-title">
+                  <Sigma size={16} aria-hidden /> Computed value <code>{c.name}</code>
+                </span>
+              }
+              intro={
+                <>
+                  A JavaScript expression using state, data, context, helpers and the computed values above it. Type a name for suggestions;
+                  wrap longer logic in a helper function.
+                </>
+              }
+              status={valueLine}
+              keys={
+                <>
+                  Changes apply as you type · type a name for suggestions · <kbd>Esc</kbd> closes
+                </>
+              }
+            >
+              <ExpressionInput
+                className="ub-pw-bigexpr"
+                ext={ext}
+                value={c.expr}
+                multiline
+                hidePreview
+                placeholder="e.g. items.filter((item) => item.done).length"
+                aria-label={`Expression of ${c.name} (large editor)`}
+                onChange={(expr) => store().updateComputed(c.id, { expr })}
+              />
+            </CodeEditorDialog>
+          )}
           {confirm ? (
             <ConfirmDelete
               name={c.name}
@@ -447,71 +508,134 @@ const ComputedRow = memo(function ComputedRow({
 // HelpersSection
 // ---------------------------------------------------------------------------
 
-/** Tab / Shift+Tab indent and outdent in the code editor (Escape, then Tab, moves focus on). */
-function indentWithTab(e: KeyboardEvent<HTMLTextAreaElement>): void {
-  const t = e.currentTarget;
-  if (e.key === 'Escape') {
-    // The next Tab moves focus out of the editor instead of indenting.
-    t.dataset.tabExit = 'true';
-    return;
-  }
-  if (e.key !== 'Tab' || e.altKey || e.ctrlKey || e.metaKey) {
-    delete t.dataset.tabExit;
-    return;
-  }
-  if (t.dataset.tabExit) {
-    delete t.dataset.tabExit;
-    return;
-  }
-  const { value, selectionStart: start, selectionEnd: end } = t;
-  e.preventDefault();
-  const lineStart = value.lastIndexOf('\n', start - 1) + 1;
-  if (!e.shiftKey && start === end) {
-    const next = `${value.slice(0, start)}  ${value.slice(end)}`;
-    useEditor.getState().setHelpers(next);
-    requestAnimationFrame(() => t.setSelectionRange(start + 2, start + 2));
-    return;
-  }
-  // Indent / outdent every selected line.
-  const block = value.slice(lineStart, end);
-  const lines = block.split('\n');
-  const changed = e.shiftKey ? lines.map((l) => l.replace(/^ {1,2}/, '')) : lines.map((l) => `  ${l}`);
-  const next = value.slice(0, lineStart) + changed.join('\n') + value.slice(end);
-  const delta = changed.join('\n').length - block.length;
-  const firstDelta = (changed[0]?.length ?? 0) - (lines[0]?.length ?? 0);
-  useEditor.getState().setHelpers(next);
-  requestAnimationFrame(() => t.setSelectionRange(Math.max(lineStart, start + firstDelta), end + delta));
-}
-
 const HELPERS_PLACEHOLDER = `function formatMoney(value) {
   return '$' + Number(value).toFixed(2);
 }`;
 
-export function HelpersSection() {
-  const extId = useEditor((s) => s.activeExtensionId);
-  const code = useEditor((s) => selectActiveExtension(s).helpers ?? '');
+const setHelpers = (code: string) => useEditor.getState().setHelpers(code);
+
+/**
+ * Syntax check, run error and declared names of helper code — checked once typing pauses, so a
+ * half-typed line does not flash an error.
+ */
+function useHelpersStatus(extId: string, code: string) {
   const runtime = useOptionalRuntime();
-  const toast = useToast();
-  const editorId = useId();
-  const textRef = useRef<HTMLTextAreaElement>(null);
-  const focusNonce = usePowerUi((s) => s.helpersFocusNonce);
-  const settled = useSettled(code, 300);
+  const settled = useSettled(code, 600);
   const syntaxError = useMemo(() => checkHelpersSyntax(settled), [settled]);
   const names = useMemo(() => helperNames(settled), [settled]);
   const runError =
     syntaxError ? null : runtime && runtime.extension.id === extId && runtime.diagnostics
       ? runtime.diagnostics.helpersError
-      : compileHelpers(settled).error;
-  const stale = settled !== code;
+      : codeExecutionAllowed()
+        ? compileHelpers(guardLoops(settled)).error
+        : null;
+  return { syntaxError, runError, names, stale: settled !== code };
+}
+
+function HelpersStatus({ status }: { status: ReturnType<typeof useHelpersStatus> }) {
+  const { syntaxError, runError, names } = status;
+  return (
+    <div
+      className={cx('ub-pw-status', syntaxError ? 'ub-pw-status--error' : runError ? 'ub-pw-status--warn' : 'ub-pw-status--ok')}
+      role="status"
+      aria-live="polite"
+    >
+      {syntaxError ? (
+        <>
+          <CircleAlert size={12} aria-hidden /> Syntax error: {syntaxError}
+        </>
+      ) : runError ? (
+        <>
+          <CircleAlert size={12} aria-hidden /> Error while running the helpers: {runError}
+        </>
+      ) : names.length === 0 ? (
+        'No helpers declared yet — use function name() {…} or const name = …'
+      ) : (
+        <>
+          <span>Available:</span>
+          {names.map((n) => (
+            <code key={n} className="ub-pw-chip">
+              {n}
+            </code>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** The helper code in the large editor (highlighting, line numbers), bound to the same value. */
+function HelpersEditorDialog({ extId, code, onClose }: { extId: string; code: string; onClose: () => void }) {
+  const status = useHelpersStatus(extId, code);
+  const statusId = useId();
+  return (
+    <CodeEditorDialog
+      open
+      onClose={onClose}
+      title={
+        <span className="ub-pw-title">
+          <SquareFunction size={16} aria-hidden /> Helper functions
+        </span>
+      }
+      intro={
+        <>
+          Module-level JavaScript or TypeScript that every expression can call, e.g. <code>formatMoney(amount)</code>. Helpers can't see
+          state or data — pass values in as arguments.
+        </>
+      }
+      status={
+        code.trim() !== '' && (
+          <div id={statusId}>
+            <HelpersStatus status={status} />
+          </div>
+        )
+      }
+    >
+      <CodeEditor
+        value={code}
+        onChange={setHelpers}
+        language="ts"
+        aria-label="Helper code (large editor)"
+        aria-describedby={code.trim() ? statusId : undefined}
+        invalid={!!status.syntaxError && !status.stale}
+        placeholder={HELPERS_PLACEHOLDER}
+      />
+    </CodeEditorDialog>
+  );
+}
+
+export function HelpersSection() {
+  const extId = useEditor((s) => s.activeExtensionId);
+  const code = useEditor((s) => selectActiveExtension(s).helpers ?? '');
+  const toast = useToast();
+  const editorId = useId();
+  const textRef = useRef<HTMLTextAreaElement>(null);
+  const focusPending = usePowerUi((s) => s.helpersFocusPending);
+  const status = useHelpersStatus(extId, code);
+  const { syntaxError, names, stale } = status;
+  const [bigEditor, setBigEditor] = useState(false);
 
   // The section starts collapsed while empty (beginners never need it); inserting examples or a
-  // focus request from the command palette re-mounts it expanded.
+  // focus request (command palette, Problems panel) re-mounts it expanded, then focuses the
+  // editor once that render has committed (the textarea only exists while the section is open).
   const [expandKey, setExpandKey] = useState(0);
-  useEffect(() => {
-    if (focusNonce === 0) return;
+  const [focusRequest, setFocusRequest] = useState(0);
+  const expandAndFocus = useCallback(() => {
     setExpandKey((k) => k + 1);
-    requestAnimationFrame(() => textRef.current?.focus());
-  }, [focusNonce]);
+    setFocusRequest((n) => n + 1);
+  }, []);
+  useEffect(() => {
+    if (!focusPending) return;
+    usePowerUi.getState().clearHelpersFocus();
+    expandAndFocus();
+  }, [focusPending, expandAndFocus]);
+  useEffect(() => {
+    if (focusRequest === 0) return;
+    const el = textRef.current;
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    el.scrollIntoView?.({ block: 'nearest' });
+  }, [focusRequest]);
 
   const insertExamples = () => {
     const res = appendHelperExamples(useEditor.getState().project.extensions.find((e) => e.id === extId)?.helpers);
@@ -519,90 +643,70 @@ export function HelpersSection() {
       toast('The example helpers are already there');
       return;
     }
-    useEditor.getState().setHelpers(res.code);
+    setHelpers(res.code);
     toast(`Added ${res.added.join(', ')}`);
-    setExpandKey((k) => k + 1);
-    requestAnimationFrame(() => textRef.current?.focus());
+    expandAndFocus();
   };
 
   const lines = code.split('\n').length;
 
   return (
-    <Section
-      key={expandKey}
-      defaultOpen={expandKey > 0 || !!code.trim()}
-      title={
-        <span className="ub-pw-title">
-          Helpers <span className="ub-pw-count">{names.length}</span>
-        </span>
-      }
-      actions={
-        <IconButton label="Insert example helpers" size="sm" className="ub-pw-icon" onClick={insertExamples}>
-          <WandSparkles size={14} aria-hidden />
-        </IconButton>
-      }
-    >
-      {!code.trim() && (
-        <div className="ub-pw-muted ub-pw-intro">
-          <SquareFunction size={14} aria-hidden /> Reusable functions any expression can call, e.g. <code>formatMoney(amount)</code>. JavaScript or
-          TypeScript.{' '}
-          <button type="button" className="ub-pw-link" onClick={insertExamples}>
-            Insert examples
-          </button>
+    <>
+      <Section
+        key={expandKey}
+        defaultOpen={expandKey > 0 || !!code.trim()}
+        title={
+          <span className="ub-pw-title">
+            Helpers <span className="ub-pw-count">{names.length}</span>
+          </span>
+        }
+        actions={
+          <>
+            <IconButton label="Insert example helpers" size="sm" className="ub-pw-icon" onClick={insertExamples}>
+              <WandSparkles size={14} aria-hidden />
+            </IconButton>
+            <IconButton label="Open helpers in a large editor" size="sm" className="ub-pw-icon" onClick={() => setBigEditor(true)}>
+              <Maximize2 size={13} aria-hidden />
+            </IconButton>
+          </>
+        }
+      >
+        {!code.trim() && (
+          <div className="ub-pw-muted ub-pw-intro">
+            <SquareFunction size={14} aria-hidden /> Reusable functions any expression can call, e.g. <code>formatMoney(amount)</code>. JavaScript or
+            TypeScript.{' '}
+            <button type="button" className="ub-pw-link" onClick={insertExamples}>
+              Insert examples
+            </button>
+          </div>
+        )}
+        <div className="ub-pw-code">
+          <label htmlFor={editorId} className="ub-pw-sr">
+            Helper code
+          </label>
+          <textarea
+            id={editorId}
+            ref={textRef}
+            className={cx('ub-textarea ub-textarea--code ub-pw-code__input', syntaxError && !stale && 'ub-input--invalid')}
+            value={code}
+            rows={Math.min(22, Math.max(5, lines + 1))}
+            placeholder={HELPERS_PLACEHOLDER}
+            spellCheck={false}
+            autoComplete="off"
+            autoCapitalize="off"
+            aria-invalid={syntaxError && !stale ? true : undefined}
+            onChange={(e) => setHelpers(e.target.value)}
+            onKeyDown={(e) => handleCodeKeyDown(e, setHelpers)}
+          />
         </div>
-      )}
-      <div className="ub-pw-code">
-        <label htmlFor={editorId} className="ub-pw-sr">
-          Helper code
-        </label>
-        <textarea
-          id={editorId}
-          ref={textRef}
-          className={cx('ub-textarea ub-textarea--code ub-pw-code__input', syntaxError && !stale && 'ub-input--invalid')}
-          value={code}
-          rows={Math.min(22, Math.max(5, lines + 1))}
-          placeholder={HELPERS_PLACEHOLDER}
-          spellCheck={false}
-          autoComplete="off"
-          autoCapitalize="off"
-          aria-invalid={syntaxError && !stale ? true : undefined}
-          onChange={(e) => useEditor.getState().setHelpers(e.target.value)}
-          onKeyDown={indentWithTab}
-        />
-      </div>
-      {code.trim() !== '' && (
-        <div
-          className={cx('ub-pw-status', syntaxError ? 'ub-pw-status--error' : runError ? 'ub-pw-status--warn' : 'ub-pw-status--ok')}
-          role="status"
-          aria-live="polite"
-        >
-          {syntaxError ? (
-            <>
-              <CircleAlert size={12} aria-hidden /> Syntax error: {syntaxError}
-            </>
-          ) : runError ? (
-            <>
-              <CircleAlert size={12} aria-hidden /> Error while running the helpers: {runError}
-            </>
-          ) : names.length === 0 ? (
-            'No helpers declared yet — use function name() {…} or const name = …'
-          ) : (
-            <>
-              <span>Available:</span>
-              {names.map((n) => (
-                <code key={n} className="ub-pw-chip">
-                  {n}
-                </code>
-              ))}
-            </>
-          )}
-        </div>
-      )}
-      {code.trim() !== '' && (
-        <div className="ub-pw-hint">
-          Helpers can't see state or data — pass values in as arguments. Parameters without a type are exported as <code>any</code>.
-        </div>
-      )}
-    </Section>
+        {code.trim() !== '' && <HelpersStatus status={status} />}
+        {code.trim() !== '' && (
+          <div className="ub-pw-hint">
+            Helpers can't see state or data — pass values in as arguments. Parameters without a type are exported as <code>any</code>.
+          </div>
+        )}
+      </Section>
+      {bigEditor && <HelpersEditorDialog extId={extId} code={code} onClose={() => setBigEditor(false)} />}
+    </>
   );
 }

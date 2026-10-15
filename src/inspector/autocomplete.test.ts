@@ -4,9 +4,12 @@ import {
   applyTemplateSuggestion,
   expressionTokenAt,
   filterSuggestions,
+  hasMembers,
+  insertTemplateVariable,
   insideString,
   liveKeySuggestions,
   templateTokenAt,
+  valueAtPath,
 } from './autocomplete';
 import type { ScopeVariable } from './scope';
 
@@ -81,5 +84,63 @@ describe('apply suggestions', () => {
     expect(applyTemplateSuggestion(value, templateTokenAt(value, 5)!, 'count')).toEqual({ value: 'Hi {{ count }}', cursor: 14 });
     const v2 = 'Hi {{co}} there';
     expect(applyTemplateSuggestion(v2, templateTokenAt(v2, 7)!, 'count')).toEqual({ value: 'Hi {{ count }} there', cursor: 14 });
+  });
+});
+
+describe('object completions stay open for members', () => {
+  const scope = { record: { firstname: 'Ada', tags: ['x'] }, count: 2, owner: null, fn: () => 1 };
+
+  it('looks up own paths only', () => {
+    expect(valueAtPath(scope, 'record.firstname')).toEqual({ found: true, value: 'Ada' });
+    expect(valueAtPath(scope, 'record.toString').found).toBe(false);
+    expect(valueAtPath(scope, 'owner.name').found).toBe(false);
+    expect(valueAtPath(null, 'x').found).toBe(false);
+  });
+
+  it('detects object / array values (live first, then the declared shape)', () => {
+    expect(hasMembers({ name: 'record', kind: 'dataSource' }, scope)).toBe(true);
+    expect(hasMembers({ name: 'record.tags', kind: 'property' }, scope)).toBe(true);
+    expect(hasMembers({ name: 'record.firstname', kind: 'property' }, scope)).toBe(false);
+    expect(hasMembers({ name: 'count', kind: 'state', members: true }, scope)).toBe(false);
+    expect(hasMembers({ name: 'owner', kind: 'state' }, scope)).toBe(false);
+    expect(hasMembers({ name: 'fn', kind: 'helper' }, scope)).toBe(false);
+    // Not in the preview scope (e.g. still loading): the declared shape decides.
+    expect(hasMembers({ name: 'deals', kind: 'dataSource', members: true }, scope)).toBe(true);
+    expect(hasMembers({ name: 'dealsLoading', kind: 'dataSource' }, scope)).toBe(false);
+  });
+
+  it('leaves the caret inside the closed segment', () => {
+    const value = '{{ rec';
+    const res = applyTemplateSuggestion(value, templateTokenAt(value, 6)!, 'record', { caretInside: true });
+    expect(res).toEqual({ value: '{{ record }}', cursor: 9 });
+    // Typing "." there continues the path inside the segment.
+    const typed = `${res.value.slice(0, res.cursor)}.fi${res.value.slice(res.cursor)}`;
+    expect(typed).toBe('{{ record.fi }}');
+    const tok = templateTokenAt(typed, res.cursor + 3)!;
+    expect(tok.text).toBe('record.fi');
+    expect(liveKeySuggestions(tok.text, scope).map((v) => v.name)).toContain('record.firstname');
+    expect(applyTemplateSuggestion(typed, tok, 'record.firstname')).toEqual({ value: '{{ record.firstname }}', cursor: 22 });
+  });
+
+  it('flags object-valued live keys', () => {
+    const keys = liveKeySuggestions('record.', scope);
+    expect(keys.find((k) => k.name === 'record.tags')?.members).toBe(true);
+    expect(keys.find((k) => k.name === 'record.firstname')?.members).toBeUndefined();
+  });
+});
+
+describe('insertTemplateVariable', () => {
+  it('separates the variable from adjoining words', () => {
+    expect(insertTemplateVariable('Heading', 7, 7, 'x')).toEqual({ value: 'Heading {{ x }}', cursor: 15 });
+    expect(insertTemplateVariable('Hello world', 5, 5, 'x')).toEqual({ value: 'Hello {{ x }} world', cursor: 13 });
+    expect(insertTemplateVariable('Hi ', 3, 3, 'x')).toEqual({ value: 'Hi {{ x }}', cursor: 10 });
+    expect(insertTemplateVariable('', 0, 0, 'x')).toEqual({ value: '{{ x }}', cursor: 7 });
+  });
+  it('leaves URL-like and code-like neighbours alone', () => {
+    expect(insertTemplateVariable('https://x.test/items/', 21, 21, 'id').value).toBe('https://x.test/items/{{ id }}');
+    expect(insertTemplateVariable('?q=&page=2', 3, 3, 'q').value).toBe('?q={{ q }}&page=2');
+  });
+  it('replaces a selection', () => {
+    expect(insertTemplateVariable('Hi NAME!', 3, 7, 'name')).toEqual({ value: 'Hi {{ name }}!', cursor: 13 });
   });
 });

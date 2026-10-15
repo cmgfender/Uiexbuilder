@@ -11,21 +11,32 @@
  *    slots. Overlay slot content (Modal/Panel/Tooltip) is never rendered inline: Modals/Panels open
  *    through PreviewHost when the trigger is clicked, Tooltips show on hover;
  *  - wraps every rendered copy in an error boundary so a broken node shows a selectable red box.
+ *    In preview mode an expression that throws (condition, repeat items, a prop or the text) makes
+ *    the node fail too, like the generated card would on HubSpot (there the whole card stops
+ *    rendering); design mode degrades to '' / undefined so the canvas stays editable.
  *
  * Performance: NodeRenderer is a cheap context consumer; the memoised NodeView does the work and is
  * skipped when its node object (immer keeps unchanged nodes referentially equal), scope and mode
  * are unchanged.
  */
-import { Component, memo, useCallback, useEffect, useMemo, type ReactNode } from 'react';
+import { Component, memo, useCallback, useEffect, useMemo, type ContextType, type ReactNode } from 'react';
 import { getComponent } from '../registry';
 import type { ComponentDef, PreviewProps, PreviewRootProps, SlotDef } from '../registry/types';
 import { ROOT_TYPE, type ExtensionKind, type UINode } from '../model/types';
-import { useControls, useRenderState } from './context';
+import { ControlsContext, useControls, useRenderState } from './context';
 import { DropPlaceholder } from './DropPlaceholder';
-import { evaluate, resolvePropValue, resolveText, type Scope } from './expr';
+import { PreviewAlerts } from './PreviewAlerts';
+import { CodeTrustNotice } from './CodeTrustNotice';
+import { evaluate, resolvePropValue, resolveText, type ExpressionErrorHandler, type Scope } from './expr';
 import type { NodeRendererProps } from './types';
 
 const EMPTY_SCOPE: Scope = Object.freeze({}) as Scope;
+
+/**
+ * Deepest nesting rendered. Imports reject deeper / cyclic trees (model/normalize.ts); this guard
+ * keeps a malformed tree that slipped through from recursing without bound.
+ */
+export const MAX_RENDER_DEPTH = 250;
 
 /** Repeat copies rendered at most (design mode keeps the canvas light; preview guards runaway arrays). */
 export const MAX_DESIGN_REPEAT = 50;
@@ -42,16 +53,19 @@ const EMPTY_CARD_LABEL: Record<ExtensionKind, string> = {
 // ---------------------------------------------------------------------------
 
 /** Renders one node (and its subtree). `scope` adds repeat items from ancestors. */
-export const NodeRenderer = memo(function NodeRenderer({ nodeId, scope, overlayPresentation }: NodeRendererProps) {
+export const NodeRenderer = memo(function NodeRenderer({ nodeId, scope, overlayPresentation, depth = 0 }: NodeRendererProps) {
   const rs = useRenderState('NodeRenderer');
   const node = rs.extension.nodes[nodeId];
   if (!node) return null;
+  if (depth > MAX_RENDER_DEPTH) {
+    return <NodeErrorBox node={node} message="components are nested too deeply (is a component inside itself?)" />;
+  }
   const local = scope ?? EMPTY_SCOPE;
   if (node.type === ROOT_TYPE) {
     return (
       <>
         {node.children.map((id) => (
-          <NodeRenderer key={id} nodeId={id} scope={local} />
+          <NodeRenderer key={id} nodeId={id} scope={local} depth={depth + 1} />
         ))}
       </>
     );
@@ -73,11 +87,12 @@ export const NodeRenderer = memo(function NodeRenderer({ nodeId, scope, overlayP
       hasBoundValue={hasBoundValue}
       boundValue={hasBoundValue && boundName ? rs.stateValues[boundName] : undefined}
       hostMounted={rs.hostMounted}
+      depth={depth}
     />
   );
 });
 
-/** Renders the extension root's children: the card body. */
+/** Renders the extension root's children: the card body (preview alerts above it). */
 export function ExtensionRenderer() {
   const rs = useRenderState('ExtensionRenderer');
   const root = rs.extension.nodes[rs.extension.rootId];
@@ -85,10 +100,14 @@ export function ExtensionRenderer() {
   if (root.children.length === 0) {
     return rs.mode === 'design' ? (
       <DropPlaceholder parentId={root.id} label={EMPTY_CARD_LABEL[rs.extension.kind] ?? EMPTY_CARD_LABEL.card} />
-    ) : null;
+    ) : (
+      <PreviewAlerts />
+    );
   }
   return (
     <>
+      <CodeTrustNotice />
+      {rs.mode === 'preview' && <PreviewAlerts />}
       {root.children.map((id) => (
         <NodeRenderer key={id} nodeId={id} />
       ))}
@@ -113,6 +132,8 @@ interface NodeViewProps {
   hasBoundValue: boolean;
   boundValue: unknown;
   hostMounted: boolean;
+  /** Nesting depth of this node (see MAX_RENDER_DEPTH). */
+  depth: number;
 }
 
 const NodeView = memo(function NodeView(props: NodeViewProps) {
@@ -130,6 +151,13 @@ const NodeView = memo(function NodeView(props: NodeViewProps) {
 
   const { items: itemsExpr, itemName, indexName, key: keyExpr } = node.repeat;
   const result = evaluate(itemsExpr ?? '', { ...base, ...local });
+  if (!result.ok && !result.blocked && mode === 'preview') {
+    return (
+      <NodeErrorBoundary node={node} resetKeys={[base, local, mode]}>
+        <Throw error={new PreviewExpressionError(itemsExpr ?? '', result.error)} />
+      </NodeErrorBoundary>
+    );
+  }
   const items = result.ok && Array.isArray(result.value) ? (result.value as unknown[]) : null;
 
   if (!items || items.length === 0) {
@@ -213,6 +241,7 @@ function NodeInstance({
   hostMounted,
   copy,
   repeatEmpty,
+  depth,
 }: NodeInstanceProps) {
   const controls = useControls('NodeRenderer');
   const full = useMemo<Scope>(() => ({ ...base, ...local }), [base, local]);
@@ -232,13 +261,24 @@ function NodeInstance({
     [def.overlay, overlayPresentation, closeSelf],
   );
 
+  // ---- expression failures (preview: the node fails, as the card would on HubSpot)
+  let failure: PreviewExpressionError | null = null;
+  const onError: ExpressionErrorHandler | undefined =
+    mode === 'preview'
+      ? (code, error) => {
+          failure ??= new PreviewExpressionError(code, error);
+        }
+      : undefined;
+
   // ---- condition (preview: skip when falsy; design: render flagged)
   let conditionFalse = false;
   if (node.condition?.trim()) {
     const r = evaluate(node.condition, full);
-    conditionFalse = !(r.ok && r.value);
+    if (!r.ok && !r.blocked) onError?.(node.condition, r.error);
+    // A condition that may not run (untrusted code) shows the node rather than hiding it.
+    conditionFalse = r.ok ? !r.value : !r.blocked;
   }
-  const skipped = conditionFalse && mode === 'preview';
+  const skipped = conditionFalse && mode === 'preview' && !failure;
 
   const tooltipNode = mode === 'preview' && !skipped && isTooltipNode(overlayChild) ? overlayChild : undefined;
   const tooltipId = tooltipNode?.id;
@@ -249,23 +289,25 @@ function NodeInstance({
   }, [controls, tooltipId]);
 
   if (skipped) return null;
+  if (failure) throw failure;
 
   // ---- props & text
   const props: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(node.props)) {
-    const resolved = resolvePropValue(value, full);
+    const resolved = resolvePropValue(value, full, onError);
     if (resolved !== undefined) props[name] = resolved;
   }
   if (node.binding && def.valueBinding && hasBoundValue && boundValue !== undefined) {
     props[def.valueBinding.prop] = boundValue;
   }
-  const text = resolveText(node.text, full);
+  const text = resolveText(node.text, full, onError);
+  if (failure) throw failure;
 
   // ---- children & slots
   let children: ReactNode = undefined;
   if (def.children.mode === 'nodes') {
     if (node.children.length > 0) {
-      children = node.children.map((id) => <NodeRenderer key={id} nodeId={id} scope={local} />);
+      children = node.children.map((id) => <NodeRenderer key={id} nodeId={id} scope={local} depth={depth + 1} />);
     } else if (mode === 'design') {
       children = <DropPlaceholder parentId={node.id} label={def.children.placeholder} />;
     }
@@ -274,7 +316,7 @@ function NodeInstance({
   for (const slot of def.slots ?? []) {
     if (isOverlaySlot(slot)) continue;
     const ids = node.slots?.[slot.name] ?? [];
-    if (ids.length > 0) slots[slot.name] = ids.map((id) => <NodeRenderer key={id} nodeId={id} scope={local} />);
+    if (ids.length > 0) slots[slot.name] = ids.map((id) => <NodeRenderer key={id} nodeId={id} scope={local} depth={depth + 1} />);
   }
 
   // ---- root props (DOM contract for the canvas)
@@ -318,6 +360,24 @@ function NodeInstance({
 // Errors
 // ---------------------------------------------------------------------------
 
+/** An expression of a node failed while rendering in preview mode. */
+export class PreviewExpressionError extends Error {
+  constructor(
+    readonly code: string,
+    readonly reason: string,
+  ) {
+    super(
+      `“${code.length > 80 ? `${code.slice(0, 77)}…` : code}” failed — ${reason}. On HubSpot this error stops the whole card ` +
+        'from rendering; guard values that load later (e.g. `x?.y`, or a condition on the data source’s Loading flag).',
+    );
+    this.name = 'PreviewExpressionError';
+  }
+}
+
+function Throw({ error }: { error: Error }): null {
+  throw error;
+}
+
 function NodeErrorBox({ node, message, copy = 0 }: { node: UINode; message: string; copy?: number }) {
   const label = getComponent(node.type)?.label ?? node.type;
   return (
@@ -347,10 +407,17 @@ interface BoundaryState {
 
 /** Catches errors thrown by a node's preview so one broken node never blanks the canvas. */
 class NodeErrorBoundary extends Component<BoundaryProps, BoundaryState> {
+  static contextType = ControlsContext;
+  declare context: ContextType<typeof ControlsContext>;
   state: BoundaryState = { error: null };
 
   static getDerivedStateFromError(error: unknown): BoundaryState {
     return { error: error instanceof Error ? error : new Error(String(error)) };
+  }
+
+  componentDidCatch(error: unknown) {
+    // Reported once per node and message (the console panel explains it).
+    if (error instanceof Error) this.context?.reportNodeError?.(this.props.node.id, error.message);
   }
 
   componentDidUpdate(prev: BoundaryProps) {

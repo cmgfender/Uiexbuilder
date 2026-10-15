@@ -10,7 +10,10 @@
  *   function      -> useState + useCallback loader around hubspot.serverless()  x: any
  *
  * Declaration order keeps the Rules of Hooks and avoids temporal-dead-zone reads: user state,
- * loader state, CRM hooks (topologically sorted by references), loaders, then the mount effect.
+ * loader state, CRM hooks (topologically sorted by references), loaders, then one effect per
+ * "load on open" source. That effect waits until the data its request reads has loaded (the
+ * `xLoading` flags of the CRM hooks / on-open sources it references) and then loads once, so a
+ * request never goes out with the empty values HubSpot's hooks return on the first render.
  */
 import type {
   AssociationsSource,
@@ -30,10 +33,13 @@ import {
   setterName,
   UI_EXTENSIONS,
   UI_EXTENSIONS_CRM,
+  useHelper,
 } from './context';
+import { fetchOptions } from './actions';
 import {
   asOperand,
   CodeWriter,
+  commentText,
   isIdentifierName,
   jsArray,
   jsCode,
@@ -104,13 +110,13 @@ function scopeDeps(ctx: GenContext, codes: string[]): string[] {
   return [...deps].sort();
 }
 
-function emitCrmProperties(w: CodeWriter, ctx: GenContext, s: CrmPropertiesSource, plan: DataSourcePlan): void {
+function emitCrmProperties(w: CodeWriter, ctx: GenContext, s: CrmPropertiesSource, plan: DataSourcePlan, gates: Set<string>): void {
   const hook = importValue(ctx, UI_EXTENSIONS_CRM, 'useCrmProperties');
   writeCall(w, `const ${plan.queryVar} = `, hook, [stringArray(s.properties), ...formatOptions(s.formatted)]);
-  writeExposures(w, ctx, s, plan, 'Record<string, any>', 'properties');
+  writeExposures(w, ctx, s, plan, 'Record<string, any>', 'properties', gates);
 }
 
-function emitAssociations(w: CodeWriter, ctx: GenContext, s: AssociationsSource, plan: DataSourcePlan): void {
+function emitAssociations(w: CodeWriter, ctx: GenContext, s: AssociationsSource, plan: DataSourcePlan, gates: Set<string>): void {
   const hook = importValue(ctx, UI_EXTENSIONS_CRM, 'useAssociations');
   const entries: Array<[string, JsNode]> = [
     ['toObjectType', jsCode(quoteString(asString(s.toObjectType)))],
@@ -119,7 +125,7 @@ function emitAssociations(w: CodeWriter, ctx: GenContext, s: AssociationsSource,
   if (Number.isFinite(s.pageLength)) entries.push(['pageLength', jsCode(printNumber(s.pageLength))]);
   const config = jsObject(entries);
   writeCall(w, `const ${plan.queryVar} = `, hook, [config, ...formatOptions(s.formatted)]);
-  writeExposures(w, ctx, s, plan, 'any[]', 'results');
+  writeExposures(w, ctx, s, plan, 'any[]', 'results', gates);
 }
 
 const NO_VALUE_OPERATORS = new Set(['HAS_PROPERTY', 'NOT_HAS_PROPERTY']);
@@ -150,7 +156,7 @@ function searchFilter(ctx: GenContext, f: CrmSearchSource['filters'][number]): J
   return jsObject(entries);
 }
 
-function emitCrmSearch(w: CodeWriter, ctx: GenContext, s: CrmSearchSource, plan: DataSourcePlan): void {
+function emitCrmSearch(w: CodeWriter, ctx: GenContext, s: CrmSearchSource, plan: DataSourcePlan, gates: Set<string>): void {
   const hook = importValue(ctx, UI_EXTENSIONS, 'useCrmSearch');
   const filters = Array.isArray(s.filters) ? s.filters.filter((f) => f && typeof f === 'object') : [];
   const sorts = Array.isArray(s.sorts) ? s.sorts.filter((x) => x && typeof x === 'object') : [];
@@ -175,30 +181,34 @@ function emitCrmSearch(w: CodeWriter, ctx: GenContext, s: CrmSearchSource, plan:
   }
   if (Number.isFinite(s.pageLength)) entries.push(['pageLength', jsCode(printNumber(s.pageLength))]);
   writeCall(w, `const ${plan.queryVar} = `, hook, [jsObject(entries), ...formatOptions(s.formatted)]);
-  writeExposures(w, ctx, s, plan, 'any[]', 'results');
+  writeExposures(w, ctx, s, plan, 'any[]', 'results', gates);
 }
 
 /**
  * Declares the scope names of a hook-based source that user code reads: the data (loosely
  * typed so any expression over it type-checks), `xLoading` and `xError` (message or null).
  */
-function writeExposures(w: CodeWriter, ctx: GenContext, s: DataSource, plan: DataSourcePlan, type: string, field: string): void {
+function writeExposures(w: CodeWriter, ctx: GenContext, s: DataSource, plan: DataSourcePlan, type: string, field: string, gates: Set<string>): void {
   const used = (name: string) => ctx.userIdentifiers.has(name);
   if (used(s.name)) {
     ctx.usesAny = true;
     w.line(`const ${s.name}: ${type} = ${plan.queryVar}.${field};`);
   }
-  if (used(`${s.name}Loading`)) w.line(`const ${s.name}Loading = ${plan.queryVar}.isLoading;`);
+  if (used(`${s.name}Loading`) || gates.has(`${s.name}Loading`)) w.line(`const ${s.name}Loading = ${plan.queryVar}.isLoading;`);
   if (used(`${s.name}Error`)) w.line(`const ${s.name}Error = ${plan.queryVar}.error?.message ?? null;`);
 }
 
-/** useState triple of a loader-backed source. */
-function emitLoaderState(w: CodeWriter, ctx: GenContext, s: FetchSource | FunctionSource): void {
+/**
+ * useState triple of a loader-backed source. Values nothing reads are left out of the
+ * destructuring (`const [, setXError] = ...`) so the exported project lints without warnings.
+ */
+function emitLoaderState(w: CodeWriter, ctx: GenContext, s: FetchSource | FunctionSource, gates: Set<string>): void {
   const useState = importValue(ctx, 'react', 'useState');
   ctx.usesAny = true;
-  w.line(`const [${s.name}, ${setterName(s.name)}] = ${useState}<any>(null);`);
-  w.line(`const [${s.name}Loading, ${setterName(`${s.name}Loading`)}] = ${useState}<boolean>(${s.runOnMount === true});`);
-  w.line(`const [${s.name}Error, ${setterName(`${s.name}Error`)}] = ${useState}<string | null>(null);`);
+  const pair = (name: string) => `[${ctx.userIdentifiers.has(name) || gates.has(name) ? name : ''}, ${setterName(name)}]`;
+  w.line(`const ${pair(s.name)} = ${useState}<any>(null);`);
+  w.line(`const ${pair(`${s.name}Loading`)} = ${useState}<boolean>(${s.runOnMount === true});`);
+  w.line(`const ${pair(`${s.name}Error`)} = ${useState}<string | null>(null);`);
 }
 
 /**
@@ -224,18 +234,20 @@ function emitLoaderRequest(w: CodeWriter, ctx: GenContext, s: FetchSource | Func
     const hubspot = importValue(ctx, UI_EXTENSIONS, 'hubspot');
     const url = templateText(ctx, s.url);
     codes.push(url);
-    const options: Array<[string, JsNode]> = [['method', jsCode(quoteString(asString(s.method) || 'GET'))]];
-    if (normalizeExpression(asString(s.body)) !== '') {
-      const body = userExpr(ctx, s.body!);
+    const isGet = (asString(s.method).toUpperCase() || 'GET') === 'GET';
+    let body: string | null = null;
+    if (!isGet && normalizeExpression(asString(s.body)) !== '') {
+      body = userExpr(ctx, s.body!);
       codes.push(body);
-      options.push(['body', jsCode(asOperand(body))]);
     }
+    const options = fetchOptions(ctx, asString(s.method), body, s.headers, s.timeout);
+    for (const [key, node] of options) if (key === 'headers' && node.kind === 'object') node.entries.forEach(([, v]) => v.kind === 'code' && codes.push(v.code));
     const res = loaderLocals(ctx, codes).allocate('response');
     writeCall(w, `const ${res} = await `, `${hubspot}.fetch`, [jsCode(asOperand(url)), jsObject(options)]);
     w.block(`if (!${res}.ok) {`, () => {
       w.line(`throw new Error(\`Request failed with status \${${res}.status}\`);`);
     });
-    w.line(`${setterName(s.name)}(await ${res}.json());`);
+    w.line(`${setterName(s.name)}(await ${useHelper(ctx, 'readJson')}(${res}));`);
     return codes;
   }
   const fn = ctx.functions.get(s.functionId);
@@ -313,6 +325,38 @@ function sortHookSources(plans: DataSourcePlan[]): DataSourcePlan[] {
   return ordered;
 }
 
+/** Raw user code a loader's request reads (URL / header templates, body, parameters). */
+function requestCode(s: FetchSource | FunctionSource): string[] {
+  const out: string[] = [];
+  const template = (v: unknown) => {
+    for (const m of asString(v).matchAll(/\{\{([\s\S]*?)\}\}/g)) out.push(m[1]);
+  };
+  if (s.kind === 'fetch') {
+    template(s.url);
+    (Array.isArray(s.headers) ? s.headers : []).forEach((h) => template(h?.value));
+    if ((asString(s.method).toUpperCase() || 'GET') !== 'GET') out.push(asString(s.body));
+  } else {
+    out.push(asString(s.parameters));
+  }
+  return out;
+}
+
+/**
+ * The `xLoading` flags a "load on open" source waits for: CRM hook sources its request reads
+ * (they return empty values while loading) and other on-open sources it reads.
+ */
+function mountGates(ctx: GenContext, plan: DataSourcePlan): string[] {
+  const ids = new Set<string>();
+  for (const code of requestCode(plan.source as FetchSource | FunctionSource)) scanCode(code).identifiers.forEach((id) => ids.add(id));
+  const gates = new Set<string>();
+  for (const other of ctx.dataSources.values()) {
+    if (other === plan || !other.exposes.some((n) => ids.has(n))) continue;
+    const loadsOnOpen = HOOK_KINDS.has(other.source.kind) || (other.source as FetchSource | FunctionSource).runOnMount === true;
+    if (loadsOnOpen) gates.add(`${other.source.name}Loading`);
+  }
+  return [...gates].sort();
+}
+
 /**
  * Writes every data source declaration into `w` (component body level). Returns true when
  * something was written.
@@ -322,6 +366,9 @@ export function emitDataSources(w: CodeWriter, ctx: GenContext): boolean {
   if (plans.length === 0) return false;
   const loaderPlans = plans.filter((p) => !HOOK_KINDS.has(p.source.kind));
   const hookPlans = sortHookSources(plans.filter((p) => HOOK_KINDS.has(p.source.kind)));
+  const onMount = loaderPlans.filter((p) => (p.source as FetchSource | FunctionSource).runOnMount === true);
+  const gatesBySource = new Map(onMount.map((p) => [p, mountGates(ctx, p)]));
+  const allGates = new Set([...gatesBySource.values()].flat());
   let first = true;
   const gap = () => {
     if (!first) w.line();
@@ -331,35 +378,47 @@ export function emitDataSources(w: CodeWriter, ctx: GenContext): boolean {
   for (const p of loaderPlans) {
     gap();
     w.line(`// ${describeSource(ctx, p.source)}`);
-    emitLoaderState(w, ctx, p.source as FetchSource | FunctionSource);
+    emitLoaderState(w, ctx, p.source as FetchSource | FunctionSource, allGates);
   }
   for (const p of hookPlans) {
     gap();
     w.line(`// ${describeSource(ctx, p.source)}`);
     const s = p.source;
-    if (s.kind === 'crmProperties') emitCrmProperties(w, ctx, s, p);
-    else if (s.kind === 'associations') emitAssociations(w, ctx, s, p);
-    else if (s.kind === 'crmSearch') emitCrmSearch(w, ctx, s, p);
+    if (s.kind === 'crmProperties') emitCrmProperties(w, ctx, s, p, allGates);
+    else if (s.kind === 'associations') emitAssociations(w, ctx, s, p, allGates);
+    else if (s.kind === 'crmSearch') emitCrmSearch(w, ctx, s, p, allGates);
   }
   for (const p of loaderPlans) {
     gap();
     emitLoader(w, ctx, p.source as FetchSource | FunctionSource, p);
   }
-  const onMount = loaderPlans.filter((p) => (p.source as FetchSource | FunctionSource).runOnMount === true);
-  if (onMount.length) {
+  for (const p of onMount) {
     const useEffect = importValue(ctx, 'react', 'useEffect');
+    const useRef = importValue(ctx, 'react', 'useRef');
+    const gates = gatesBySource.get(p) ?? [];
+    const started = ctx.names.allocate(`${p.source.name}Requested`);
     gap();
+    w.line(
+      gates.length
+        ? `// Load ${p.source.name} when the card opens, once the data its request reads has loaded.`
+        : `// Load ${p.source.name} when the card opens; refresh actions call ${p.loaderName}() again.`,
+    );
+    w.line(`const ${started} = ${useRef}(false);`);
     w.block(`${useEffect}(() => {`, () => {
-      for (const p of onMount) w.line(`void ${p.rerunCall};`);
-      w.line('// Load once on mount; refresh actions call the loaders again.');
-      w.line('// eslint-disable-next-line react-hooks/exhaustive-deps');
-    }, '}, []);');
+      w.line(`if (${[`${started}.current`, ...gates].join(' || ')}) return;`);
+      w.line(`${started}.current = true;`);
+      w.line(`void ${p.rerunCall};`);
+    }, `}, [${[...gates, p.loaderName!].join(', ')}]);`);
   }
   return true;
 }
 
-/** One-line description used as a comment above the declaration. */
+/** One-line description used as a comment above the declaration (line terminators removed). */
 function describeSource(ctx: GenContext, s: DataSource): string {
+  return commentText(describeSourceText(ctx, s));
+}
+
+function describeSourceText(ctx: GenContext, s: DataSource): string {
   switch (s.kind) {
     case 'crmProperties':
       return `${s.name}: properties of the current CRM record`;

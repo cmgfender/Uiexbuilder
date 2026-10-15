@@ -25,13 +25,62 @@ function escapeTemplateText(text: string): string {
   return text.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
 }
 
+// Segment code that never evaluates to null / undefined: a string or number literal, String(…).
+const NEVER_NULLISH_RE = /^(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|-?\d+(?:\.\d+)?|String\((?:[^()]|\([^()]*\))*\))$/;
+// `C ?? ''` as written by earlier versions of segmentToJs (C optionally parenthesised).
+const NULLISH_TEXT_RE = /^([\s\S]*?)\s*\?\?\s*(?:''|"")$/;
+// `toText(C)` as written by segmentToJs.
+const TO_TEXT_RE = /^toText\s*(\([\s\S]*\))$/;
+
+/**
+ * A mixed-template segment as a template-literal placeholder. Interpolation converts each value
+ * with `toText` (null / undefined / booleans → '', objects → JSON; ARCHITECTURE §1 rule 3) while a
+ * JS template literal prints "null" / "false" / "[object Object]", so the value goes through the
+ * same `toText` (available to every expression, and emitted into generated code when used).
+ */
+function segmentToJs(code: string): string {
+  const c = code.trim();
+  if (NEVER_NULLISH_RE.test(c)) return c;
+  return `toText(${c})`;
+}
+
+/** Whether `(` at 0 closes at the very end, i.e. `(…)` wraps the whole code. */
+function wrappedInParens(code: string): boolean {
+  if (!code.startsWith('(') || !code.endsWith(')')) return false;
+  let depth = 0;
+  for (let i = 0; i < code.length; i++) {
+    if (code[i] === '(') depth++;
+    else if (code[i] === ')') depth--;
+    if (depth === 0 && i < code.length - 1) return false;
+  }
+  return depth === 0;
+}
+
+/**
+ * A template-literal placeholder as a `{{ }}` segment with the same output: `toText(x)` (as
+ * written by segmentToJs) — or `x ?? ''` from earlier versions — is `{{ x }}`; anything else keeps
+ * JS string conversion (null -> "null") through `String(…)`.
+ */
+function jsToSegment(code: string): string {
+  const c = code.trim();
+  const call = TO_TEXT_RE.exec(c);
+  if (call && wrappedInParens(call[1]) && call[1].slice(1, -1).trim()) return call[1].slice(1, -1).trim();
+  const m = NULLISH_TEXT_RE.exec(c);
+  if (m && m[1].trim()) {
+    const inner = m[1].trim();
+    return wrappedInParens(inner) ? inner.slice(1, -1).trim() : inner;
+  }
+  if (NEVER_NULLISH_RE.test(c)) return c;
+  return `String(${c})`;
+}
+
 /** A literal string (possibly a `{{ }}` template) as an equivalent JavaScript expression. */
 export function stringToExpr(str: string): string {
   if (!hasTemplate(str)) return JSON.stringify(str);
   const single = singleExpression(str);
   if (single !== null) return single;
   const body = parseTemplate(str)
-    .map((p) => (p.kind === 'text' ? escapeTemplateText(p.value) : `\${${p.code}}`))
+    .map((p) => (p.kind === 'text' ? escapeTemplateText(p.value) : `\${${segmentToJs(p.code)}}`))
     .join('');
   return `\`${body}\``;
 }
@@ -57,8 +106,9 @@ export function literalToExpr(value: JsonValue | undefined): string {
 }
 
 /**
- * Parses a template literal such as `Hello ${name}!` back into a `{{ }}` template string.
- * Returns null for anything more complex (nested backticks, tagged templates...).
+ * Parses a template literal such as `Hello ${name ?? ''}!` back into a `{{ }}` template string
+ * that renders the same text (`Hello {{ name }}!`). Returns null for anything more complex
+ * (nested backticks, tagged templates...).
  */
 export function templateLiteralToTemplate(code: string): string | null {
   const src = code.trim();
@@ -87,8 +137,10 @@ export function templateLiteralToTemplate(code: string): string | null {
       }
       if (depth !== 0) return null;
       const code = inner.slice(i + 2, j).trim();
-      if (code.includes('}}')) return null;
-      out += `{{ ${code} }}`;
+      if (!code) return null;
+      const segment = jsToSegment(code);
+      if (segment.includes('}}')) return null;
+      out += `{{ ${segment} }}`;
       i = j + 1;
       continue;
     }

@@ -51,15 +51,20 @@ export function ComponentPicker({ anchor, open, onClose, types, onPick, title = 
   }, [active]);
 
   return (
-    <Popover anchor={anchor} open={open} onClose={() => onClose(false)} width={280} maxHeight={380} role="dialog" aria-label={title}>
+    <Popover
+      anchor={anchor}
+      open={open}
+      onClose={() => onClose(false)}
+      width={280}
+      maxHeight={380}
+      role="dialog"
+      aria-label={title}
+      autoFocus
+    >
       <div
         className="ub-insp-vp"
         onKeyDown={(e) => {
-          if (e.key === 'Escape') {
-            e.preventDefault();
-            e.stopPropagation();
-            onClose(true);
-          } else if (e.key === 'ArrowDown') {
+          if (e.key === 'ArrowDown') {
             e.preventDefault();
             setActive((a) => Math.min(flat.length - 1, a + 1));
           } else if (e.key === 'ArrowUp') {
@@ -75,7 +80,7 @@ export function ComponentPicker({ anchor, open, onClose, types, onPick, title = 
         <div className="ub-insp-vp__search">
           <Search size={13} aria-hidden />
           <input
-            autoFocus
+            data-autofocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search components…"

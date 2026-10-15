@@ -16,21 +16,35 @@
  *                     expression-syntax, unclosed-template, repeat-items, repeat-name, repeat-shadow,
  *                     unknown-state, binding-type, binding-unsupported, duplicate-overlay-id,
  *                     duplicate-tab-id, missing-overlay, unknown-data-source, unknown-function,
- *                     refresh-unsupported, event-variant, unknown-event, unknown-name, empty-alert
+ *                     refresh-unsupported, event-variant, unknown-event, unknown-name (subject: the
+ *                     name, suggestion: the closest name in scope), empty-alert, empty-copy,
+ *                     set-state-value, set-state-type, context-location (error: context.crm on a
+ *                     settings / app home page), unguarded-async-data (warning: fetch / function
+ *                     data read before it has loaded), dynamic-url-origin (warning: a request /
+ *                     image URL whose host is an expression; subject: the likely origin)
  *  - state & data:    invalid-identifier, duplicate-name, state-initial, data-source-properties,
  *                     data-source-config, data-source-location, data-source-computed, fetch-url,
- *                     iframe-url, computed-order, helpers-syntax, function-syntax, function-main
+ *                     iframe-url, computed-order, helpers-syntax, function-syntax, function-main,
+ *                     function-app-type (error: marketplace / OAuth apps can't have functions),
+ *                     function-platform (warning: 2025.2 has only endpoint functions, no
+ *                     hubspot.serverless), endpoint-path, data-source-properties (also: likely
+ *                     typos of standard CRM property names; subject: the name, suggestion: the fix)
  *  - requirements:    missing-scope, missing-permitted-url (info: added automatically on export)
  */
 import { getComponent } from '../registry';
 import type { ComponentDef, PropDef } from '../registry/types';
-import { deriveRequirements, staticOrigin } from '../codegen/requirements';
+import { deriveRequirements, staticOrigin, urlOriginHint } from '../codegen/requirements';
+import { stateTypeArg } from '../codegen/context';
+import { fitsStateType, inferValueType } from '../codegen/rewrite';
+import { propertyNameWarning } from '../panels/crmProperties';
+import { ENDPOINT_PATH_RE } from '../panels/utils';
+import { isPropertyName, nextSignificant, prevSignificant, tokenize as tokenizeJs } from './jsTokens';
 import { checkExpressionSyntax, checkStatementsSyntax } from '../runtime/expr';
 import { checkHelpersSyntax, helperNames } from '../power/helpers';
 import { isValidIdentifier, uidProblem } from './ids';
 import { canAccept, isAvailableIn } from './rules';
 import { parseTemplate } from './template';
-import type { ActionStep, DataSource, Extension, JsonValue, NodeId, Project, PropValue, UINode } from './types';
+import type { ActionStep, AppFunction, DataSource, Extension, JsonValue, NodeId, Project, PropValue, UINode } from './types';
 import { isExpr } from './types';
 
 export type IssueSeverity = 'error' | 'warning' | 'info';
@@ -51,9 +65,15 @@ export interface Issue {
   field?: string;
   /**
    * The value the issue is about, when one-click fixes need it (additive): the scope of
-   * missing-scope, the origin of missing-permitted-url, the state name of an unknown binding.
+   * missing-scope, the origin of missing-permitted-url, the state name of an unknown binding,
+   * the misspelt identifier of unknown-name.
    */
   subject?: string;
+  /**
+   * A likely replacement for `subject` (additive): for unknown-name, the closest name in scope at
+   * that place ("did you mean …"); absent when nothing is close or the match is ambiguous.
+   */
+  suggestion?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -103,7 +123,7 @@ const JS_GLOBALS = new Set(
     'Math JSON Number String Date Array Object Boolean parseInt parseFloat isNaN isFinite encodeURIComponent ' +
     'decodeURIComponent encodeURI decodeURI console Intl RegExp Promise Map Set WeakMap WeakSet Symbol Error ' +
     'TypeError RangeError BigInt setTimeout clearTimeout setInterval clearInterval structuredClone globalThis ' +
-    'queueMicrotask'
+    'queueMicrotask toText'
   ).split(' '),
 );
 
@@ -117,6 +137,16 @@ const BUILT_IN_NAMES = new Set(
 
 /** Names custom code actions get in addition to the handler scope. */
 const CUSTOM_CODE_NAMES = ['actions', 'hubspot', 'logger'];
+
+/** Example values per state type, for messages about a missing value. */
+const EXAMPLE_VALUES: Record<string, string> = {
+  string: "'' (empty text)",
+  number: '0',
+  boolean: 'true or false',
+  array: '[]',
+  object: '{}',
+  any: 'null',
+};
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -433,7 +463,7 @@ class Collector {
   readonly issues: Issue[] = [];
   private readonly seen = new Set<string>();
 
-  add(rule: string, severity: IssueSeverity, message: string, loc: Loc = {}, key = '', subject?: string): void {
+  add(rule: string, severity: IssueSeverity, message: string, loc: Loc = {}, key = '', subject?: string, suggestion?: string): void {
     const id = [rule, loc.extensionId ?? '', loc.nodeId ?? '', loc.field ?? '', key].join('|');
     if (this.seen.has(id)) return;
     this.seen.add(id);
@@ -442,17 +472,105 @@ class Collector {
     if (loc.nodeId) issue.nodeId = loc.nodeId;
     if (loc.field) issue.field = loc.field;
     if (subject) issue.subject = subject;
+    if (suggestion) issue.suggestion = suggestion;
     this.issues.push(issue);
   }
 }
 
 /** Identifiers in scope at some point of an extension. */
-type NameScope = (name: string) => boolean;
+interface NameScope {
+  has(name: string): boolean;
+  /** Whether `name` comes from a local layer (repeat item, handler param, response, ...). */
+  isLocal(name: string): boolean;
+  /** Every name in scope, innermost first (candidates for "did you mean" suggestions). */
+  names(): Iterable<string>;
+}
+
+/** The names of `set` that `hidden` doesn't remove. */
+function setScope(set: ReadonlySet<string>, hidden?: ReadonlySet<string>): NameScope {
+  return {
+    has: (name) => set.has(name) && !hidden?.has(name),
+    isLocal: () => false,
+    *names() {
+      for (const n of set) if (!hidden?.has(n)) yield n;
+    },
+  };
+}
 
 function scopeWith(parent: NameScope, names: Iterable<string>): NameScope {
   const set = new Set(names);
   if (set.size === 0) return parent;
-  return (name) => set.has(name) || parent(name);
+  return {
+    has: (name) => set.has(name) || parent.has(name),
+    isLocal: (name) => set.has(name) || parent.isLocal(name),
+    *names() {
+      yield* set;
+      yield* parent.names();
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// "Did you mean" suggestions
+// ---------------------------------------------------------------------------
+
+/** Literal names worth suggesting for typos such as `ture` or `nul`. */
+const LITERAL_NAMES = ['true', 'false', 'null', 'undefined'];
+
+/**
+ * Optimal string alignment distance (Levenshtein plus adjacent transpositions, so `cuont` →
+ * `count` is 1). Returns `max + 1` as soon as the distance is known to exceed `max`.
+ */
+export function editDistance(a: string, b: string, max = Infinity): number {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev2: number[] = [];
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let d = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d = Math.min(d, prev2[j - 2] + 1);
+      row.push(d);
+      if (d < rowMin) rowMin = d;
+    }
+    if (rowMin > max) return max + 1;
+    prev2 = prev;
+    prev = row;
+  }
+  return prev[b.length];
+}
+
+/**
+ * The name a misspelt identifier most likely meant, or undefined when nothing is close or two
+ * names are equally close (a one-click fix must not guess). A different-case match wins; otherwise
+ * the allowed distance grows with the name: none below 3 characters, 1 below 6, else 2.
+ */
+export function closestName(name: string, candidates: Iterable<string>): string | undefined {
+  if (!name) return undefined;
+  const lower = name.toLowerCase();
+  const max = name.length < 3 ? 0 : name.length < 6 ? 1 : 2;
+  let best: string | undefined;
+  let bestScore = Infinity;
+  let tied = false;
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    if (!candidate || candidate === name || seen.has(candidate)) continue;
+    seen.add(candidate);
+    // A case-only difference (`Count` → `count`) ranks above any edit; otherwise case counts as
+    // an edit, so `data` is not "almost" `Date`. Sharing the first character breaks ties.
+    const distance = candidate.toLowerCase() === lower ? 0 : editDistance(name, candidate, max);
+    if (distance > max) continue;
+    const score = distance * 2 + (candidate[0] === name[0] ? 0 : 1);
+    if (score < bestScore) {
+      best = candidate;
+      bestScore = score;
+      tied = false;
+    } else if (score === bestScore) tied = true;
+  }
+  return tied ? undefined : best;
 }
 
 interface CodeChecker {
@@ -464,11 +582,18 @@ interface CodeChecker {
    * declared before the computed values, so they cannot read them).
    */
   computedInDataSource?: Set<string>;
+  /** Set on settings / app home pages: `context.crm` doesn't exist there (kind label). */
+  noCrmContext?: string;
+  /**
+   * Render-time code only: fetch / function data source names (null until loaded) and the
+   * conditions of the node and its ancestors that may guard reading them.
+   */
+  asyncData?: { names: Set<string>; guards: string[] };
 }
 
 function reportUnknownNames(chk: CodeChecker, code: string, scope: NameScope, loc: Loc, what: string): void {
   for (const name of scanReferences(code)) {
-    if (scope(name) || JS_GLOBALS.has(name)) continue;
+    if (scope.has(name) || JS_GLOBALS.has(name)) continue;
     if (chk.computedInDataSource?.has(name)) {
       chk.c.add(
         'data-source-computed',
@@ -489,14 +614,25 @@ function reportUnknownNames(chk: CodeChecker, code: string, scope: NameScope, lo
       );
       continue;
     }
+    const suggestion = closestName(name, suggestionCandidates(scope));
     chk.c.add(
       'unknown-name',
       'warning',
-      `Unknown name ${quote(name)} in ${what}. Check the spelling, or add a state variable, data source or computed value with this name.`,
+      suggestion
+        ? `Unknown name ${quote(name)} in ${what}. Did you mean ${quote(suggestion)}?`
+        : `Unknown name ${quote(name)} in ${what}. Check the spelling, or add a state variable, data source or computed value with this name.`,
       loc,
       name,
+      name,
+      suggestion,
     );
   }
+}
+
+function* suggestionCandidates(scope: NameScope): Iterable<string> {
+  yield* scope.names();
+  yield* JS_GLOBALS;
+  yield* LITERAL_NAMES;
 }
 
 /** Checks a JavaScript expression: syntax (error) then unknown names (warning). */
@@ -508,6 +644,8 @@ function checkExpression(chk: CodeChecker, code: unknown, scope: NameScope, loc:
     return;
   }
   reportUnknownNames(chk, code, scope, loc, what);
+  checkCodeContext(chk, code, scope, loc, what);
+  checkAsyncDataReads(chk, code, scope, loc, what);
 }
 
 /** Checks a block of statements (custom code). */
@@ -519,6 +657,85 @@ function checkStatements(chk: CodeChecker, code: unknown, scope: NameScope, loc:
     return;
   }
   reportUnknownNames(chk, code, scope, loc, what);
+  checkCodeContext(chk, code, scope, loc, what);
+}
+
+/** `context.crm` on a settings / app home page (SettingsContext / AppHomeContext have no crm). */
+function checkCodeContext(chk: CodeChecker, code: string, scope: NameScope, loc: Loc, what: string): void {
+  if (!chk.noCrmContext || !code.includes('crm') || scope.isLocal('context')) return;
+  const tokens = tokenizeJs(code);
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.kind !== 'ident' || t.text !== 'context' || isPropertyName(tokens, i)) continue;
+    const dot = nextSignificant(tokens, i + 1);
+    if (dot === -1 || (tokens[dot].text !== '.' && tokens[dot].text !== '?.')) continue;
+    const prop = nextSignificant(tokens, dot + 1);
+    if (prop === -1 || tokens[prop].text !== 'crm') continue;
+    chk.c.add(
+      'context-location',
+      'error',
+      `${capitalize(what)} uses context.crm, which only exists on app cards — ${chk.noCrmContext}s have no CRM record, so HubSpot would stop the page with an error. Remove it, or move this content to a card.`,
+      loc,
+      `ctx:${code}`,
+    );
+    return;
+  }
+}
+
+/** Names `code` reads at top level without a member access (`x &&`, `!x`, `x ? …`, `f(x)`). */
+function plainReads(code: string): Set<string> {
+  const tokens = tokenizeJs(code);
+  const out = new Set<string>();
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.kind !== 'ident' || isPropertyName(tokens, i)) continue;
+    const next = nextSignificant(tokens, i + 1);
+    const after = next === -1 ? '' : tokens[next].text;
+    if (after !== '.' && after !== '[') out.add(t.text);
+  }
+  return out;
+}
+
+/**
+ * Fetch and app-function data are null until their request finishes, and HubSpot renders the card
+ * right away: `weather.temperature` throws a TypeError on that first render and HubSpot shows an
+ * error instead of the card. Reports `name.x` / `name[i]` without `?.`, unless the same code or a
+ * condition of the node or an ancestor checks `name` / `nameLoading` first.
+ */
+function checkAsyncDataReads(chk: CodeChecker, code: string, scope: NameScope, loc: Loc, what: string): void {
+  const data = chk.asyncData;
+  if (!data || data.names.size === 0) return;
+  const tokens = tokenizeJs(code);
+  let reads: Set<string> | null = null;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.kind !== 'ident' || !data.names.has(t.text) || isPropertyName(tokens, i) || scope.isLocal(t.text)) continue;
+    const prev = prevSignificant(tokens, i - 1);
+    if (prev !== -1 && tokens[prev].text === '?.') continue;
+    const next = nextSignificant(tokens, i + 1);
+    if (next === -1) continue;
+    const op = tokens[next].text;
+    if (op !== '.' && op !== '[') continue;
+    const name = t.text;
+    reads ??= plainReads(code);
+    if (reads.has(name) || reads.has(`${name}Loading`) || reads.has(`${name}Error`)) return;
+    const guarded = data.guards.some((g) => {
+      const refs = scanReferences(g);
+      return refs.includes(name) || refs.includes(`${name}Loading`) || refs.includes(`${name}Error`);
+    });
+    if (guarded) return;
+    const member = op === '.' ? tokens[nextSignificant(tokens, next + 1)]?.text ?? 'value' : '';
+    const example = op === '.' ? `${name}?.${member}` : `${name}?.[…]`;
+    chk.c.add(
+      'unguarded-async-data',
+      'warning',
+      `${capitalize(what)} reads ${quote(name)} before it has loaded (it is null until the request finishes), so HubSpot would stop the card with an error on its first render. Use ${quote(example)}, or show this only when ${quote(`!${name}Loading && ${name}`)}.`,
+      loc,
+      `async:${name}:${code}`,
+      name,
+    );
+    return;
+  }
 }
 
 /** Checks every `{{ }}` segment of a template string. */
@@ -697,12 +914,84 @@ function validateUniqueness(project: Project, c: Collector): void {
 // App functions
 // ---------------------------------------------------------------------------
 
+/**
+ * Why the app can't contain app functions with its current settings, or null when it can.
+ * HubSpot's component catalog (hubspot-project-components `config.json`) offers app functions
+ * only to private apps — never to marketplace apps — and from platform 2026.03 on only to apps
+ * with static token auth.
+ */
+export function appFunctionsUnsupported(project: Pick<Project, 'app' | 'platformVersion'>): string | null {
+  const app = isRecord(project.app) ? project.app : null;
+  if (!app) return null;
+  if (app.distribution === 'marketplace') return 'HubSpot doesn’t allow app functions in marketplace apps';
+  if (app.authType === 'oauth' && project.platformVersion !== '2025.2') {
+    return `HubSpot only allows app functions in apps with static token auth on platform ${str(project.platformVersion) || '2026.03'}`;
+  }
+  return null;
+}
+
+function hasEndpoint(fn: AppFunction): boolean {
+  return isRecord(fn.endpoint) && typeof fn.endpoint.path === 'string' && !!fn.endpoint.path.trim();
+}
+
+/** Ids of the app functions extensions run with hubspot.serverless (actions and data sources). */
+function functionsRunFromExtensions(project: Project): Set<string> {
+  const out = new Set<string>();
+  const visitSteps = (steps: unknown, depth: number): void => {
+    if (depth > 50) return;
+    for (const step of asArray(steps as ActionStep[])) {
+      if (!isRecord(step)) continue;
+      if (step.type === 'runFunction') out.add(str(step.functionId));
+      for (const key of ['onSuccess', 'onError', 'then', 'else']) visitSteps((step as Record<string, unknown>)[key], depth + 1);
+    }
+  };
+  for (const ext of asArray(project.extensions)) {
+    if (!isRecord(ext)) continue;
+    for (const ds of asArray(ext.dataSources)) if (isRecord(ds) && ds.kind === 'function') out.add(str(ds.functionId));
+    for (const node of Object.values(isRecord(ext.nodes) ? ext.nodes : {})) {
+      if (isRecord(node) && isRecord(node.events)) for (const steps of Object.values(node.events)) visitSteps(steps, 0);
+    }
+  }
+  return out;
+}
+
 function validateFunctions(project: Project, c: Collector): void {
   const files = new Map<string, string>();
-  for (const fn of asArray(project.functions)) {
+  const functions = asArray(project.functions).filter(Boolean);
+  const unsupported = functions.length ? appFunctionsUnsupported(project) : null;
+  // Platform 2025.2 only has public endpoint functions; hubspot.serverless needs 2026.03+.
+  const legacy = project.platformVersion === '2025.2';
+  const runFromCards = legacy && functions.length ? functionsRunFromExtensions(project) : null;
+  for (const fn of functions) {
     if (!fn) continue;
     const loc = { field: `function:${fn.id}` };
     const label = quote(str(fn.fileName) || str(fn.uid) || 'function');
+    if (unsupported) {
+      c.add(
+        'function-app-type',
+        'error',
+        `App function ${label} can’t be uploaded: ${unsupported}. Switch the app to Private distribution with Static token auth in App settings, or delete the function.`,
+        loc,
+        'app-type',
+      );
+    }
+    if (legacy && !hasEndpoint(fn)) {
+      c.add(
+        'function-platform',
+        'warning',
+        `App function ${label} has no endpoint, but platform 2025.2 only supports endpoint functions and cards can’t run functions with hubspot.serverless. Switch the platform version to 2026.03 in App settings, or give the function an endpoint.`,
+        loc,
+        'platform',
+      );
+    } else if (legacy && runFromCards?.has(fn.id)) {
+      c.add(
+        'function-platform',
+        'warning',
+        `App function ${label} is run from a card with hubspot.serverless, which platform 2025.2 doesn’t support. Switch the platform version to 2026.03 in App settings, or call its endpoint with a “Fetch URL” action.`,
+        loc,
+        'platform',
+      );
+    }
     const uid = str(fn.uid);
     if (!uid.trim()) c.add('invalid-uid', 'error', `App function ${label} needs a uid (the name cards call it by).`, loc, 'uid');
     else if (uidProblem(uid)) {
@@ -715,6 +1004,23 @@ function validateFunctions(project: Project, c: Collector): void {
       const prev = files.get(fileName.toLowerCase());
       if (prev) c.add('duplicate-file-name', 'error', `File name ${quote(fileName)} is used by two app functions.`, loc, 'file');
       else files.set(fileName.toLowerCase(), fileName);
+    }
+    if (isRecord(fn.endpoint)) {
+      const path = str(fn.endpoint.path).trim();
+      if (!path) {
+        c.add('endpoint-path', 'error', `App function ${label} is a public endpoint but has no path (e.g. /api/status).`, loc, 'endpoint');
+      } else if (!ENDPOINT_PATH_RE.test(path)) {
+        c.add(
+          'endpoint-path',
+          'error',
+          `Endpoint path ${quote(path)} of app function ${label} may only use letters, digits, - and _ in segments separated by / (e.g. /api/status).`,
+          loc,
+          'endpoint',
+        );
+      }
+      if (asArray(fn.endpoint.methods).length === 0) {
+        c.add('endpoint-path', 'warning', `The endpoint of app function ${label} has no HTTP method; GET is used.`, loc, 'endpoint-methods');
+      }
     }
     const code = str(fn.code);
     if (!code.trim()) {
@@ -791,6 +1097,7 @@ interface ExtContext {
   /** Names that a repeat variable would shadow. */
   shadowable: Set<string>;
   dataSourceIds: Set<string>;
+  dataSourceNames: Set<string>;
   functionIds: Set<string>;
   /** Modal / Panel nodes of the extension. */
   overlayNodes: Set<NodeId>;
@@ -898,10 +1205,14 @@ function validateExtension(project: Project, ext: Extension, c: Collector): void
     baseNames.add(`${ds.name}Loading`);
     baseNames.add(`${ds.name}Error`);
   }
-  const base: NameScope = (name) => baseNames.has(name);
+  const base = setScope(baseNames);
   const computedNames = new Set(computed.map((cv) => str(cv.name)).filter(Boolean));
-  const dataScope: NameScope = (name) => baseNames.has(name) && !computedNames.has(name);
-  const chk: CodeChecker = { c };
+  const dataScope = setScope(baseNames, computedNames);
+  const chk: CodeChecker = {
+    c,
+    noCrmContext: ext.kind === 'settings' ? 'settings page' : ext.kind === 'home' ? 'app home page' : undefined,
+  };
+  const asyncNames = new Set(dataSources.filter((ds) => (ds.kind === 'fetch' || ds.kind === 'function') && ds.name).map((ds) => ds.name));
   const shadowable = new Set<string>(baseNames);
   shadowable.delete('context');
 
@@ -921,6 +1232,7 @@ function validateExtension(project: Project, ext: Extension, c: Collector): void
     stateByName: new Map(state.map((s) => [s.name, s])),
     shadowable,
     dataSourceIds: new Set(dataSources.map((d) => d.id)),
+    dataSourceNames: new Set(dataSources.map((d) => str(d.name)).filter(Boolean)),
     functionIds: new Set(asArray(project.functions).map((f) => f?.id)),
     overlayNodes,
     overlayIds: new Map(),
@@ -935,7 +1247,7 @@ function validateExtension(project: Project, ext: Extension, c: Collector): void
   // ---- computed values (each may use the ones declared before it)
   computed.forEach((cv, i) => {
     const later = new Set(computed.slice(i).map((x) => x.name));
-    const scope: NameScope = (name) => baseNames.has(name) && !later.has(name);
+    const scope = setScope(baseNames, later);
     const field = `computed:${cv.id}`;
     if (!str(cv.expr).trim()) {
       c.add('expression-syntax', 'warning', `Computed value ${quote(str(cv.name))} has no expression yet.`, extLoc(field));
@@ -943,7 +1255,9 @@ function validateExtension(project: Project, ext: Extension, c: Collector): void
     }
     const prevLater = chk.laterComputed;
     chk.laterComputed = new Set(computed.slice(i + 1).map((x) => x.name));
+    chk.asyncData = { names: asyncNames, guards: [] };
     checkExpression(chk, cv.expr, scope, extLoc(field), `the computed value ${quote(str(cv.name))}`);
+    chk.asyncData = undefined;
     chk.laterComputed = prevLater;
   });
 
@@ -966,7 +1280,9 @@ function validateExtension(project: Project, ext: Extension, c: Collector): void
     );
   }
   const visited = new Set<NodeId>([root.id]);
+  chk.asyncData = { names: asyncNames, guards: [] };
   asArray(root.children).forEach((cid, index) => visitNode(ctx, nodes, visited, cid, { parentId: root.id, index }, base));
+  chk.asyncData = undefined;
 
   // Duplicate overlay ids were collected during the walk (first owner kept in overlayIds).
 }
@@ -985,6 +1301,16 @@ function checkStateInitial(s: Extension['state'][number], c: Collector, loc: Loc
   }
 }
 
+/** Likely typos of standard CRM property names (custom properties are never flagged). */
+function checkPropertyNames(c: Collector, properties: unknown, objectTypes: Array<string | undefined | null>, loc: Loc): void {
+  for (const raw of asArray(properties as unknown[])) {
+    const name = str(raw);
+    if (!name.trim()) continue;
+    const w = propertyNameWarning(name, objectTypes);
+    if (w) c.add('data-source-properties', 'warning', w.message, loc, `prop:${name}`, name, w.fix);
+  }
+}
+
 function validateDataSource(ctx: ExtContext, ds: DataSource): void {
   const { c, chk, ext } = ctx;
   const loc: Loc = { extensionId: ext.id, field: `dataSource:${ds.id}` };
@@ -994,6 +1320,7 @@ function validateDataSource(ctx: ExtContext, ds: DataSource): void {
       if (asArray(ds.properties).length === 0) {
         c.add('data-source-properties', 'warning', `The ${label} doesn’t load any properties yet. Pick the record properties you need.`, loc);
       }
+      if (ext.kind === 'card') checkPropertyNames(c, ds.properties, asArray(ext.objectTypes), loc);
       if (!ctx.isCrm) {
         c.add('data-source-location', 'warning', `The ${label} reads the current CRM record, which only exists on record cards — not on this page.`, loc);
       }
@@ -1003,6 +1330,7 @@ function validateDataSource(ctx: ExtContext, ds: DataSource): void {
       if (asArray(ds.properties).length === 0) {
         c.add('data-source-properties', 'warning', `The ${label} doesn’t load any properties yet. Pick the properties to show.`, loc);
       }
+      checkPropertyNames(c, ds.properties, [str(ds.toObjectType)], loc);
       if (!ctx.isCrm) {
         c.add('data-source-location', 'warning', `The ${label} loads records associated with the current CRM record, which only exists on record cards.`, loc);
       }
@@ -1012,6 +1340,7 @@ function validateDataSource(ctx: ExtContext, ds: DataSource): void {
       if (asArray(ds.properties).length === 0) {
         c.add('data-source-properties', 'warning', `The ${label} doesn’t load any properties yet. Pick the properties to show.`, loc);
       }
+      checkPropertyNames(c, ds.properties, [str(ds.objectType)], loc);
       checkTemplate(chk, ds.query, ctx.dataScope, loc, `the search text of the ${label}`);
       for (const f of asArray(ds.filters)) checkTemplate(chk, f?.value, ctx.dataScope, loc, `a filter of the ${label}`);
       break;
@@ -1019,7 +1348,8 @@ function validateDataSource(ctx: ExtContext, ds: DataSource): void {
       const url = str(ds.url).trim();
       checkTemplate(chk, url, ctx.dataScope, loc, `the URL of the ${label}`);
       checkExpression(chk, ds.body, ctx.dataScope, loc, `the request body of the ${label}`);
-      checkFetchUrl(c, url, loc, `The ${label}`);
+      checkHeaders(chk, ds.headers, ctx.dataScope, loc, `the ${label}`);
+      checkFetchUrl(ctx, url, loc, `The ${label}`);
       break;
     }
     case 'function':
@@ -1033,23 +1363,56 @@ function validateDataSource(ctx: ExtContext, ds: DataSource): void {
   }
 }
 
-function checkFetchUrl(c: Collector, url: string, loc: Loc, subject: string): void {
+/** Template values of request headers. */
+function checkHeaders(chk: CodeChecker, headers: unknown, scope: NameScope, loc: Loc, owner: string): void {
+  for (const h of asArray(headers as unknown[])) {
+    if (!isRecord(h)) continue;
+    const key = str(h.key).trim();
+    if (key) checkTemplate(chk, h.value, scope, loc, `the ${quote(key)} header of ${owner}`);
+  }
+}
+
+type PermittedKind = 'fetch' | 'iframe' | 'img';
+
+/**
+ * A URL whose host comes from an expression can't be added to the permitted URLs on export, and
+ * HubSpot blocks requests / images from hosts that aren't listed. `subject` of the issue is the
+ * likely origin (from the initial value of the state variable the URL starts with), so the
+ * Problems panel can offer to add it; the issue key starts with the permitted-URL kind.
+ */
+function checkDynamicOrigin(ctx: ExtContext, url: string, kind: PermittedKind, loc: Loc, subject: string): void {
+  const hint = urlOriginHint(url, ctx.ext);
+  if (!hint.dynamic) return;
+  const app = isRecord(ctx.project.app) ? ctx.project.app : null;
+  const permitted = app && isRecord(app.permittedUrls) ? asArray((app.permittedUrls as Record<string, string[]>)[kind]) : [];
+  const listed = new Set(permitted.map((u) => originKey(str(u))));
+  if (hint.suggestion && listed.has(hint.suggestion.toLowerCase())) return;
+  const what = kind === 'img' ? 'image' : kind === 'iframe' ? 'iframe' : 'request';
+  const fix = hint.suggestion
+    ? ` Add it under App settings › Permitted URLs (probably ${hint.suggestion}).`
+    : ' Add it under App settings › Permitted URLs.';
+  ctx.c.add(
+    'dynamic-url-origin',
+    hint.suggestion || listed.size === 0 ? 'warning' : 'info',
+    `${subject} builds its host from an expression, so it isn’t added to the permitted URLs on export — HubSpot blocks ${what}s to hosts that aren’t listed.${fix}`,
+    loc,
+    `${kind}:${url}`,
+    hint.suggestion ?? undefined,
+  );
+}
+
+function checkFetchUrl(ctx: ExtContext, url: string, loc: Loc, subject: string): void {
+  const c = ctx.c;
   if (!url) {
     c.add('fetch-url', 'error', `${subject} has no URL.`, loc, 'url');
     return;
   }
-  if (!/^https:\/\//i.test(url)) {
-    c.add('fetch-url', 'warning', `${subject} must call a full https:// URL — hubspot.fetch doesn’t support relative or http URLs.`, loc, 'url');
+  if (!staticOrigin(url) && url.includes('{{') && (url.startsWith('{{') || /^https:\/\//i.test(url))) {
+    checkDynamicOrigin(ctx, url, 'fetch', loc, subject);
     return;
   }
-  if (!staticOrigin(url)) {
-    c.add(
-      'fetch-url',
-      'warning',
-      `${subject} builds its host from an expression, so it can’t be added to the permitted URLs automatically. Add the host in App settings → Permitted URLs.`,
-      loc,
-      'url',
-    );
+  if (!/^https:\/\//i.test(url)) {
+    c.add('fetch-url', 'warning', `${subject} must call a full https:// URL — hubspot.fetch doesn’t support relative or http URLs.`, loc, 'url');
   }
 }
 
@@ -1228,6 +1591,10 @@ function visitNode(
 
   // ---- condition
   checkExpression(chk, node.condition, inner, loc('condition'), 'the visibility condition');
+  // The node's own props / text / children only render when its condition passes.
+  const asyncData = chk.asyncData;
+  const pushedGuard = !!asyncData && typeof node.condition === 'string' && !!node.condition.trim();
+  if (pushedGuard) asyncData!.guards.push(node.condition as string);
 
   // ---- binding
   let boundProp: string | null = null;
@@ -1273,6 +1640,9 @@ function visitNode(
       );
     }
     if (value !== undefined && value !== null) checkPropShape(ctx, node, def, p, value);
+  }
+  if (node.type === 'Image' && typeof props.src === 'string' && props.src.includes('{{')) {
+    checkDynamicOrigin(ctx, props.src.trim(), 'img', loc('src'), `The image ${quote(node.name ?? 'Image')}`);
   }
   for (const [name, value] of Object.entries(props)) {
     const what = `${propLabel(def, name)}`;
@@ -1346,7 +1716,10 @@ function visitNode(
       collector.add('event-variant', 'warning', `${quote(evDef.label)} never fires with this ${def.label}’s current settings.${hint}`, loc(field));
     }
     const handlerScope = scopeWith(scopeWith(inner, ctx.setters), evDef.params.map((p) => p.name));
+    // Handlers run after the first render, so they may read data that is still loading.
+    chk.asyncData = undefined;
     checkSteps(ctx, steps, handlerScope, loc(field), quote(evDef.label));
+    chk.asyncData = asyncData;
   }
 
   // ---- recurse
@@ -1356,6 +1729,7 @@ function visitNode(
       asArray(ids).forEach((cid, index) => visitNode(ctx, nodes, visited, cid, { parentId: node.id, index, slot }, inner));
     }
   }
+  if (pushedGuard) asyncData!.guards.pop();
 }
 
 function checkSteps(ctx: ExtContext, steps: ActionStep[], scope: NameScope, loc: Loc, eventLabel: string): void {
@@ -1365,20 +1739,34 @@ function checkSteps(ctx: ExtContext, steps: ActionStep[], scope: NameScope, loc:
     if (!isRecord(step)) continue;
     const key = str(step.id);
     switch (step.type) {
-      case 'setState':
-        if (!ctx.stateByName.has(str(step.state))) {
+      case 'setState': {
+        const target = ctx.stateByName.get(str(step.state));
+        if (!target) {
           collector.add(
             'unknown-state',
             'error',
             step.state
-              ? `A “Set state” action uses ${quote(step.state)}, which doesn’t exist. Pick an existing state variable.`
-              : 'A “Set state” action has no state variable selected.',
+              ? `A “Set variable” action uses ${quote(step.state)}, which doesn’t exist. Pick an existing state variable.`
+              : 'A “Set variable” action has no state variable selected.',
             loc,
             `set:${key}`,
           );
+        } else if (!str(step.value).trim()) {
+          // The preview and the generated code would both store `undefined` — almost never intended,
+          // and wrong for a typed variable (`text.length` then throws).
+          collector.add(
+            'set-state-value',
+            'warning',
+            `A “Set variable” action has no new value, so ${quote(target.name)} becomes undefined (${eventLabel}). Enter the new value, e.g. ${EXAMPLE_VALUES[target.type] ?? 'null'}.`,
+            loc,
+            `setvalue:${key}`,
+            target.name,
+          );
         }
-        checkExpression(chk, step.value, scope, loc, where('the new value of a “Set state” action'));
+        checkExpression(chk, step.value, scope, loc, where('the new value of a “Set variable” action'));
+        if (target && str(step.value).trim() && !exprSyntax(str(step.value))) checkSetStateType(ctx, target, str(step.value), scope, loc, key, eventLabel);
         break;
+      }
       case 'addAlert':
         if (!str(step.message).trim() && !str(step.title).trim()) {
           collector.add('empty-alert', 'warning', 'A “Show alert” action has no title or message.', loc, `alert:${key}`);
@@ -1398,7 +1786,8 @@ function checkSteps(ctx: ExtContext, steps: ActionStep[], scope: NameScope, loc:
         }
         break;
       case 'openIframeModal':
-        if (!str(step.uri).trim()) collector.add('iframe-url', 'error', 'An “Open iframe” action has no URL.', loc, `iframe:${key}`);
+        if (!str(step.uri).trim()) collector.add('iframe-url', 'error', 'An “Open iframe modal” action has no URL.', loc, `iframe:${key}`);
+        else checkDynamicOrigin(ctx, str(step.uri).trim(), 'iframe', loc, 'An “Open iframe modal” action');
         checkTemplate(chk, step.uri, scope, loc, where('an iframe URL'));
         checkTemplate(chk, step.title, scope, loc, where('an iframe title'));
         break;
@@ -1418,6 +1807,9 @@ function checkSteps(ctx: ExtContext, steps: ActionStep[], scope: NameScope, loc:
         break;
       }
       case 'copyToClipboard':
+        if (!str(step.text).trim()) {
+          collector.add('empty-copy', 'warning', `A “Copy to clipboard” action has no text to copy (${eventLabel}).`, loc, `copy:${key}`);
+        }
         checkTemplate(chk, step.text, scope, loc, where('the text to copy'));
         break;
       case 'runDataSource':
@@ -1426,8 +1818,8 @@ function checkSteps(ctx: ExtContext, steps: ActionStep[], scope: NameScope, loc:
             'unknown-data-source',
             'error',
             str(step.dataSourceId)
-              ? 'A “Refresh data” action points to a data source that no longer exists.'
-              : 'A “Refresh data” action has no data source chosen. Pick one, or add a data source in the Data panel.',
+              ? 'A “Refresh data source” action points to a data source that no longer exists.'
+              : 'A “Refresh data source” action has no data source chosen. Pick one, or add a data source in the Data panel.',
             loc,
             `run:${key}`,
           );
@@ -1436,8 +1828,9 @@ function checkSteps(ctx: ExtContext, steps: ActionStep[], scope: NameScope, loc:
       case 'fetch': {
         const url = str(step.url).trim();
         checkTemplate(chk, url, scope, loc, where('a request URL'));
-        checkFetchUrl(collector, url, loc, 'A “Fetch” action');
+        checkFetchUrl(ctx, url, loc, 'A “Fetch URL” action');
         checkExpression(chk, step.body, scope, loc, where('a request body'));
+        checkHeaders(chk, step.headers, scope, loc, where('a “Fetch URL” action'));
         checkResultState(ctx, step.resultState, loc, key);
         checkSteps(ctx, asArray(step.onSuccess), scopeWith(scope, ['response']), loc, eventLabel);
         checkSteps(ctx, asArray(step.onError), scopeWith(scope, ['error']), loc, eventLabel);
@@ -1457,9 +1850,9 @@ function checkSteps(ctx: ExtContext, steps: ActionStep[], scope: NameScope, loc:
         break;
       case 'if':
         if (!str(step.condition).trim()) {
-          collector.add('expression-syntax', 'warning', `An “If” action has no condition (${eventLabel}).`, loc, `if:${key}`);
+          collector.add('expression-syntax', 'warning', `An “If / else” action has no condition (${eventLabel}).`, loc, `if:${key}`);
         }
-        checkExpression(chk, step.condition, scope, loc, where('an “If” condition'));
+        checkExpression(chk, step.condition, scope, loc, where('an “If / else” condition'));
         checkSteps(ctx, asArray(step.then), scope, loc, eventLabel);
         checkSteps(ctx, asArray(step.else), scope, loc, eventLabel);
         break;
@@ -1470,6 +1863,51 @@ function checkSteps(ctx: ExtContext, steps: ActionStep[], scope: NameScope, loc:
         break;
     }
   }
+}
+
+const TYPE_LABELS: Record<string, string> = {
+  string: 'text',
+  number: 'number',
+  boolean: 'true / false value',
+  'any[]': 'list',
+};
+
+/** A “Set variable” value whose type provably differs from the variable’s (codegen casts it). */
+function checkSetStateType(
+  ctx: ExtContext,
+  target: Extension['state'][number],
+  value: string,
+  scope: NameScope,
+  loc: Loc,
+  key: string,
+  eventLabel: string,
+): void {
+  const want = stateTypeArg(target);
+  const known = (name: string) => {
+    if (scope.isLocal(name)) return null;
+    const st = ctx.stateByName.get(name);
+    if (st) return stateTypeArg(st);
+    if (name.endsWith('Loading') && ctx.base.has(name) && ctx.dataSourceNames.has(name.slice(0, -7))) return 'boolean';
+    return null;
+  };
+  let inferred: string | null;
+  try {
+    inferred = inferValueType(value, known);
+  } catch {
+    return;
+  }
+  if (!inferred || inferred === 'null' || inferred === 'undefined' || fitsStateType(inferred, want)) return;
+  const wantLabel = TYPE_LABELS[want.replace(/\s*\|\s*null$/, '')] ?? target.type;
+  const gotLabel = TYPE_LABELS[inferred] ?? inferred;
+  const convert = want.startsWith('string') ? ' Convert it with String(…)' : want.startsWith('number') ? ' Convert it with Number(…)' : '';
+  ctx.c.add(
+    'set-state-type',
+    'warning',
+    `A “Set variable” action stores a ${gotLabel} in ${quote(target.name)}, which holds a ${wantLabel} (${eventLabel}).${convert ? `${convert}, or` : ' Change the value, or'} change the variable’s type in the Data panel.`,
+    loc,
+    `settype:${key}`,
+    target.name,
+  );
 }
 
 function checkResultState(ctx: ExtContext, resultState: string | undefined, loc: Loc, key: string): void {

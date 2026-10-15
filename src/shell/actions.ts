@@ -3,9 +3,10 @@
  * latest store state (so it can run from event handlers without stale closures) and reports
  * user-facing problems through `notify` (a toast).
  */
-import { selectActiveExtension, useEditor } from '../model/store';
+import { usedStateVars } from '../canvas/nodeActions';
+import { selectActiveExtension, unavailableComponents, useEditor } from '../model/store';
 import { canAccept, extensionLocation } from '../model/rules';
-import { findParent, toTemplate, type InsertTarget } from '../model/tree';
+import { findParent, type InsertTarget } from '../model/tree';
 import type { Extension, ExtensionKind, ExtensionLocation, NodeId, StateVar } from '../model/types';
 import { getComponent } from '../registry';
 import type { ComponentDef } from '../registry/types';
@@ -144,17 +145,6 @@ export function applyDropPayload(payload: DragPayload, target: InsertTarget, not
   return res.ok;
 }
 
-/** Adds the state variables a block relies on that the active extension does not have yet. */
-export function addMissingStateVars(vars: Array<Omit<StateVar, 'id'>> | undefined): void {
-  if (!vars?.length) return;
-  const state = useEditor.getState();
-  for (const v of vars) {
-    const ext = activeExt();
-    if (ext.state.some((s) => s.name === v.name)) continue;
-    state.addStateVar({ ...v });
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Node commands
 // ---------------------------------------------------------------------------
@@ -217,6 +207,21 @@ export function wrapNodeSafe(id: NodeId, wrapperType: string, notify: Notify = n
   return res;
 }
 
+/**
+ * Undo / redo that says when the step changed another extension than the one on screen (the
+ * store switches to it so the change is visible).
+ */
+export function historyStep(kind: 'undo' | 'redo', notify: Notify = noop): void {
+  const before = useEditor.getState().activeExtensionId;
+  if (kind === 'undo') useEditor.getState().undo();
+  else useEditor.getState().redo();
+  const st = useEditor.getState();
+  if (st.activeExtensionId !== before) {
+    const ext = selectActiveExtension(st);
+    notify(`${kind === 'undo' ? 'Undid' : 'Redid'} a change on “${ext.name || 'Untitled'}”`);
+  }
+}
+
 export function pasteAt(afterId: NodeId | null | undefined, notify: Notify = noop): NodeId | null {
   const state = useEditor.getState();
   if (!state.clipboard) {
@@ -224,7 +229,14 @@ export function pasteAt(afterId: NodeId | null | undefined, notify: Notify = noo
     return null;
   }
   const id = state.paste(afterId);
-  if (!id) notify(`Can't paste ${typeLabel(state.clipboard.type)} here.`);
+  if (!id) {
+    const unavailable = unavailableComponents(activeExt(), state.clipboard);
+    notify(
+      unavailable.length
+        ? `Can't paste ${typeLabel(state.clipboard.type)} here: it contains ${unavailable.join(', ')}, which ${unavailable.length === 1 ? 'isn’t' : 'aren’t'} available on this ${activeExt().kind === 'card' ? 'card location' : activeExt().kind === 'settings' ? 'settings page' : 'app home page'}.`
+        : `Can't paste ${typeLabel(state.clipboard.type)} here.`,
+    );
+  }
   return id;
 }
 
@@ -320,19 +332,10 @@ export function moveSelectedAmongSiblings(delta: 1 | -1, notify: Notify = noop):
 // Blocks
 // ---------------------------------------------------------------------------
 
-/** State variables referenced by a node subtree (bindings or identifiers in its JSON). */
+/**
+ * State variables a node subtree uses (bindings, expressions, templates, conditions, repeats and
+ * action steps — never object keys or literal text). Shared with the canvas “Save as block”.
+ */
 export function stateVarsUsedBy(ext: Extension, id: NodeId): Array<Omit<StateVar, 'id'>> {
-  const tpl = toTemplate(ext, id);
-  // Only string values (expressions, templates, binding names) — never object keys.
-  const strings: string[] = [];
-  const collect = (v: unknown) => {
-    if (typeof v === 'string') strings.push(v);
-    else if (Array.isArray(v)) v.forEach(collect);
-    else if (v && typeof v === 'object') Object.values(v).forEach(collect);
-  };
-  collect(tpl);
-  const haystack = strings.join('\n');
-  return ext.state
-    .filter((v) => new RegExp(`(^|[^A-Za-z0-9_$])${v.name.replace(/\$/g, '\\$')}($|[^A-Za-z0-9_$])`).test(haystack))
-    .map(({ id: _id, ...rest }) => rest);
+  return usedStateVars(ext, id);
 }

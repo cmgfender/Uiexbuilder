@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProject } from '../model/factory';
-import { listSavedProjects, serializeProject } from '../model/persistence';
+import { listSavedProjects, loadSavedProject, saveProject, serializeProject } from '../model/persistence';
+import { ImportConflictDialog } from '../shell/importProject';
 import { useEditor } from '../model/store';
 import { ToastProvider } from '../ui';
 import { PROJECT_TEMPLATES } from './catalog';
@@ -91,6 +92,29 @@ describe('<NewProjectDialog>', () => {
     });
     await waitFor(() => expect(useEditor.getState().project.id).toBe(imported.id));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('asks before replacing a saved project with an older download of it', async () => {
+    const original = useEditor.getState().project;
+    const older = { ...JSON.parse(serializeProject(original)), app: { ...original.app, name: 'Old name' } };
+    saveProject(original);
+    const onClose = vi.fn();
+    render(
+      <ToastProvider>
+        <NewProjectDialog open onClose={onClose} arg={null} />
+        <ImportConflictDialog />
+      </ToastProvider>,
+    );
+    const file = new File([JSON.stringify(older)], 'old.uiex.json', { type: 'application/json' });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Import builder file'), { target: { files: [file] } });
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /Import as a copy/ }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    // The saved project keeps its newer content; the file opened as a separate copy.
+    expect(loadSavedProject(original.id)?.app.name).toBe('Existing App');
+    expect(useEditor.getState().project.id).not.toBe(original.id);
+    expect(useEditor.getState().project.app.name).toBe('Old name');
   });
 
   it('reports an invalid import without changing the project', async () => {

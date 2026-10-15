@@ -2,8 +2,10 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useEditor } from '../model/store';
+import type { CloseOverlayAction } from '../model/types';
 import { Inspector } from './Inspector';
-import { ext, loadWith, nodeById, selectTop } from './testUtils';
+import { confirmModalTemplate } from './overlayPresets';
+import { ext, focusLikeBrowser, loadWith, nodeById, selectTop } from './testUtils';
 
 function row(name: string): HTMLElement {
   const el = document.querySelector<HTMLElement>(`[data-prop="${name}"]`);
@@ -143,7 +145,8 @@ describe('Properties tab', () => {
     const node = selectTop();
     render(<Inspector />);
     await userEvent.click(within(row('alt')).getByRole('button', { name: /Use an expression for Alt text/ }));
-    expect(nodeById(node.id).props.alt).toEqual({ $expr: '`Hello ${name}`' });
+    // toText keeps interpolation's rendering (null -> '', objects -> JSON) in the expression.
+    expect(nodeById(node.id).props.alt).toEqual({ $expr: '`Hello ${toText(name)}`' });
     await userEvent.click(within(row('alt')).getByRole('button', { name: /Use a fixed value/ }));
     expect(nodeById(node.id).props.alt).toBe('Hello {{ name }}');
     // Unset prop: fx mode without storing anything until typed.
@@ -280,5 +283,165 @@ describe('Extension settings (no selection)', () => {
     await userEvent.selectOptions(screen.getByLabelText('Location'), 'crm.record.sidebar');
     expect(ext().location).toBe('crm.record.sidebar');
     expect(screen.getByText(/Only CRM action components/)).toBeInTheDocument();
+  });
+});
+
+describe('Properties tab: binding, overlays, variables', () => {
+  it('"New variable" creates and binds in one undo step', async () => {
+    loadWith([{ type: 'Input', props: { label: 'Email', name: 'email' } }]);
+    const node = selectTop();
+    render(<Inspector />);
+    const before = useEditor.getState().past.length;
+    await userEvent.click(screen.getByRole('button', { name: 'New variable' }));
+    expect(useEditor.getState().past.length).toBe(before + 1);
+    act(() => useEditor.getState().undo());
+    expect(ext().state).toEqual([]);
+    expect(nodeById(node.id).binding).toBeUndefined();
+  });
+
+  it('explains when a text field updates its variable and can update while typing', async () => {
+    loadWith([{ type: 'SearchInput', props: { label: 'Search', name: 'search' } }], 'card', {
+      state: [
+        { id: 's1', name: 'search', type: 'string', initial: '' },
+        { id: 's2', name: 'query', type: 'string', initial: '' },
+      ],
+    });
+    const node = selectTop();
+    render(<Inspector />);
+    expect(screen.queryByRole('checkbox', { name: 'Update while typing' })).toBeNull();
+    await userEvent.selectOptions(screen.getByLabelText('Bind value to state'), 'search');
+    expect(screen.getByText(/when the user presses Enter or leaves the field — not on every keystroke/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Update while typing' }));
+    expect(nodeById(node.id).events?.onInput).toEqual([expect.objectContaining({ type: 'setState', state: 'search', value: 'value' })]);
+    expect(screen.queryByText(/not on every keystroke/)).toBeNull();
+    // Rebinding moves the live step to the new variable (one undo step); unbinding removes it.
+    const before = useEditor.getState().past.length;
+    await userEvent.selectOptions(screen.getByLabelText('Bind value to state'), 'query');
+    expect(useEditor.getState().past.length).toBe(before + 1);
+    expect(nodeById(node.id).events?.onInput).toEqual([expect.objectContaining({ state: 'query', value: 'value' })]);
+    await userEvent.click(screen.getAllByRole('button', { name: 'Unbind' })[0]);
+    expect(nodeById(node.id).binding).toBeUndefined();
+    expect(nodeById(node.id).events).toBeUndefined();
+  });
+
+  it('offers no live toggle when onInput is not the bound value (Select search text)', () => {
+    loadWith([{ type: 'Select', props: { label: 'Stage', name: 'stage', options: [{ label: 'A', value: 'a' }] } }], 'card', {
+      state: [{ id: 's1', name: 'stage', type: 'any', initial: null }],
+    });
+    const node = selectTop();
+    act(() => useEditor.getState().updateNode(node.id, { binding: { state: 'stage' } }));
+    render(<Inspector />);
+    expect(screen.queryByRole('checkbox', { name: 'Update while typing' })).toBeNull();
+  });
+
+  it('"Add confirmation" attaches a confirm modal titled after the button (first for destructive buttons)', async () => {
+    loadWith([{ type: 'Button', props: { variant: 'destructive' }, text: 'Delete record' }]);
+    const node = selectTop();
+    render(<Inspector />);
+    const overlayButtons = within(screen.getByRole('button', { name: 'Add modal' }).parentElement!).getAllByRole('button');
+    expect(overlayButtons[0]).toHaveTextContent('Add confirmation');
+    await userEvent.click(screen.getByRole('button', { name: 'Add confirmation' }));
+    const modalId = nodeById(node.id).slots?.overlay?.[0];
+    const modal = nodeById(modalId!);
+    expect(modal).toMatchObject({ type: 'Modal', props: expect.objectContaining({ title: 'Delete record?', variant: 'danger' }) });
+    const footer = ext().nodes[modal.children[1]];
+    const [confirm, cancel] = footer.children.map((id) => ext().nodes[id]);
+    expect(confirm).toMatchObject({ text: 'Delete record', props: { variant: 'destructive' } });
+    expect(cancel.text).toBe('Cancel');
+    for (const b of [confirm, cancel]) {
+      expect(b.events?.onClick).toEqual([expect.objectContaining({ type: 'closeOverlay', overlayNodeId: modalId })]);
+    }
+    expect((confirm.events!.onClick[0] as CloseOverlayAction).overlayNodeId).toBe(modalId);
+  });
+
+  it('"Add confirmation" on a regular button is offered after the plain overlays', () => {
+    loadWith([{ type: 'Button', text: 'Archive deal' }]);
+    selectTop();
+    render(<Inspector />);
+    const buttons = within(screen.getByRole('button', { name: 'Add modal' }).parentElement!).getAllByRole('button');
+    expect(buttons.map((b) => b.textContent)).toEqual(['Add modal', 'Add panel', 'Add tooltip', 'Add confirmation']);
+  });
+
+  it('picking a variable replaces the component\'s untouched default text', async () => {
+    loadWith([{ type: 'Heading', text: 'Heading' }], 'card', {
+      dataSources: [{ id: 'd1', name: 'record', kind: 'crmProperties', properties: ['firstname'] }],
+    });
+    const node = selectTop();
+    render(<Inspector />);
+    await userEvent.click(within(document.querySelector<HTMLElement>('[data-prop="__text"]')!).getByRole('button', { name: 'Insert {{ variable }}' }));
+    await userEvent.click(within(screen.getByRole('listbox', { name: 'Variables' })).getByText('record.firstname'));
+    expect(nodeById(node.id).text).toBe('{{ record.firstname }}');
+  });
+});
+
+describe('pickers from the keyboard', () => {
+  let restore: () => void;
+  beforeEach(() => {
+    restore = focusLikeBrowser();
+    return () => restore();
+  });
+
+  it('"Add child" moves focus into the component search; Escape closes and refocuses the button', async () => {
+    loadWith([{ type: 'Flex', children: [] }]);
+    const flex = selectTop();
+    render(<Inspector />);
+    const trigger = screen.getByRole('button', { name: /Add child/ });
+    trigger.focus();
+    await userEvent.keyboard('{Enter}');
+    const dialog = screen.getByRole('dialog', { name: 'Add child component' });
+    expect(within(dialog).getByLabelText('Search components')).toHaveFocus();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Add child component' })).toBeNull();
+    expect(trigger).toHaveFocus();
+    // The component stays selected (the global Escape = deselect never ran).
+    expect(useEditor.getState().selectedNodeId).toBe(flex.id);
+    trigger.focus();
+    await userEvent.keyboard('{Enter}');
+    await userEvent.keyboard('Heading');
+    await userEvent.keyboard('{Enter}');
+    expect(nodeById(nodeById(flex.id).children[0]).type).toBe('Heading');
+  });
+
+  it('the icon picker focuses its search and closes on Escape', async () => {
+    loadWith([{ type: 'Icon', props: { name: 'star' } }]);
+    selectTop();
+    render(<Inspector />);
+    const trigger = screen.getByRole('button', { name: /^Icon/ });
+    expect(trigger).toHaveTextContent('star');
+    trigger.focus();
+    await userEvent.keyboard('{Enter}');
+    expect(screen.getByLabelText('Search icons')).toHaveFocus();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByLabelText('Search icons')).toBeNull();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('the "More actions" menu shows the platform\'s shortcuts', async () => {
+    loadWith([{ type: 'Text', text: 'x' }]);
+    selectTop();
+    render(<Inspector />);
+    await userEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    // jsdom is not a Mac: Ctrl-based labels, no ⌘ / ⌫ symbols.
+    const menu = screen.getByRole('menu');
+    expect(within(menu).getByRole('menuitem', { name: /Duplicate/ })).toHaveTextContent('Ctrl+D');
+    expect(within(menu).getByRole('menuitem', { name: /^Copy(?! JSX)/ })).toHaveTextContent('Ctrl+C');
+    expect(within(menu).getByRole('menuitem', { name: /Delete/ })).toHaveTextContent('Del');
+    expect(menu.textContent).not.toMatch(/[⌘⌫]/);
+  });
+});
+
+describe('confirmModalTemplate', () => {
+  it('names, titles and labels the modal after a non-delete action', () => {
+    const tpl = confirmModalTemplate('Archive deal', false)!;
+    expect(tpl.props).toMatchObject({ id: 'confirm-archive-deal', title: 'Archive deal?' });
+    expect(tpl.props).not.toHaveProperty('variant');
+    const [body, footer] = tpl.children!;
+    expect(body.children![0].text).toBe('Do you want to continue?');
+    const [confirm, cancel] = footer.children!;
+    expect(confirm).toMatchObject({ text: 'Archive deal', props: { variant: 'primary' } });
+    expect(confirm.events!.onClick).toEqual([expect.objectContaining({ type: 'closeOverlay', overlayNodeId: '@confirm-archive-deal' })]);
+    expect(cancel.events!.onClick).toEqual([expect.objectContaining({ type: 'closeOverlay', overlayNodeId: '@confirm-archive-deal' })]);
+    // Dynamic text: generic wording.
+    expect(confirmModalTemplate('{{ label }}', true)!.props).toMatchObject({ id: 'confirm', title: 'Are you sure?', variant: 'danger' });
   });
 });

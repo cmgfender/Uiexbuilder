@@ -1,16 +1,17 @@
 /**
- * <PreviewHost> draws what HubSpot draws on top of a card: open Modals / Panels, alerts added with
- * actions.addAlert, the iframe modal and Tooltip bubbles. It is an absolutely positioned layer
- * (`.hsp-overlay-host`) that fills the nearest positioned ancestor — place it inside the card frame.
- * The layer itself ignores the pointer so the card below stays usable; only its interactive
- * children (dialogs, alerts) catch clicks.
+ * <PreviewHost> draws what HubSpot draws on top of a card: open Modals / Panels, the iframe modal
+ * and Tooltip bubbles. It is an absolutely positioned layer (`.hsp-overlay-host`) that fills the
+ * nearest positioned ancestor — place it inside the card frame. The layer itself ignores the
+ * pointer so the card below stays usable; only its interactive children (dialogs) catch clicks.
+ * Alerts added with actions.addAlert are not drawn here: <ExtensionRenderer> shows them above the
+ * card content (see PreviewAlerts) so they never cover fields or buttons.
  */
 import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type RefObject } from 'react';
 import { X } from 'lucide-react';
 import { useInternalRuntime, type TooltipState } from './context';
 import { resolvePropValue, type Scope } from './expr';
 import { NodeRenderer } from './NodeRenderer';
-import type { IframeModalState, RuntimeAlert } from './types';
+import type { IframeModalState } from './types';
 
 const IFRAME_HEADER_HEIGHT = 48;
 
@@ -28,32 +29,7 @@ export function PreviewHost() {
           <NodeRenderer key={o.id} nodeId={o.id} scope={o.scope} overlayPresentation="open" />
         ))}
       {preview && rt.iframeModal && <IframeModal modal={rt.iframeModal} onClose={rt.closeIframeModal} />}
-      {preview && rt.alerts.length > 0 && (
-        <div className="hsp-rt-alerts" role="region" aria-label="Alerts">
-          {rt.alerts.map((a) => (
-            <AlertBanner key={a.id} alert={a} onDismiss={() => rt.dismissAlert(a.id)} />
-          ))}
-        </div>
-      )}
       {preview && rt.tooltip && <TooltipBubble tooltip={rt.tooltip} hostRef={hostRef} baseScope={rt.scope} />}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Alerts
-// ---------------------------------------------------------------------------
-
-function AlertBanner({ alert, onDismiss }: { alert: RuntimeAlert; onDismiss: () => void }) {
-  return (
-    <div className={`hsp-rt-alert hsp-rt-alert-${alert.type}`} role="alert" data-alert-type={alert.type}>
-      <div className="hsp-rt-alert-body">
-        {alert.title && <strong className="hsp-rt-alert-title">{alert.title}</strong>}
-        {alert.message && <span className="hsp-rt-alert-message">{alert.message}</span>}
-      </div>
-      <button type="button" className="hsp-rt-alert-dismiss" aria-label="Dismiss alert" onClick={onDismiss}>
-        <X size={14} strokeWidth={2.5} aria-hidden="true" />
-      </button>
     </div>
   );
 }
@@ -75,7 +51,17 @@ function safeIframeUrl(uri: string): string | null {
 function IframeModal({ modal, onClose }: { modal: IframeModalState; onClose: () => void }) {
   const src = safeIframeUrl(modal.uri);
   const dialogRef = useRef<HTMLDivElement>(null);
-  useEffect(() => dialogRef.current?.focus({ preventScroll: true }), []);
+  useEffect(() => {
+    // Focus moves into the dialog and returns to the element that opened it on close.
+    const opener = document.activeElement as HTMLElement | null;
+    dialogRef.current?.focus({ preventScroll: true });
+    return () => {
+      const current = document.activeElement;
+      if ((!current || current === document.body) && opener && opener !== document.body && opener.isConnected) {
+        opener.focus({ preventScroll: true });
+      }
+    };
+  }, []);
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Escape') {
       e.stopPropagation();

@@ -1,6 +1,6 @@
 /**
  * Ranking of command palette results: fuzzy search over titles (keywords and subtitles count with
- * less weight), grouped for display. With an empty query: recent commands first, then every
+ * less weight, multi-word queries may mix title and keyword words), grouped for display. With an empty query: recent commands first, then every
  * command that can run right now (disabled ones only appear in search results, with their reason).
  */
 import { GROUP_ORDER, type Command, type CommandGroup } from './commands';
@@ -34,25 +34,55 @@ const groupRank = (g: CommandGroup) => {
   return i === -1 ? GROUP_ORDER.length : i;
 };
 
+/**
+ * Weights of matches outside the title. A keyword or description match never outranks a title
+ * that matches at a word start (exact keyword 650 < title word start ≈ 690), so "computed" lists
+ * "Add computed value" before "Show data" (whose keywords mention computed values).
+ */
+export const KEYWORD_WEIGHT = 0.65;
+export const SUBTITLE_WEIGHT = 0.55;
+/**
+ * Title subsequence matches scoring below this are noise ("undo" scattered across "Add data
+ * source: Current record properties"); abbreviations such as "ibtn" → "Insert Button" score ≈ 200.
+ */
+export const MIN_SUBSEQUENCE_SCORE = 150;
+
+/** The query word matches `text` exactly, as a prefix or at a word start. */
+function wordMatches(word: string, text: string): boolean {
+  const m = fuzzyMatch(word, text);
+  return !!m && m.score >= SCORE.wordsAtStarts;
+}
+
 /** Score of one command for a (non-empty) query, or null when it does not match. */
 export function scoreCommand(command: Command, query: string): { score: number; indices: number[] } | null {
   let best: { score: number; indices: number[] } | null = null;
+  const consider = (score: number, indices: number[] = []) => {
+    if (!best || score > best.score) best = { score, indices };
+  };
   const title = fuzzyMatch(query, command.title);
-  if (title) best = title;
-  for (const kw of command.keywords ?? []) {
-    if (!kw) continue;
+  if (title && title.score >= MIN_SUBSEQUENCE_SCORE) best = title;
+  const keywords = (command.keywords ?? []).filter(Boolean);
+  for (const kw of keywords) {
     const m = fuzzyMatch(query, kw);
-    if (m && m.score >= SCORE.substring) {
-      const s = m.score * 0.85;
-      if (!best || s > best.score) best = { score: s, indices: [] };
-    }
+    if (m && m.score >= SCORE.substring) consider(m.score * KEYWORD_WEIGHT);
   }
   if (command.subtitle) {
     const m = fuzzyMatch(query, command.subtitle);
-    if (m && m.score >= SCORE.wordsAtStarts) {
-      const s = m.score * 0.6;
-      if (!best || s > best.score) best = { score: s, indices: [] };
-    }
+    if (m && m.score >= SCORE.wordsAtStarts) consider(m.score * SUBTITLE_WEIGHT);
+  }
+  // Several words, each at a word start of the title or of a keyword: "select heading" finds
+  // "Go to Heading" (keyword "select"), "new variable" finds "Add state variable".
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length > 1) {
+    let inTitle = 0;
+    const all = words.every((w) => {
+      if (wordMatches(w, command.title)) {
+        inTitle++;
+        return true;
+      }
+      return keywords.some((kw) => wordMatches(w, kw));
+    });
+    if (all) consider(SCORE.substring + (20 * inTitle) / words.length);
   }
   return best;
 }

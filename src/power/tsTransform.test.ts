@@ -135,6 +135,78 @@ describe('stripTypeScript', () => {
   });
 });
 
+/** Evaluates `expr` after the stripped helper code. */
+function evalAfter(code: string, expr: string): unknown {
+  const js = stripTypeScript(code, { stripExport: true });
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  return new Function(`"use strict";\n${js}\n;return (${expr});`)();
+}
+
+describe('stripTypeScript: TypeScript constructs with runtime meaning (lowered like tsc)', () => {
+  it('drops function and method overload signatures (with or without semicolons)', () => {
+    const fn = 'export function o(a: string): string;\nexport function o(a: number): number;\nexport function o(a: any) { return a; }';
+    expect(evalAfter(fn, 'o(3)')).toBe(3);
+    expect(evalAfter('function g(a: string): string\nfunction g(a: any) { return a }', "g('x')")).toBe('x');
+    expect(evalAfter('class C { m(a: string): string; m(a: number): number; m(a: any) { return a; } }', 'new C().m(5)')).toBe(5);
+    expect(evalAfter('class C {\n  m(a: string): string\n  m(a: any) {\n    return a\n  }\n}', 'new C().m(6)')).toBe(6);
+    // A missing body that is not a signature is still a syntax error.
+    expect(() => evalAfter('function broken() return 1', '1')).toThrow();
+  });
+
+  it('removes `this` parameters', () => {
+    expect(evalAfter('function who(this: any, n: number) { return n; }', 'who(4)')).toBe(4);
+    expect(evalAfter('function w(this: void) { return 1; }', 'w()')).toBe(1);
+    expect(evalAfter('class C { m(this: C, a: number) { return a; } }', 'new C().m(9)')).toBe(9);
+  });
+
+  it('assigns constructor parameter properties (after super() in derived classes)', () => {
+    expect(evalAfter('class Money { constructor(private cents: number) {} dollars() { return this.cents / 100; } }', 'new Money(250).dollars()')).toBe(2.5);
+    const derived = [
+      'class Base { constructor(public a: number) {} }',
+      'class D extends Base { constructor(a: number, private readonly b: number = 2) { super(a); } sum() { return this.a + this.b; } }',
+    ].join('\n');
+    expect(evalAfter(derived, 'new D(1).sum()')).toBe(3);
+    expect(evalAfter('class P { total: number; constructor(private a: number, public b = 2) { this.total = this.a + this.b; } }', 'new P(3).total')).toBe(5);
+  });
+
+  it('lowers enums with reverse mapping, auto-increment and member references', () => {
+    expect(evalAfter('enum Dir { Up = 1, Down, Left, Right }', '[Dir.Right, Dir[2]]')).toEqual([4, 'Down']);
+    expect(evalAfter('enum Flags { None = 0, A = 1 << 0, B = 1 << 1, AB = A | B }', '[Flags.AB, Flags[3]]')).toEqual([3, 'AB']);
+    expect(evalAfter("const enum Stage { Open = 'open', Won = \"won\", }", "[Stage.Won, Stage['won']]")).toEqual(['won', undefined]);
+    expect(evalAfter("export enum Q { 'a-b' = 1, \"c d\" }\nfunction label(q: Q): string { return Q[q]; }", "[Q['a-b'], label(2)]")).toEqual([1, 'c d']);
+  });
+
+  it('lowers namespaces (dotted names, nested namespaces, live let exports, private members)', () => {
+    expect(evalAfter('namespace Util { export const k = 3; const hidden = 1; }', '[Util.k, Util.hidden]')).toEqual([3, undefined]);
+    expect(evalAfter('namespace A.B { export const x: number = 2; }', 'A.B.x')).toBe(2);
+    expect(evalAfter('namespace Counter { export let n = 0; export function inc(): number { n++; return n; } }', '[Counter.inc(), Counter.inc(), Counter.n]')).toEqual([1, 2, 2]);
+    const nested = "namespace Outer { export namespace Inner { export const v = 'in'; } export enum E { X = 3 } export type T = string; export class Box { constructor(public w: number) {} } }";
+    expect(evalAfter(nested, '[Outer.Inner.v, Outer.E.X, new Outer.Box(4).w]')).toEqual(['in', 3, 4]);
+  });
+
+  it('removes abstract / declare members, index signatures and optional method markers', () => {
+    const shapes = [
+      'abstract class Shape { abstract name: string; protected abstract area(): number; describe() { return this.name + this.area(); } }',
+      "class Sq extends Shape { name = 'sq'; area() { return 4; } }",
+    ].join('\n');
+    expect(evalAfter(shapes, 'new Sq().describe()')).toBe('sq4');
+    expect(evalAfter('class A { declare x: number; y = 1; }', 'Object.keys(new A())')).toEqual(['y']);
+    expect(evalAfter('class M { [key: string]: any; a = 1; }', 'new M().a')).toBe(1);
+    expect(evalAfter('class O { m?(): void; n?() { return 2; } }', 'new O().n()')).toBe(2);
+  });
+
+  it('strips TypeScript inside template literal interpolations (keeping nested template text)', () => {
+    const code = "function msg(e: unknown, n?: number): string { return `Failed: ${(e as Error).message} (${n!}) ${n ? `multi\nline` : ''}`; }";
+    expect(evalAfter(code, "msg(new Error('boom'), 2)")).toBe('Failed: boom (2) multi\nline');
+    expect(evalAfter('const get = (o?: { f(): number }) => o!.f!();', 'get({ f: () => 4 })')).toBe(4);
+  });
+
+  it('keeps the number of lines when lowering', () => {
+    const src = 'enum Size {\n  Small = 1,\n  Large\n}\nnamespace N {\n  export const a = 1;\n}\n';
+    expect(stripTypeScript(src).split('\n').length).toBe(src.split('\n').length);
+  });
+});
+
 describe('annotateUntypedParams', () => {
   it('adds any to untyped parameters only', () => {
     const out = annotateUntypedParams('function f(a, b: number, c = 1, ...rest) {}');
@@ -168,6 +240,18 @@ describe('topLevelDeclarations', () => {
       'const fn = function named() {};',
     ].join('\n');
     expect(topLevelDeclarations(code)).toEqual(['formatMoney', 'load', 'gen', 'RATE', 'TAX', 'counter', 'Thing', 'fn']);
+  });
+
+  it('lists enums, namespaces and abstract classes but not ambient declarations', () => {
+    const code = [
+      'enum Color { Red }',
+      'const enum Size { S }',
+      'export namespace Util.Inner { export const a = 1; }',
+      'abstract class Shape {}',
+      'declare const VERSION: string;',
+      'declare function external(): void;',
+    ].join('\n');
+    expect(topLevelDeclarations(code)).toEqual(['Color', 'Size', 'Util', 'Shape']);
   });
 
   it('ignores declarations inside strings, templates and comments', () => {

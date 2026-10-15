@@ -3,8 +3,10 @@
  * goes through store actions, so it is a single undo step, and returns a confirmation message.
  */
 import { toProjectSlug } from '../model/factory';
+import { asOneUndoStep } from '../model/history';
 import { useEditor } from '../model/store';
-import type { JsonValue, Project } from '../model/types';
+import type { Extension, JsonValue, Project } from '../model/types';
+import { renameReferences } from '../panels/findUsages';
 import type { Issue } from '../model/validate';
 import { getComponent } from '../registry';
 import { showLeftTab } from './shellStore';
@@ -70,14 +72,77 @@ export function quickFixFor(issue: Issue, project: Project): QuickFix | null {
       const node = ext?.nodes[issue.nodeId];
       const vb = node ? getComponent(node.type)?.valueBinding : undefined;
       if (!ext || !vb || ext.state.some((s) => s.name === subject)) return null;
+      const nodeId = issue.nodeId;
       return {
         label: `Create “${subject}”`,
         title: `Add a ${vb.stateType} state variable named “${subject}”`,
         apply: () => {
           const st = useEditor.getState();
           if (st.activeExtensionId !== ext.id) st.setActiveExtension(ext.id);
-          useEditor.getState().addStateVar({ name: subject, type: vb.stateType, initial: JSON.parse(JSON.stringify(vb.initial)) as JsonValue });
-          return `Created the state variable “${subject}”.`;
+          return asOneUndoStep(() => {
+            const v = useEditor.getState().addStateVar({ name: subject, type: vb.stateType, initial: JSON.parse(JSON.stringify(vb.initial)) as JsonValue });
+            // The store keeps names unique (e.g. the name is taken by a computed value): bind
+            // the variable it actually created.
+            if (v.name !== subject) {
+              useEditor.getState().updateNode(nodeId, { binding: { state: v.name } });
+              return `“${subject}” is already used, so the input is now bound to the new state variable “${v.name}”.`;
+            }
+            return `Created the state variable “${subject}”.`;
+          });
+        },
+      };
+    }
+    case 'unknown-name': {
+      const to = issue.suggestion;
+      if (!subject || !to || !issue.extensionId) return null;
+      const extId = issue.extensionId;
+      return {
+        label: `Use “${to}”`,
+        title: `Replace “${subject}” with “${to}” everywhere in this extension (one undo step)`,
+        apply: () => {
+          let changed = 0;
+          useEditor.getState().commit((d) => {
+            const e = d.extensions.find((x) => x.id === extId);
+            if (e) changed = renameReferences(e as Extension, subject, to);
+          });
+          return changed > 0 ? `Replaced “${subject}” with “${to}”.` : `“${subject}” was not found any more.`;
+        },
+      };
+    }
+    case 'dynamic-url-origin': {
+      // The issue key starts with the permitted-URL kind (`img:…`, `fetch:…`, `iframe:…`).
+      const kind = issue.id.split('|').slice(4).join('|').split(':')[0] as PermittedKind;
+      if (!subject || !PERMITTED_KINDS.includes(kind)) return null;
+      return {
+        label: 'Add URL',
+        title: `Add ${subject} to the permitted ${kind} URLs now`,
+        apply: () => {
+          const permitted = useEditor.getState().project.app.permittedUrls;
+          if (!permitted[kind].includes(subject)) {
+            useEditor.getState().updateApp({ permittedUrls: { ...permitted, [kind]: [...permitted[kind], subject] } });
+          }
+          return `Added ${subject} to the permitted URLs.`;
+        },
+      };
+    }
+    case 'data-source-properties': {
+      const to = issue.suggestion;
+      const dsId = issue.field?.startsWith('dataSource:') ? issue.field.slice('dataSource:'.length) : null;
+      if (!subject || !to || !dsId || !issue.extensionId) return null;
+      const extId = issue.extensionId;
+      return {
+        label: `Use “${to}”`,
+        title: `Load the standard property “${to}” instead of “${subject}”`,
+        apply: () => {
+          useEditor.getState().commit((d) => {
+            const ds = d.extensions.find((x) => x.id === extId)?.dataSources.find((x) => x.id === dsId);
+            if (!ds || !('properties' in ds) || !Array.isArray(ds.properties)) return;
+            const i = ds.properties.indexOf(subject);
+            if (i === -1) return;
+            if (ds.properties.includes(to)) ds.properties.splice(i, 1);
+            else ds.properties[i] = to;
+          });
+          return `The data source now loads “${to}”.`;
         },
       };
     }

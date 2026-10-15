@@ -1,9 +1,9 @@
 /**
  * The editor shell: full-viewport grid with the top bar, left sidebar, canvas + bottom panel and
  * the inspector, all sharing one preview runtime. Also mounts the dialogs, the command palette,
- * global shortcuts, autosave and problem tracking.
+ * global shortcuts, autosave, problem tracking and the compact (narrow window) layout.
  */
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { selectActiveExtension, useEditor } from '../model/store';
 import { RuntimeProvider } from '../runtime';
 import { Canvas } from '../canvas';
@@ -12,9 +12,11 @@ import { AppSettingsDialog, ExportDialog, ExtensionsDialog, FunctionsDialog, Pro
 import { NewProjectDialog } from '../templates';
 import { BottomPanel } from './BottomPanel';
 import { useDialogs } from './dialogs';
-import { useAutosave } from './persistence';
+import { ImportConflictDialog } from './importProject';
+import { useAutosave, useBootSettled } from './persistence';
+import { ProjectConflictDialog } from './ProjectConflictDialog';
 import { useProblemsSync } from './problems';
-import { LEFT_WIDTH, RAIL_WIDTH, RIGHT_WIDTH, useShell } from './shellStore';
+import { RAIL_WIDTH, isLeftCollapsed, useShell, watchCompactLayout } from './shellStore';
 import { useGlobalShortcuts } from './shortcuts';
 import { ShortcutsDialog } from './ShortcutsDialog';
 import { LeftSidebar, RightSidebar } from './Sidebars';
@@ -36,17 +38,21 @@ function WorkspaceRuntime({ children }: { children: ReactNode }) {
 }
 
 function ShellGrid({ children }: { children: ReactNode }) {
-  const leftCollapsed = useShell((s) => s.leftCollapsed);
+  const leftCollapsed = useShell(isLeftCollapsed);
+  const compact = useShell((s) => s.compact);
   const rightCollapsed = useShell((s) => s.rightCollapsed);
+  const leftWidth = useShell((s) => s.leftWidth);
+  const rightWidth = useShell((s) => s.rightWidth);
   const mode = useEditor((s) => s.mode);
   return (
     <div
       className="ub-sh"
       data-mode={mode}
+      data-compact={compact || undefined}
       style={
         {
-          '--ub-sh-left': `${leftCollapsed ? RAIL_WIDTH : LEFT_WIDTH}px`,
-          '--ub-sh-right': `${rightCollapsed ? RAIL_WIDTH : RIGHT_WIDTH}px`,
+          '--ub-sh-left': `${leftCollapsed ? RAIL_WIDTH : leftWidth}px`,
+          '--ub-sh-right': `${rightCollapsed ? RAIL_WIDTH : rightWidth}px`,
         } as React.CSSProperties
       }
     >
@@ -68,6 +74,8 @@ function Dialogs() {
       <ProjectsDialog open={current === 'projects'} onClose={close} arg={arg} />
       <NewProjectDialog open={current === 'newProject'} onClose={close} arg={arg} />
       <ShortcutsDialog open={current === 'shortcuts'} onClose={close} arg={arg} />
+      <ImportConflictDialog />
+      <ProjectConflictDialog />
     </>
   );
 }
@@ -75,7 +83,9 @@ function Dialogs() {
 function ShellServices() {
   useGlobalShortcuts();
   useAutosave();
+  useBootSettled();
   useProblemsSync();
+  useEffect(() => watchCompactLayout(), []);
   return null;
 }
 

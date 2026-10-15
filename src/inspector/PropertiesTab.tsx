@@ -3,17 +3,28 @@
  * children and custom (unmodelled) props.
  */
 import { useMemo, useRef, useState } from 'react';
-import { ArrowDownToLine, Link2, MousePointerClick, Plus, Trash2 } from 'lucide-react';
-import { toIdentifier } from '../model/ids';
+import { ArrowDownToLine, Link2, MousePointerClick, Plus, ShieldAlert, Trash2 } from 'lucide-react';
+import { newId, toIdentifier } from '../model/ids';
 import { canAccept } from '../model/rules';
 import { useEditor } from '../model/store';
 import { nodeLabel } from '../model/tree';
-import { isExpr, type Extension, type JsonValue, type PropValue, type StateVarType, type UINode } from '../model/types';
+import {
+  isExpr,
+  type ActionStep,
+  type Extension,
+  type JsonValue,
+  type PropValue,
+  type StateVarType,
+  type UINode,
+} from '../model/types';
 import { getComponent, listComponents } from '../registry';
-import type { ComponentDef, PropDef, PropGroup } from '../registry/types';
-import { Badge, Button, cx, IconButton, Segmented, Select, TextInput } from '../ui';
+import type { ComponentDef, EventDef, PropDef, PropGroup } from '../registry/types';
+import { Badge, Button, cx, IconButton, Segmented, Select, Switch, TextInput } from '../ui';
 import { ComponentPicker } from './ComponentPicker';
 import { ExpressionInput, TemplateInput } from './controls';
+import { createdDefaultText } from './editors';
+import { asOneUndoStep } from './history';
+import { confirmModalTemplate } from './overlayPresets';
 import { PropRow } from './PropRow';
 import { isPropVisible } from './propValue';
 import { InspectorSection } from './Section';
@@ -87,7 +98,7 @@ function BoundPropRow({ node, def, prop, ext }: { node: UINode; def: ComponentDe
       def={prop}
       ext={ext}
       boundState={bound}
-      onUnbind={bound ? () => useEditor.getState().updateNode(node.id, { binding: undefined }) : undefined}
+      onUnbind={bound ? () => setBinding(node, def, undefined) : undefined}
     />
   );
 }
@@ -101,6 +112,7 @@ function TextContent({ node, ext }: { node: UINode; ext: Extension }) {
   const text = node.text ?? '';
   // Decide once per node so the field never swaps element (and loses focus) while typing.
   const [multiline] = useState(() => text.length > 48 || text.includes('\n'));
+  const createdText = useMemo(() => createdDefaultText(node.type), [node.type]);
   return (
     <div className="ub-insp-prop ub-insp-prop--block" data-prop="__text">
       <div className="ub-insp-prop__label">
@@ -118,6 +130,7 @@ function TextContent({ node, ext }: { node: UINode; ext: Extension }) {
           multiline={multiline}
           placeholder="Type text, or {{ variable }}"
           aria-label="Text content"
+          replaceableText={createdText}
         />
       </div>
     </div>
@@ -141,28 +154,90 @@ export function bindingVariableName(node: UINode, def: ComponentDef): string {
   return toIdentifier(def.valueBinding?.prop === 'checked' ? `${def.label} checked` : `${def.label} value`, 'value');
 }
 
-/** Creates a state variable shaped by the component's valueBinding and binds the node to it. */
+/** Creates a state variable shaped by the component's valueBinding and binds the node to it (one undo step). */
 export function createBoundVariable(node: UINode, def: ComponentDef): string | null {
   const vb = def.valueBinding;
   if (!vb) return null;
-  const st = useEditor.getState();
-  const v = st.addStateVar({
-    name: bindingVariableName(node, def),
-    type: vb.stateType,
-    initial: JSON.parse(JSON.stringify(vb.initial)) as JsonValue,
-    description: `Bound to ${nodeLabel(node, def.label)}`,
+  return asOneUndoStep(() => {
+    const st = useEditor.getState();
+    const v = st.addStateVar({
+      name: bindingVariableName(node, def),
+      type: vb.stateType,
+      initial: JSON.parse(JSON.stringify(vb.initial)) as JsonValue,
+      description: `Bound to ${nodeLabel(node, def.label)}`,
+    });
+    st.updateNode(node.id, { binding: { state: v.name } });
+    return v.name;
   });
-  st.updateNode(node.id, { binding: { state: v.name } });
-  return v.name;
+}
+
+/**
+ * The event that delivers the bound value on every edit when the binding's own event only fires
+ * on commit: text fields update their binding `onChange` (blur / Enter) and fire `onInput` with
+ * the same value while typing. Null for other components (e.g. Select's onInput is search text).
+ */
+export function liveBindingEvent(def: ComponentDef): EventDef | null {
+  const vb = def.valueBinding;
+  if (!vb || vb.prop !== 'value') return null;
+  const change = def.events?.find((e) => e.name === vb.event);
+  const live = def.events?.find((e) => e.name === 'onInput');
+  if (!change || !live || !change.params[0] || live.params[0]?.description !== change.params[0].description) return null;
+  return live;
+}
+
+/** The step "Update while typing" adds to the live event: set <state> to the event's value. */
+function isLiveBindingStep(step: ActionStep, state: string): boolean {
+  return step.type === 'setState' && step.state === state && step.value.trim() === 'value';
+}
+
+/** Whether the node also updates its bound variable on every edit. */
+export function updatesWhileTyping(node: UINode, def: ComponentDef): boolean {
+  const live = liveBindingEvent(def);
+  const state = node.binding?.state;
+  return !!live && !!state && (node.events?.[live.name] ?? []).some((s) => isLiveBindingStep(s, state));
+}
+
+/** Turns "Update while typing" on or off (adds / removes the live set-variable step). */
+export function setUpdateWhileTyping(node: UINode, def: ComponentDef, on: boolean): void {
+  const live = liveBindingEvent(def);
+  const state = node.binding?.state;
+  if (!live || !state) return;
+  const steps = node.events?.[live.name] ?? [];
+  const rest = steps.filter((s) => !isLiveBindingStep(s, state));
+  const next: ActionStep[] = on ? [...rest, { id: newId('a'), type: 'setState', state, value: 'value' }] : rest;
+  useEditor.getState().setEvent(node.id, live.name, next);
+}
+
+/**
+ * Binds / unbinds the node (one undo step). An "Update while typing" step follows the binding:
+ * it moves to the new variable, or is removed when the node is unbound.
+ */
+export function setBinding(node: UINode, def: ComponentDef, state: string | undefined): void {
+  const live = liveBindingEvent(def);
+  const prev = node.binding?.state;
+  asOneUndoStep(() => {
+    const st = useEditor.getState();
+    st.updateNode(node.id, { binding: state ? { state } : undefined });
+    if (!live || !prev || prev === state) return;
+    const steps = node.events?.[live.name] ?? [];
+    if (!steps.some((s) => isLiveBindingStep(s, prev))) return;
+    const next = state
+      ? steps.map((s) => (isLiveBindingStep(s, prev) ? { ...s, state } : s))
+      : steps.filter((s) => !isLiveBindingStep(s, prev));
+    st.setEvent(node.id, live.name, next);
+  });
 }
 
 function BindingSection({ node, def, ext }: { node: UINode; def: ComponentDef; ext: Extension }) {
   const vb = def.valueBinding!;
-  const updateNode = useEditor((s) => s.updateNode);
   const current = node.binding?.state ?? '';
   const vars = ext.state.filter((s) => compatibleStateType(s.type, vb.stateType) || s.name === current);
   const missing = current && !ext.state.some((s) => s.name === current);
   const propLabel = def.props.find((p) => p.name === vb.prop)?.label ?? vb.prop;
+  const live = liveBindingEvent(def);
+  const typing = updatesWhileTyping(node, def);
+  // Text areas commit on blur only (Enter adds a line).
+  const commitWhen = def.type === 'TextArea' ? 'when the field loses focus' : 'when the user presses Enter or leaves the field';
   return (
     <InspectorSection
       id="binding"
@@ -186,20 +261,38 @@ function BindingSection({ node, def, ext }: { node: UINode; def: ComponentDef; e
             id={`bind-${node.id}`}
             value={current}
             placeholder="Not bound"
-            onChange={(v) => updateNode(node.id, { binding: v ? { state: v } : undefined })}
+            onChange={(v) => setBinding(node, def, v || undefined)}
             options={[
               ...vars.map((s) => ({ value: s.name, label: `${s.name} (${s.type})` })),
               ...(missing ? [{ value: current, label: `${current} (missing)` }] : []),
             ]}
           />
           {current ? (
-            <Button size="sm" variant="ghost" onClick={() => updateNode(node.id, { binding: undefined })}>
+            <Button size="sm" variant="ghost" onClick={() => setBinding(node, def, undefined)}>
               Unbind
             </Button>
           ) : null}
         </div>
         {missing && <div className="ub-field__error">State variable “{current}” no longer exists.</div>}
+        {live && !typing && (
+          <div className="ub-field__hint">
+            Updates {current ? <code>{current}</code> : 'the variable'} {commitWhen} — not on every keystroke.
+          </div>
+        )}
       </div>
+      {live && current && !missing && (
+        <div className="ub-insp-field">
+          <Switch
+            checked={typing}
+            onChange={(on) => setUpdateWhileTyping(node, def, on)}
+            label="Update while typing"
+          />
+          <div className="ub-field__hint">
+            Also sets <code>{current}</code> from {live.label} on every keystroke, e.g. for a live search filter. HubSpot recommends
+            updating state on change for most fields.
+          </div>
+        </div>
+      )}
       {!current && (
         <Button
           size="sm"
@@ -226,6 +319,23 @@ function SlotSection({ node, def, slotName, ext }: { node: UINode; def: Componen
   const full = slot.max !== undefined && ids.length >= slot.max;
   const addable = full ? [] : slot.accepts.filter((t) => canAccept(ext, node.id, t, slot.name).ok);
   const st = useEditor.getState;
+  // Buttons can get a ready-made confirmation modal (first for destructive buttons).
+  const destructive = node.props.variant === 'destructive';
+  const canConfirm = slot.name === 'overlay' && addable.includes('Modal') && /Button/.test(node.type);
+  const confirmFirst = canConfirm && destructive;
+  const confirmButton = canConfirm ? (
+    <Button
+      size="sm"
+      icon={<ShieldAlert size={13} />}
+      title="Ask “Are you sure?” in a modal before the action runs"
+      onClick={() => {
+        const tpl = confirmModalTemplate(node.text, destructive);
+        if (tpl) st().insertNode(tpl, { parentId: node.id, slot: slot.name, index: 0 });
+      }}
+    >
+      Add confirmation
+    </Button>
+  ) : null;
   return (
     <InspectorSection
       id={`slot:${slot.name}`}
@@ -253,8 +363,9 @@ function SlotSection({ node, def, slotName, ext }: { node: UINode; def: Componen
           </div>
         );
       })}
-      {addable.length > 0 && (
+      {(addable.length > 0 || canConfirm) && (
         <div className="ub-insp-row-actions">
+          {confirmFirst && confirmButton}
           {addable.map((t) => (
             <Button
               key={t}
@@ -265,6 +376,7 @@ function SlotSection({ node, def, slotName, ext }: { node: UINode; def: Componen
               {ADD_LABELS[t] ?? `Add ${getComponent(t)?.label ?? t}`}
             </Button>
           ))}
+          {!confirmFirst && confirmButton}
         </div>
       )}
       {ids.length === 0 && addable.length === 0 && <div className="ub-insp-muted">Nothing can be attached here in this extension.</div>}

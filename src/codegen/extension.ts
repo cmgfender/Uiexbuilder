@@ -19,19 +19,20 @@ import { ALL_COMPONENTS, getComponent } from '../registry';
 import { TO_TEXT_HELPER_SOURCE } from '../model/template';
 import { toPascalCase } from '../model/ids';
 import { buildParentIndex } from '../model/tree';
-import type { Extension, JsonValue, NodeId, Project, StateVar } from '../model/types';
+import type { Extension, JsonValue, NodeId, Project } from '../model/types';
 import { isExpr } from '../model/types';
-import { COMPUTED_FORBIDDEN_NAMES } from '../power/computed';
+import { isComputedIdentifier } from '../power/computed';
 import { prepareHelpersForTypeScript } from '../power/helpers';
 import { collectStepCode } from './actions';
 import type { GenContext } from './context';
-import { createContext, declaredStateNames, importValue, setterName, UI_EXTENSIONS, type HelperName } from './context';
+import { createContext, declaredStateNames, importValue, setterName, stateTypeArg, UI_EXTENSIONS, type HelperName } from './context';
 import { dataSourceExposedNames, dataSourceSetterNames, emitDataSources, planDataSources } from './dataSources';
 import { JsxRenderer } from './jsx';
 import { asString, userExpr } from './templates';
 import {
   asOperand,
   CodeWriter,
+  commentText,
   INDENT,
   indentLines,
   isIdentifierName,
@@ -47,6 +48,15 @@ import {
 
 /** Source of the `asArray` helper used by repeats. */
 export const AS_ARRAY_HELPER_SOURCE = `const asArray = (value: unknown): any[] => (Array.isArray(value) ? value : []);`;
+
+/**
+ * Source of the `readJson` helper used by fetch requests: like the designer preview, an empty
+ * body (e.g. 204 No Content) is `null` instead of a JSON parse error.
+ */
+export const READ_JSON_HELPER_SOURCE = `const readJson = async (response: Response): Promise<any> => {
+  const text = await response.text();
+  return text.trim() ? JSON.parse(text) : null;
+};`;
 
 /** Context type of each extension location. */
 function contextType(ctx: GenContext): string {
@@ -81,6 +91,7 @@ export function collectExtensionCode(ext: Extension): string[] {
     if (ds.kind === 'fetch') {
       template(asString(ds.url));
       out.push(asString(ds.body));
+      for (const h of Array.isArray(ds.headers) ? ds.headers : []) template(asString(h?.value));
     } else if (ds.kind === 'function') out.push(asString(ds.parameters));
     else if (ds.kind === 'crmSearch') {
       template(asString(ds.query));
@@ -146,31 +157,11 @@ function jsonNode(value: JsonValue): JsNode {
   return jsObject(Object.entries(value).map(([k, v]) => [k, jsonNode(v)]));
 }
 
-/**
- * `useState` type argument. Primitive states keep their type (`| null` when the initial value is
- * null); arrays are `any[]`; objects and `any` are `any` so they can feed typed props such as a
- * DateInput value (a `Record<string, any>` is not assignable to `{ year; month; date }`).
- */
-function stateTypeArg(s: StateVar): string {
-  const initial = s.initial;
-  switch (s.type) {
-    case 'string':
-    case 'number':
-    case 'boolean':
-      if (initial === null) return `${s.type} | null`;
-      return typeof initial === s.type ? s.type : 'any';
-    case 'array':
-      return Array.isArray(initial) ? 'any[]' : 'any';
-    default:
-      return 'any';
-  }
-}
-
 function emitState(w: CodeWriter, ctx: GenContext): boolean {
   if (ctx.states.size === 0) return false;
   const useState = importValue(ctx, 'react', 'useState');
   for (const s of ctx.states.values()) {
-    if (s.description && s.description.trim()) w.line(`// ${s.description.replace(/\s+/g, ' ').trim()}`);
+    if (s.description && s.description.trim()) w.line(`// ${commentText(s.description)}`);
     const typeArg = stateTypeArg(s);
     if (typeArg.includes('any')) ctx.usesAny = true;
     // The setter is only destructured when something calls it (bindings, actions, user code).
@@ -193,8 +184,7 @@ function planComputed(ctx: GenContext): void {
     [...dataSourceExposedNames(plan.source), ...dataSourceSetterNames(plan.source)].forEach((n) => declared.add(n));
   }
   for (const c of Array.isArray(ctx.ext.computed) ? ctx.ext.computed : []) {
-    if (!c || typeof c.name !== 'string' || !isIdentifierName(c.name)) continue;
-    if (COMPUTED_FORBIDDEN_NAMES.has(c.name) || declared.has(c.name)) continue;
+    if (!c || typeof c.name !== 'string' || !isComputedIdentifier(c.name) || declared.has(c.name)) continue;
     declared.add(c.name);
     ctx.computed.push(c);
   }
@@ -208,7 +198,7 @@ function emitComputed(w: CodeWriter, ctx: GenContext): boolean {
   if (ctx.computed.length === 0) return false;
   ctx.usesAny = true;
   for (const c of ctx.computed) {
-    if (typeof c.description === 'string' && c.description.trim()) w.line(`// ${c.description.replace(/\s+/g, ' ').trim()}`);
+    if (typeof c.description === 'string' && c.description.trim()) w.line(`// ${commentText(c.description)}`);
     const code = asOperand(userExpr(ctx, asString(c.expr)));
     const head = `const ${c.name}: any = `;
     if (!code.includes('\n') || scanCode(code).hasMultilineLiteral) {
@@ -307,13 +297,19 @@ export function generateExtensionSource(project: Project, ext: Extension): strin
   const params = destructured.length ? `{ ${destructured.join(', ')} }: ExtensionProps` : '_props: ExtensionProps';
 
   const out: string[] = [];
-  out.push(`// ${ext.name.replace(/\s+/g, ' ').trim() || name} — ${describeExtension(ext, location)}.`);
+  out.push(`// ${commentText(ext.name) || name} — ${describeExtension(ext, location)}.`);
   out.push('// Generated by UI Extension Builder. Re-import the project\'s .uiex.json to keep editing visually.');
-  if (ctx.usesAny || ctx.helperNames.has('asArray')) out.push('/* eslint-disable @typescript-eslint/no-explicit-any */');
+  if (ctx.usesAny || ctx.helperNames.has('asArray') || ctx.helperNames.has('readJson')) {
+    out.push('/* eslint-disable @typescript-eslint/no-explicit-any */');
+  }
   out.push(...ctx.imports.print());
   out.push('');
-  const helperSources: Record<HelperName, string> = { toText: TO_TEXT_HELPER_SOURCE, asArray: AS_ARRAY_HELPER_SOURCE };
-  for (const helper of ['toText', 'asArray'] as const) {
+  const helperSources: Record<HelperName, string> = {
+    toText: TO_TEXT_HELPER_SOURCE,
+    asArray: AS_ARRAY_HELPER_SOURCE,
+    readJson: READ_JSON_HELPER_SOURCE,
+  };
+  for (const helper of ['toText', 'asArray', 'readJson'] as const) {
     const local = ctx.helperNames.get(helper);
     // Helper sources declare `const <helper> = ...`; a shadowed helper is declared as `local`.
     if (local) out.push(helperSources[helper].replace(`const ${helper} `, `const ${local} `), '');

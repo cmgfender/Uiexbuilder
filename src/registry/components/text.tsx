@@ -345,7 +345,8 @@ function HeadingPreview({ props, text, rootProps }: PreviewProps) {
 // Image
 // ---------------------------------------------------------------------------
 
-const DEFAULT_IMAGE_SRC = 'https://placehold.co/400x200/png?text=Image';
+// Ends in an image extension: HubSpot's lint rule (no-invalid-image-src) rejects other URLs.
+const DEFAULT_IMAGE_SRC = 'https://placehold.co/400x200.png?text=Image';
 
 function ImagePreview({ node, props, rootProps, trigger, mode }: PreviewProps) {
   const src = typeof props.src === 'string' ? props.src.trim() : '';

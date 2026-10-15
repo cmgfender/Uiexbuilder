@@ -18,10 +18,11 @@
  *  ...walking up the ancestors until `accept()` passes. If nothing accepts, the result carries the
  *  most specific rejection reason.
  */
-import { buildParentIndex, type InsertTarget } from '../model/tree';
-import { canAccept, isContainerType, type AcceptResult } from '../model/rules';
+import { buildParentIndex, isAncestor, type InsertTarget } from '../model/tree';
+import { canAccept, isAvailableIn, isContainerType, type AcceptResult } from '../model/rules';
 import { getComponent } from '../registry';
 import type { Extension, NodeId } from '../model/types';
+import { captionedLabel, componentLabel } from './labels';
 
 export interface Point {
   x: number;
@@ -486,6 +487,29 @@ export function computeDropTarget(query: DropQuery, model: DropModel): DropResul
 // Model adapter
 // ---------------------------------------------------------------------------
 
+/**
+ * Why `type` can't go into `parentId`'s `slot` when the only problem is that the slot is already
+ * full (e.g. a trigger's single `overlay`): names the occupant so the user knows what to remove.
+ * Null when the slot has room or does not accept the type at all.
+ */
+export function fullSlotReason(ext: Extension, parentId: NodeId, slot: string, type: string, movingId?: NodeId | null): string | null {
+  const parent = ext.nodes[parentId];
+  const childDef = getComponent(type);
+  const slotDef = parent ? getComponent(parent.type)?.slots?.find((s) => s.name === slot) : undefined;
+  if (!parent || !childDef || !slotDef || slotDef.max === undefined || !slotDef.accepts.includes(type)) return null;
+  // Other reasons canAccept checks first take precedence.
+  if (!isAvailableIn(childDef, ext)) return null;
+  if (movingId && (movingId === parentId || isAncestor(ext, movingId, parentId))) return null;
+  const current = (parent.slots?.[slot] ?? []).filter((id) => id !== movingId);
+  if (current.length < slotDef.max) return null;
+  const occupant = ext.nodes[current[0]];
+  const what = occupant ? captionedLabel(occupant) : 'another component';
+  if (slot === 'overlay') {
+    return `${captionedLabel(parent)} already has an overlay (${what}) — remove it first to attach a ${componentLabel(type)}`;
+  }
+  return `${captionedLabel(parent)}’s ${slotDef.label.toLowerCase()} already holds ${what} — remove it first`;
+}
+
 /** Builds the DropModel for dropping `type` (or moving `movingId`) into an extension. */
 export function createDropModel(ext: Extension, type: string, movingId?: NodeId | null): DropModel {
   const parents = buildParentIndex(ext);
@@ -509,6 +533,11 @@ export function createDropModel(ext: Extension, type: string, movingId?: NodeId 
       const node = ext.nodes[id];
       return !!node && !!getComponent(node.type)?.slots?.some((s) => s.name === 'overlay');
     },
-    accept: (parentId, slot) => canAccept(ext, parentId, type, slot, movingId ?? undefined),
+    accept: (parentId, slot) => {
+      const r = canAccept(ext, parentId, type, slot, movingId ?? undefined);
+      if (r.ok || !slot) return r;
+      // canAccept checks the slot's type list before its capacity, so this only rewords "full".
+      return { ok: false, reason: fullSlotReason(ext, parentId, slot, type, movingId) ?? r.reason };
+    },
   };
 }

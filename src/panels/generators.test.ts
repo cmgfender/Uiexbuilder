@@ -59,8 +59,10 @@ describe('generateUiForSource', () => {
 
   it('crmProperties -> DescriptionList with a humanised label and template per property', () => {
     const tpl = generateUiForSource(SOURCES[0], ['contacts']);
-    expect(tpl.type).toBe('DescriptionList');
-    const items = tpl.children!;
+    expect(tpl.type).toBe('Flex');
+    const list = findAll(tpl, 'DescriptionList')[0];
+    expect(list.condition).toBe('!recordLoading && !recordError');
+    const items = list.children!;
     expect(items.map((i) => i.props?.label)).toEqual(['First name', 'Lead status', 'Custom prop']);
     expect(items.map((i) => i.children![0])).toEqual([
       { type: 'Text', text: '{{ record.firstname }}' },
@@ -71,16 +73,36 @@ describe('generateUiForSource', () => {
 
   it('crmProperties without properties still produces a valid list', () => {
     const tpl = generateUiForSource(SOURCES[5]);
-    expect(tpl.children).toHaveLength(1);
-    expect(tpl.children![0].children![0].text).toBe('{{ JSON.stringify(empty) }}');
+    const list = findAll(tpl, 'DescriptionList')[0];
+    expect(list.children).toHaveLength(1);
+    expect(list.children![0].children![0].text).toBe('{{ JSON.stringify(empty) }}');
   });
 
-  it('associations -> table repeating over results with loading and empty states', () => {
+  it.each(SOURCES.map((s) => [s.kind + ':' + s.name, s] as const))('%s covers loading and error states', (_l, ds) => {
+    const tpl = generateUiForSource(ds, ['contacts']);
+    expect(tpl.children![0]).toMatchObject({ type: 'LoadingSpinner', condition: `${ds.name}Loading` });
+    const alert = findAll(tpl, 'Alert')[0];
+    expect(alert).toMatchObject({ props: { variant: 'error' }, text: `{{ ${ds.name}Error }}`, condition: `!${ds.name}Loading && ${ds.name}Error` });
+    expect(String(alert.props?.title)).toMatch(/^Couldn’t /);
+    // A way to retry: "Try again" next to the error, or the block's own Reload button.
+    const retry = findAll(tpl, 'Button').find((b) => b.condition === alert.condition || b.text === 'Reload')!;
+    expect(retry.events?.onClick).toEqual([expect.objectContaining({ type: 'runDataSource', dataSourceId: ds.id })]);
+    // The data itself only shows once loaded without an error.
+    for (const child of tpl.children!.slice(1)) {
+      if (child === alert || child.type === 'Button') continue;
+      expect(child.condition, child.type).toMatch(new RegExp(`^!${ds.name}Loading && !${ds.name}Error`));
+    }
+  });
+
+  it('associations -> table repeating over results with loading, error and empty states', () => {
     const tpl = generateUiForSource(SOURCES[1]);
     const spinner = findAll(tpl, 'LoadingSpinner')[0];
     expect(spinner.condition).toBe('dealsLoading');
+    expect(findAll(tpl, 'Alert')[0]).toMatchObject({ props: { title: 'Couldn’t load associated deals' }, condition: '!dealsLoading && dealsError' });
+    expect(findAll(tpl, 'Button')[0]).toMatchObject({ text: 'Try again', condition: '!dealsLoading && dealsError' });
     const empty = findAll(tpl, 'EmptyState')[0];
-    expect(empty.condition).toBe('!dealsLoading && deals.length === 0');
+    // A failed request is not "no associated deals".
+    expect(empty.condition).toBe('!dealsLoading && !dealsError && deals.length === 0');
     expect(empty.props?.title).toBe('No associated deals');
     const headers = findAll(tpl, 'TableHeader').map((h) => h.text);
     expect(headers).toEqual(['Deal name', 'Amount']);
@@ -88,7 +110,7 @@ describe('generateUiForSource', () => {
     const bodyRow = rows.find((r) => r.repeat)!;
     expect(bodyRow.repeat).toEqual({ items: 'deals', itemName: 'item', indexName: 'index', key: 'item.toObjectId' });
     expect(findAll(bodyRow, 'Text').map((t) => t.text)).toEqual(['{{ item.properties.dealname }}', '{{ item.properties.amount }}']);
-    expect(findAll(tpl, 'Table')[0].condition).toBe('!dealsLoading && deals.length > 0');
+    expect(findAll(tpl, 'Table')[0].condition).toBe('!dealsLoading && !dealsError && deals.length > 0');
   });
 
   it('crmSearch without properties shows the record id column', () => {
@@ -97,17 +119,21 @@ describe('generateUiForSource', () => {
     const bodyRow = findAll(tpl, 'TableRow').find((r) => r.repeat)!;
     expect(bodyRow.repeat?.key).toBe('item.objectId');
     expect(findAll(bodyRow, 'Text')[0].text).toBe('{{ item.objectId }}');
-    expect(findAll(tpl, 'EmptyState')[0].condition).toBe('!ticketsLoading && tickets.length === 0');
+    expect(findAll(tpl, 'EmptyState')[0].condition).toBe('!ticketsLoading && !ticketsError && tickets.length === 0');
+    expect(findAll(tpl, 'Alert')[0].props?.title).toBe('Couldn’t search tickets');
   });
 
-  it('fetch / function -> JSON text and a Reload button running the source', () => {
+  it('fetch / function -> error alert, JSON text and a Reload button running the source', () => {
     for (const ds of [SOURCES[3], SOURCES[4]]) {
       const tpl = generateUiForSource(ds);
-      expect(findAll(tpl, 'Text')[0].text).toBe(`{{ JSON.stringify(${ds.name}) }}`);
+      expect(findAll(tpl, 'Text')[0]).toMatchObject({ text: `{{ JSON.stringify(${ds.name}) }}`, condition: `!${ds.name}Loading && !${ds.name}Error` });
       const button = findAll(tpl, 'Button')[0];
       expect(button.text).toBe('Reload');
+      expect(button.condition).toBeUndefined();
       expect(button.events?.onClick).toEqual([expect.objectContaining({ type: 'runDataSource', dataSourceId: ds.id })]);
     }
+    expect(findAll(generateUiForSource(SOURCES[3]), 'Alert')[0].props?.title).toBe('Couldn’t load api');
+    expect(findAll(generateUiForSource(SOURCES[4]), 'Alert')[0].props?.title).toBe('Couldn’t run quote');
   });
 });
 

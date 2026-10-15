@@ -392,11 +392,36 @@ describe('computeDropTarget', () => {
     expect(res.label).toBe(ATTACH_OVERLAY_LABEL);
 
     const full = rejected(computeDropTarget({ point: { x: 120, y: 20 }, chain: [level(busy.id, R(100, 0, 80, 32)), rowLevel, root] }, createDropModel(ext, 'Panel')));
-    expect(full.reason).toMatch(/already has content/);
+    // Names the trigger and what occupies its overlay (not the generic "must be attached" hint).
+    expect(full.reason).toBe('Button “Busy” already has an overlay (Tooltip “tip”) — remove it first to attach a Panel');
 
     // Over a container without triggers: explains where overlays go.
     const none = rejected(computeDropTarget({ point: { x: 300, y: 20 }, chain: [rowLevel, root] }, createDropModel(ext, 'Modal')));
     expect(none.reason).toMatch(/must be attached/);
+  });
+
+  it('a Tooltip dropped on a button that already opens a Modal explains which overlay is in the way', () => {
+    const ext = doc([
+      {
+        type: 'Button',
+        name: 'trigger',
+        text: 'Trigger',
+        slots: { overlay: [{ type: 'Modal', props: { id: 'edit', title: 'Edit details' }, children: [{ type: 'ModalBody' }] }] },
+      },
+    ]);
+    const trigger = byName(ext, 'trigger');
+    const root = level(ext.rootId, R(0, 0, 400, 40), 'vertical', [{ id: trigger.id, rect: R(0, 0, 100, 32) }]);
+    const res = rejected(computeDropTarget({ point: { x: 50, y: 16 }, chain: [level(trigger.id, R(0, 0, 100, 32)), root] }, createDropModel(ext, 'Tooltip')));
+    expect(res.reason).toBe('Button “Trigger” already has an overlay (Modal “Edit details”) — remove it first to attach a Tooltip');
+    // Moving the occupant itself back onto its own trigger is not "full".
+    const modalId = ext.nodes[trigger.id].slots!.overlay[0];
+    const back = accepted(computeDropTarget({ point: { x: 50, y: 16 }, chain: [level(trigger.id, R(0, 0, 100, 32)), root] }, createDropModel(ext, 'Modal', modalId)));
+    expect(back.target).toEqual({ parentId: trigger.id, slot: 'overlay', index: 0 });
+    // A type the slot does not accept keeps the slot's own explanation.
+    const ddExt = doc([{ type: 'Dropdown', children: [{ type: 'Dropdown.ButtonItem', name: 'item', text: 'Edit', slots: { overlay: [{ type: 'Panel', props: { id: 'p', title: 'P' } }] } }] }]);
+    const item = byName(ddExt, 'item');
+    const ddChain = [level(item.id, R(0, 0, 100, 30)), level(ddExt.rootId, R(0, 0, 100, 30))];
+    expect(rejected(computeDropTarget({ point: { x: 5, y: 5 }, chain: ddChain }, createDropModel(ddExt, 'Tooltip'))).reason).toMatch(/accepts Modal or Panel/);
   });
 
   it('overlay slot rules: Dropdown items accept Modals and Panels, not Tooltips', () => {

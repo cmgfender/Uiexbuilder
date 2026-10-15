@@ -1,23 +1,24 @@
 /** App settings: project, app identity, distribution & auth, scopes, permitted URLs and support info. */
 import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
-import { Info, Plus, Sparkles } from 'lucide-react';
+import { Info, Plus, Sparkles, TriangleAlert } from 'lucide-react';
 import { deriveRequirements } from '../codegen/requirements';
 import { toProjectSlug } from '../model/factory';
 import { useEditor } from '../model/store';
 import type { AppConfig, PlatformVersion } from '../model/types';
-import { Button, Dialog, Field, Select, TextArea, TextInput, Tabs, cx } from '../ui';
-import { Callout, ChipInput, ListEditor } from './common';
+import { appFunctionsUnsupported } from '../model/validate';
+import { Button, Dialog, Field, Select, TextArea, TextInput, Tabs, cx, tabPanelProps } from '../ui';
+import { Callout, ChipInput, CommitInput, ListEditor } from './common';
 import { PLATFORM_VERSIONS, tabFromArg, type AppSettingsTab as Tab } from './appSettingsModel';
 import type { DialogComponentProps } from './dialogTypes';
 import { COMMON_SCOPES, scopeDescription } from './scopes';
 import {
+  projectUidError,
   validateEmail,
   validateHttpsUrl,
   validatePermittedUrl,
   validatePhone,
   validateProjectSlug,
   validateRedirectUrl,
-  validateUid,
 } from './utils';
 
 
@@ -52,6 +53,8 @@ export function AppSettingsDialog({ open, onClose, arg }: DialogComponentProps) 
     >
       <Tabs<Tab>
         className="ub-pn-dialog-tabs"
+        idBase="ub-pn-appsettings"
+        aria-label="App settings sections"
         value={tab}
         onChange={setTab}
         tabs={[
@@ -61,7 +64,7 @@ export function AppSettingsDialog({ open, onClose, arg }: DialogComponentProps) 
           { value: 'support', label: 'Support' },
         ]}
       />
-      <div className="ub-pn-dialog-pane" role="tabpanel">
+      <div className="ub-pn-dialog-pane" {...tabPanelProps('ub-pn-appsettings', tab)}>
         {tab === 'general' && <GeneralTab />}
         {tab === 'auth' && <AuthTab />}
         {tab === 'urls' && <UrlsTab />}
@@ -83,9 +86,11 @@ function GeneralTab() {
   const name = useEditor((s) => s.project.name);
   const platformVersion = useEditor((s) => s.project.platformVersion);
   const app = useApp();
+  const project = useEditor((s) => s.project);
   const ids = { project: useId(), version: useId(), appName: useId(), desc: useId(), uid: useId() };
   const slugError = validateProjectSlug(name);
-  const uidError = validateUid(app.uid);
+  // The saved uid can still be wrong (an imported document, an extension that took it since).
+  const uidError = projectUidError(project, app.uid, { kind: 'app' });
   const suggestedSlug = toProjectSlug(name);
   return (
     <div className="ub-pn-form">
@@ -139,7 +144,14 @@ function GeneralTab() {
           error={uidError ?? undefined}
           hint="Internal identifier in app-hsmeta.json. Changing it after uploading creates a new app."
         >
-          <TextInput id={ids.uid} code value={app.uid} invalid={!!uidError} onChange={(v) => updateApp({ uid: v })} />
+          <CommitInput
+            id={ids.uid}
+            code
+            value={app.uid}
+            aria-label="App UID"
+            validate={(v) => projectUidError(useEditor.getState().project, v, { kind: 'app' })}
+            onCommit={(uid) => updateApp({ uid })}
+          />
         </Field>
       </div>
       <Field label="Description" htmlFor={ids.desc}>
@@ -224,6 +236,8 @@ function AuthTab() {
   const listed = new Set([...app.requiredScopes, ...app.optionalScopes, ...app.conditionallyRequiredScopes]);
   const missingScopes = derived.scopes.filter((s) => !listed.has(s));
   const marketplace = app.distribution === 'marketplace';
+  const functionCount = project.functions.length;
+  const functionsBlocked = functionCount > 0 ? appFunctionsUnsupported(project) : null;
   return (
     <div className="ub-pn-form">
       <h3 className="ub-pn-h3">Distribution & authentication</h3>
@@ -259,6 +273,12 @@ function AuthTab() {
       {marketplace && (
         <Callout tone="info" icon={<Info size={14} aria-hidden />}>
           Marketplace apps must use OAuth, so static token authentication is turned off.
+        </Callout>
+      )}
+      {functionsBlocked && (
+        <Callout tone="danger" icon={<TriangleAlert size={14} aria-hidden />} role="alert">
+          {functionsBlocked} — your {functionCount === 1 ? 'app function' : `${functionCount} app functions`} won’t upload. Use Private
+          distribution with Static token auth, or delete the {functionCount === 1 ? 'function' : 'functions'}.
         </Callout>
       )}
       {app.authType === 'oauth' && (

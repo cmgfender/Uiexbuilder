@@ -12,13 +12,17 @@
  *   unknown types are skipped.
  *
  * Permitted URLs — origins (scheme + host) of statically known URLs:
- *   fetch:  fetch data sources and fetch actions
+ *   fetch:  fetch data sources, fetch actions, and `hubspot.fetch('https://…')` calls with a
+ *           literal URL in custom code, helper code and computed values
  *   iframe: openIframeModal actions
  *   img:    Image `src` literals
  *   A URL only counts when its host is fixed text, e.g. "https://api.example.com/{{ path }}";
- *   "https://{{ host }}/x" or "https://api.example.com{{ suffix }}" are skipped.
+ *   "https://{{ host }}/x" or "https://api.example.com{{ suffix }}" are skipped (see
+ *   `urlOriginHint`, which validation uses to explain them).
  */
 import { CRM_OBJECT_TYPES } from '../registry/constants';
+import { isPropertyName, nextSignificant, tokenize } from '../model/jsTokens';
+import { singleExpression, parseTemplate } from '../model/template';
 import type { ActionStep, Extension, Project, UINode } from '../model/types';
 
 export interface ProjectRequirements {
@@ -114,6 +118,57 @@ export function staticOrigin(urlTemplate: string): string | null {
   }
 }
 
+/** The text of a JS string literal token (quotes removed, simple escapes resolved). */
+function unquote(literal: string): string {
+  const body = literal.slice(1, literal.endsWith(literal[0]) && literal.length > 1 ? -1 : undefined);
+  return body.replace(/\\(.)/g, (_, c: string) => ({ n: '\n', t: '\t', r: '\r' })[c] ?? c);
+}
+
+/**
+ * URL templates (`{{ }}` marks the dynamic part) of `hubspot.fetch(<url>, ...)` calls in code
+ * whose first argument starts with a string or template literal.
+ */
+export function fetchUrlsInCode(code: string): string[] {
+  if (typeof code !== 'string' || !code.includes('fetch')) return [];
+  const tokens = tokenize(code);
+  const out: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.kind !== 'ident' || t.text !== 'hubspot' || isPropertyName(tokens, i)) continue;
+    const dot = nextSignificant(tokens, i + 1);
+    const name = dot === -1 ? -1 : nextSignificant(tokens, dot + 1);
+    const paren = name === -1 ? -1 : nextSignificant(tokens, name + 1);
+    const arg = paren === -1 ? -1 : nextSignificant(tokens, paren + 1);
+    if (arg === -1 || tokens[dot].text !== '.' || tokens[name].text !== 'fetch' || tokens[paren].text !== '(') continue;
+    const a = tokens[arg];
+    if (a.kind === 'string') out.push(unquote(a.text));
+    else if (a.kind === 'template') out.push(a.text.slice(1, -1));
+    else if (a.kind === 'templateHead') out.push(`${a.text.slice(1, -2)}{{ dynamic }}`);
+  }
+  return out;
+}
+
+/**
+ * Explains a URL template whose origin is not static: `{ dynamic: true, suggestion }` where the
+ * suggestion is the origin of the initial value of a state variable the URL starts with (e.g.
+ * `{{ apiBase }}/items` with apiBase = 'https://api.acme.io'), else null. Static URLs return
+ * `{ dynamic: false, suggestion: <origin> }`.
+ */
+export function urlOriginHint(url: string, ext: Pick<Extension, 'state'>): { dynamic: boolean; suggestion: string | null } {
+  const origin = staticOrigin(url);
+  if (origin) return { dynamic: false, suggestion: origin };
+  const str = typeof url === 'string' ? url.trim() : '';
+  if (!str.includes('{{')) return { dynamic: false, suggestion: null };
+  const first = parseTemplate(str)[0];
+  let suggestion: string | null = null;
+  const name = first?.kind === 'expr' ? first.code.trim() : singleExpression(str);
+  if (name && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) {
+    const initial = (Array.isArray(ext.state) ? ext.state : []).find((v) => v?.name === name)?.initial;
+    if (typeof initial === 'string') suggestion = staticOrigin(initial);
+  }
+  return { dynamic: true, suggestion };
+}
+
 function visitSteps(steps: ActionStep[] | undefined, visit: (s: ActionStep) => void): void {
   for (const step of Array.isArray(steps) ? steps : []) {
     if (!step || typeof step !== 'object') continue;
@@ -156,8 +211,14 @@ function collectExtension(ext: Extension, out: { scopes: Set<string>; fetch: Set
       visitSteps(steps, (step) => {
         if (step.type === 'fetch') addOrigin(out.fetch, step.url);
         if (step.type === 'openIframeModal') addOrigin(out.iframe, step.uri);
+        if (step.type === 'custom') fetchUrlsInCode(step.code).forEach((url) => addOrigin(out.fetch, url));
       });
     }
+  }
+  // Module-level helper code and computed values may call hubspot.fetch too.
+  fetchUrlsInCode(typeof ext.helpers === 'string' ? ext.helpers : '').forEach((url) => addOrigin(out.fetch, url));
+  for (const c of Array.isArray(ext.computed) ? ext.computed : []) {
+    fetchUrlsInCode(typeof c?.expr === 'string' ? c.expr : '').forEach((url) => addOrigin(out.fetch, url));
   }
 }
 

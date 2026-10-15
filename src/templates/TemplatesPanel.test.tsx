@@ -91,6 +91,21 @@ describe('template flows', () => {
     expect(useEditor.getState().project.functions).toHaveLength(0);
   });
 
+  it('notes when a starter brings app functions the app type does not allow', () => {
+    reset();
+    const quote = PROJECT_TEMPLATES.find((t) => t.id === 'server-quote')!;
+    const plain = addTemplateToProject(quote);
+    expect(plain.message).not.toMatch(/Note:/);
+    useEditor.getState().undo();
+    useEditor.getState().updateApp({ authType: 'oauth', redirectUrls: ['https://example.com/oauth'] });
+    const r = addTemplateToProject(quote);
+    expect(r.ok).toBe(true);
+    expect(r.message).toMatch(/Note: HubSpot only allows app functions in apps with static token auth.*see Problems\./);
+    // Starters without functions add no note.
+    const summary = PROJECT_TEMPLATES.find((t) => t.id === 'contact-summary')!;
+    expect(replaceActiveWithTemplate(summary).message).not.toMatch(/Note:/);
+  });
+
   it('refuses a second settings page', () => {
     reset();
     const settings = PROJECT_TEMPLATES.find((t) => t.kind === 'settings')!;

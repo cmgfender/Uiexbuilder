@@ -10,7 +10,7 @@ import type { DragEvent as ReactDragEvent } from 'react';
 import type { InsertTarget } from '../model/tree';
 import { findParent } from '../model/tree';
 import { canAccept } from '../model/rules';
-import type { Extension, NodeId, NodeTemplate, StateVar } from '../model/types';
+import type { Extension, NodeId, NodeTemplate, StateVar, UINode } from '../model/types';
 
 export const DND_MIME = 'application/x-uiex-dnd';
 
@@ -123,21 +123,111 @@ export function payloadType(payload: DragPayload, ext: Extension): string | null
   return ext.nodes[payload.nodeId]?.type ?? null;
 }
 
+/** Containers a Form typically wraps its fields in (click-to-add goes inside them). */
+const FORM_WRAPPERS = new Set(['Flex', 'Box']);
+/** Button-like components that make up a form's action area. */
+const ACTION_TYPES = new Set(['Button', 'LoadingButton', 'ButtonRow']);
+/** Containers that may hold a form's action buttons (e.g. Submit and Cancel side by side). */
+const ACTION_GROUPS = new Set(['ButtonRow', 'Flex', 'Inline', 'Box']);
+
+function isSubmitOrReset(node: UINode | undefined): boolean {
+  if (!node || (node.type !== 'Button' && node.type !== 'LoadingButton')) return false;
+  const t = node.props.type;
+  return t === 'submit' || t === 'reset';
+}
+
+/** A submit / reset button, or a group of buttons containing one (ButtonRow, a row of buttons). */
+function isFormAction(ext: Extension, node: UINode | undefined): boolean {
+  if (!node) return false;
+  if (isSubmitOrReset(node)) return true;
+  if (!ACTION_GROUPS.has(node.type) || node.children.length === 0) return false;
+  const kids = node.children.map((id) => ext.nodes[id]);
+  return kids.every((k) => !!k && ACTION_TYPES.has(k.type)) && kids.some(isSubmitOrReset);
+}
+
+function isButtonLike(ext: Extension, node: UINode | undefined): boolean {
+  return !!node && (ACTION_TYPES.has(node.type) || isFormAction(ext, node));
+}
+
+/**
+ * Index where a form's trailing action area (its last submit / reset button and the buttons right
+ * before it, e.g. Cancel) starts among `parentId`'s children, or -1 when it has none.
+ */
+export function formActionsStart(ext: Extension, parentId: NodeId): number {
+  const children = ext.nodes[parentId]?.children ?? [];
+  let last = -1;
+  for (let i = children.length - 1; i >= 0; i--) {
+    if (isFormAction(ext, ext.nodes[children[i]])) {
+      last = i;
+      break;
+    }
+  }
+  if (last === -1) return -1;
+  let start = last;
+  while (start > 0 && isButtonLike(ext, ext.nodes[children[start - 1]])) start--;
+  return start;
+}
+
+function insideForm(ext: Extension, id: NodeId): boolean {
+  let cur: NodeId | null = id;
+  while (cur) {
+    if (ext.nodes[cur]?.type === 'Form') return true;
+    const ref = findParent(ext, cur);
+    if (!ref || ref.slot) return false;
+    cur = ref.parentId;
+  }
+  return false;
+}
+
+/**
+ * Inside a form, new fields and content go before the trailing submit / reset buttons rather
+ * than after them (buttons themselves still go where they were asked to).
+ */
+function beforeFormActions(ext: Extension, target: InsertTarget, type: string): InsertTarget {
+  if (target.slot || ACTION_TYPES.has(type) || !insideForm(ext, target.parentId)) return target;
+  const start = formActionsStart(ext, target.parentId);
+  return start !== -1 && target.index > start ? { ...target, index: start } : target;
+}
+
+/**
+ * Click-to-add into a Form: the Form's fields usually live in a layout Flex (the registry
+ * template is Form > Flex > [fields…, Submit]), so the new component joins them — before the
+ * submit / reset buttons — instead of landing after the Flex.
+ */
+function intoForm(ext: Extension, formId: NodeId, type: string): InsertTarget {
+  let target = beforeFormActions(ext, { parentId: formId, index: ext.nodes[formId].children.length }, type);
+  for (let depth = 0; depth < 4; depth++) {
+    const parent = ext.nodes[target.parentId];
+    const prev = target.index > 0 ? ext.nodes[parent.children[target.index - 1]] : undefined;
+    if (!prev || !FORM_WRAPPERS.has(prev.type) || isFormAction(ext, prev) || !canAccept(ext, prev.id, type).ok) break;
+    target = beforeFormActions(ext, { parentId: prev.id, index: prev.children.length }, type);
+  }
+  return target;
+}
+
 /**
  * Where a click-to-add (palette click, paste-like insert) should go:
  * into the selected node if it is a container accepting the type, else after the selected node
  * in its parent, else at the end of the root. Returns null if nowhere accepts it.
+ *
+ * Forms get special care: adding to a Form goes into its fields' layout Flex, and inside a form
+ * new content goes before the trailing submit / reset buttons.
  */
 export function smartInsertTarget(ext: Extension, selectedId: NodeId | null, type: string): InsertTarget | null {
   if (selectedId && ext.nodes[selectedId]) {
     const sel = ext.nodes[selectedId];
-    if (canAccept(ext, selectedId, type).ok) return { parentId: selectedId, index: sel.children.length };
+    if (canAccept(ext, selectedId, type).ok) {
+      if (sel.type === 'Form') return intoForm(ext, selectedId, type);
+      return beforeFormActions(ext, { parentId: selectedId, index: sel.children.length }, type);
+    }
     let cur: NodeId | null = selectedId;
     // Walk up: after the selected node, then after its ancestors.
     while (cur) {
       const ref = findParent(ext, cur);
       if (!ref) break;
-      if (!ref.slot && canAccept(ext, ref.parentId, type).ok) return { parentId: ref.parentId, index: ref.index + 1 };
+      if (!ref.slot && canAccept(ext, ref.parentId, type).ok) {
+        return beforeFormActions(ext, { parentId: ref.parentId, index: ref.index + 1 }, type);
+      }
       cur = ref.parentId;
     }
   }

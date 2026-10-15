@@ -1,27 +1,38 @@
 /**
- * Where is a state variable / data source used? And renaming it everywhere.
+ * Where is a state variable / data source / computed value used? And renaming it everywhere.
  *
  * Usages are found in every place user code can live: prop expressions and `{{ }}` templates
  * (including nested literal arrays/objects), text, conditions, repeats, two-way bindings, event
- * action steps (recursively), data source definitions and computed values. A name also counts as
- * used through the names it declares (`setX`, `xLoading`, `xError`, ...).
+ * action steps (recursively, including request headers), data source definitions and computed
+ * values. A name also counts as used through the names it declares (`setX`, `xLoading`, `xError`, ...).
+ *
+ * Scope: code can only see a declaration when no local name hides it. Locals are the item / index
+ * names of enclosing repeats (the node's own repeat for everything but its `items`), an event
+ * handler's params (`value`, `event`, ...), `response` in fetch / run-function success steps and
+ * `error` in their failure steps — exactly what the runtime and codegen bind. Usages and renames
+ * skip shadowed names, and `renameConflicts` lists the places where a new name would be captured
+ * by such a local (or by a name the code itself declares).
  */
-import { nodeLabel, walk } from '../model/tree';
+import { nodeLabel } from '../model/tree';
 import { getComponent } from '../registry';
-import type { ActionStep, DataSource, Extension, PropValue, UINode } from '../model/types';
+import type { ActionStep, Extension, NodeId, PropValue, UINode } from '../model/types';
 import { isExpr } from '../model/types';
-import { setterOf } from './names';
 
 export interface Usage {
   /** Node id when the usage is on a component. */
   nodeId?: string;
-  /** Plain-language location, e.g. `Text: Hello · Text`, `Data source “deals” · URL`. */
+  /** Plain-language location, e.g. `Text: Hello · Text`, `Data source “deals”`. */
   location: string;
   /**
    * Machine-readable field: 'text', 'prop:<name>', 'condition', 'repeat', 'binding',
    * 'event:<name>', 'dataSource:<id>', 'computed:<id>'.
    */
   field: string;
+}
+
+/** `count` -> `setCount` (same rule as names.ts `setterOf`; kept local so names.ts can import this module). */
+function setterOf(name: string): string {
+  return `set${name.charAt(0).toUpperCase()}${name.slice(1)}`;
 }
 
 /** The identifiers a declaration named `name` can be referenced by. */
@@ -31,83 +42,74 @@ export function relatedIdentifiers(name: string): string[] {
 }
 
 const TEMPLATE_RE = /\{\{([\s\S]*?)\}\}/g;
+const IDENT_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
-function codeUses(code: string | undefined, names: Set<string>): boolean {
-  if (!code || typeof code !== 'string') return false;
-  const ids = referencedIdentifiers(code);
-  for (const n of names) if (ids.has(n)) return true;
-  return false;
-}
+// ---------------------------------------------------------------------------
+// Sites: every place that refers to declarations, with the local names in scope there
+// ---------------------------------------------------------------------------
 
-function templateUses(str: string | undefined, names: Set<string>): boolean {
-  if (!str || typeof str !== 'string' || !str.includes('{{')) return false;
-  for (const m of str.matchAll(TEMPLATE_RE)) if (codeUses(m[1], names)) return true;
-  return false;
-}
+/** Names that hide extension-level declarations at a site. */
+type Locals = ReadonlySet<string>;
+const NO_LOCALS: Locals = new Set<string>();
 
-function propValueUses(value: PropValue | undefined, names: Set<string>): boolean {
-  if (value === null || value === undefined) return false;
-  if (typeof value === 'string') return templateUses(value, names);
-  if (isExpr(value)) return codeUses(value.$expr, names);
-  if (Array.isArray(value)) return value.some((v) => propValueUses(v, names));
-  if (typeof value === 'object') return Object.values(value).some((v) => propValueUses(v, names));
-  return false;
-}
-
-function stepsUse(steps: ActionStep[] | undefined, names: Set<string>, name: string, dsIds: Set<string>): boolean {
-  for (const s of Array.isArray(steps) ? steps : []) {
-    if (!s || typeof s !== 'object') continue;
-    switch (s.type) {
-      case 'setState':
-        if (s.state === name || codeUses(s.value, names)) return true;
-        break;
-      case 'addAlert':
-        if (templateUses(s.title, names) || templateUses(s.message, names)) return true;
-        break;
-      case 'openIframeModal':
-        if (templateUses(s.uri, names) || templateUses(s.title, names)) return true;
-        break;
-      case 'copyToClipboard':
-        if (templateUses(s.text, names)) return true;
-        break;
-      case 'runDataSource':
-        if (dsIds.has(s.dataSourceId)) return true;
-        break;
-      case 'fetch':
-        if (templateUses(s.url, names) || codeUses(s.body, names) || s.resultState === name) return true;
-        if (stepsUse(s.onSuccess, names, name, dsIds) || stepsUse(s.onError, names, name, dsIds)) return true;
-        break;
-      case 'runFunction':
-        if (codeUses(s.parameters, names) || s.resultState === name) return true;
-        if (stepsUse(s.onSuccess, names, name, dsIds) || stepsUse(s.onError, names, name, dsIds)) return true;
-        break;
-      case 'log':
-        if (templateUses(s.message, names)) return true;
-        break;
-      case 'if':
-        if (codeUses(s.condition, names) || stepsUse(s.then, names, name, dsIds) || stepsUse(s.else, names, name, dsIds)) return true;
-        break;
-      case 'custom':
-        if (codeUses(s.code, names)) return true;
-        break;
-      default:
-        break;
-    }
+function withLocals(locals: Locals, names: Iterable<string>): Locals {
+  let out: Set<string> | null = null;
+  for (const n of names) {
+    if (!n || locals.has(n) || out?.has(n)) continue;
+    out ??= new Set(locals);
+    out.add(n);
   }
-  return false;
+  return out ?? locals;
 }
 
-function dataSourceUses(ds: DataSource, names: Set<string>): boolean {
-  switch (ds.kind) {
-    case 'fetch':
-      return templateUses(ds.url, names) || codeUses(ds.body, names);
-    case 'function':
-      return codeUses(ds.parameters, names);
-    case 'crmSearch':
-      return templateUses(ds.query, names) || (ds.filters ?? []).some((f) => templateUses(f?.value, names));
-    default:
-      return false;
-  }
+type Holder = Record<string, unknown>;
+
+interface SiteBase {
+  nodeId?: NodeId;
+  field: string;
+  location: string;
+}
+
+/** User code: a JavaScript fragment, a `{{ }}` template string or a prop value (literal or expression). */
+interface CodeSite extends SiteBase {
+  type: 'code';
+  kind: 'code' | 'template' | 'value';
+  locals: Locals;
+  /** Name of the data source / computed value the site belongs to (a declaration does not use itself). */
+  owner?: string;
+  holder: Holder;
+  key: string;
+}
+
+/** A reference by name that is not code: a value binding, a set-variable target, a result state. */
+interface NameSite extends SiteBase {
+  type: 'name';
+  holder: Holder;
+  key: string;
+}
+
+/** A "Refresh data source" step (refers to the data source by id). */
+interface RunSite extends SiteBase {
+  type: 'run';
+  dataSourceId: string;
+}
+
+type Site = CodeSite | NameSite | RunSite;
+
+/** Item / index names a repeat binds, as the exported code binds them (see codegen/jsx). */
+export function repeatLocalNames(node: UINode): string[] {
+  const r = node.repeat;
+  if (!r || typeof r.items !== 'string' || r.items.trim() === '') return [];
+  const itemName = typeof r.itemName === 'string' && IDENT_RE.test(r.itemName) ? r.itemName : 'item';
+  let indexName = typeof r.indexName === 'string' && IDENT_RE.test(r.indexName) ? r.indexName : 'index';
+  if (indexName === itemName) indexName = `${itemName}Index`;
+  return [itemName, indexName];
+}
+
+/** Params of a component event handler (registry EventDef), e.g. `['value']` for an input's onChange. */
+export function eventParamNames(node: UINode, event: string): string[] {
+  const def = getComponent(node.type)?.events?.find((e) => e.name === event);
+  return (def?.params ?? []).map((p) => p?.name).filter((n): n is string => typeof n === 'string' && n !== '');
 }
 
 function nodeTitle(node: UINode): string {
@@ -123,37 +125,193 @@ function eventLabel(node: UINode, event: string): string {
 }
 
 /**
+ * Every site of the extension in document order: per node (tree order) binding, text, props,
+ * condition, repeat, events; then data sources and computed values. With `includeDetached`,
+ * nodes the tree does not reach are included too (with no locals).
+ */
+function collectSites(ext: Extension, includeDetached: boolean): Site[] {
+  const sites: Site[] = [];
+
+  const stepSites = (steps: ActionStep[] | undefined, locals: Locals, base: SiteBase) => {
+    const code = (holder: object, key: string, kind: CodeSite['kind'], scope: Locals = locals) =>
+      sites.push({ ...base, type: 'code', kind, locals: scope, holder: holder as Holder, key });
+    const name = (holder: object, key: string) => sites.push({ ...base, type: 'name', holder: holder as Holder, key });
+    for (const s of Array.isArray(steps) ? steps : []) {
+      if (!s || typeof s !== 'object') continue;
+      switch (s.type) {
+        case 'setState':
+          name(s, 'state');
+          code(s, 'value', 'code');
+          break;
+        case 'addAlert':
+          code(s, 'title', 'template');
+          code(s, 'message', 'template');
+          break;
+        case 'openIframeModal':
+          code(s, 'uri', 'template');
+          code(s, 'title', 'template');
+          break;
+        case 'copyToClipboard':
+          code(s, 'text', 'template');
+          break;
+        case 'log':
+          code(s, 'message', 'template');
+          break;
+        case 'runDataSource':
+          if (typeof s.dataSourceId === 'string') sites.push({ ...base, type: 'run', dataSourceId: s.dataSourceId });
+          break;
+        case 'fetch':
+          code(s, 'url', 'template');
+          for (const h of Array.isArray(s.headers) ? s.headers : []) if (h && typeof h === 'object') code(h, 'value', 'template');
+          code(s, 'body', 'code');
+          name(s, 'resultState');
+          stepSites(s.onSuccess, withLocals(locals, ['response']), base);
+          stepSites(s.onError, withLocals(locals, ['error']), base);
+          break;
+        case 'runFunction':
+          code(s, 'parameters', 'code');
+          name(s, 'resultState');
+          stepSites(s.onSuccess, withLocals(locals, ['response']), base);
+          stepSites(s.onError, withLocals(locals, ['error']), base);
+          break;
+        case 'if':
+          code(s, 'condition', 'code');
+          stepSites(s.then, locals, base);
+          stepSites(s.else, locals, base);
+          break;
+        case 'custom':
+          code(s, 'code', 'code');
+          break;
+        default:
+          break;
+      }
+    }
+  };
+
+  const nodeSites = (node: UINode, outer: Locals) => {
+    const inner = withLocals(outer, repeatLocalNames(node));
+    const title = nodeTitle(node);
+    const at = (field: string, what: string): SiteBase => ({ nodeId: node.id, field, location: `${title} · ${what}` });
+    const holder = node as unknown as Holder;
+    if (node.binding && typeof node.binding === 'object') {
+      sites.push({ ...at('binding', 'Value binding'), type: 'name', holder: node.binding as unknown as Holder, key: 'state' });
+    }
+    sites.push({ ...at('text', 'Text'), type: 'code', kind: 'template', locals: inner, holder, key: 'text' });
+    const props = node.props && typeof node.props === 'object' ? (node.props as Holder) : null;
+    for (const prop of Object.keys(props ?? {})) {
+      sites.push({ ...at(`prop:${prop}`, propLabel(node, prop)), type: 'code', kind: 'value', locals: inner, holder: props!, key: prop });
+    }
+    sites.push({ ...at('condition', 'Show when'), type: 'code', kind: 'code', locals: inner, holder, key: 'condition' });
+    if (node.repeat && typeof node.repeat === 'object') {
+      const repeat = node.repeat as unknown as Holder;
+      // The items are evaluated outside the repeat; the key once per item.
+      sites.push({ ...at('repeat', 'Repeat'), type: 'code', kind: 'code', locals: outer, holder: repeat, key: 'items' });
+      sites.push({ ...at('repeat', 'Repeat'), type: 'code', kind: 'code', locals: inner, holder: repeat, key: 'key' });
+    }
+    for (const [event, steps] of Object.entries(node.events ?? {})) {
+      stepSites(steps, withLocals(inner, eventParamNames(node, event)), at(`event:${event}`, eventLabel(node, event)));
+    }
+  };
+
+  const visited = new Set<NodeId>();
+  const visit = (id: NodeId, outer: Locals) => {
+    if (visited.has(id)) return;
+    visited.add(id);
+    const node = ext.nodes?.[id];
+    if (!node) return;
+    if (id !== ext.rootId) nodeSites(node, outer);
+    const inner = withLocals(outer, repeatLocalNames(node));
+    for (const c of Array.isArray(node.children) ? node.children : []) visit(c, inner);
+    for (const ids of Object.values(node.slots ?? {})) for (const c of Array.isArray(ids) ? ids : []) visit(c, inner);
+  };
+  visit(ext.rootId, NO_LOCALS);
+  if (includeDetached) for (const id of Object.keys(ext.nodes ?? {})) visit(id, NO_LOCALS);
+
+  for (const ds of ext.dataSources ?? []) {
+    if (!ds || typeof ds !== 'object') continue;
+    const base = { field: `dataSource:${ds.id}`, location: `Data source “${ds.name}”`, owner: ds.name };
+    const code = (holder: object, key: string, kind: CodeSite['kind']) =>
+      sites.push({ ...base, type: 'code', kind, locals: NO_LOCALS, holder: holder as Holder, key });
+    if (ds.kind === 'fetch') {
+      code(ds, 'url', 'template');
+      for (const h of Array.isArray(ds.headers) ? ds.headers : []) if (h && typeof h === 'object') code(h, 'value', 'template');
+      code(ds, 'body', 'code');
+    } else if (ds.kind === 'function') {
+      code(ds, 'parameters', 'code');
+    } else if (ds.kind === 'crmSearch') {
+      code(ds, 'query', 'template');
+      for (const f of Array.isArray(ds.filters) ? ds.filters : []) if (f && typeof f === 'object') code(f, 'value', 'template');
+    }
+  }
+  for (const c of ext.computed ?? []) {
+    if (!c || typeof c !== 'object') continue;
+    sites.push({
+      type: 'code',
+      kind: 'code',
+      field: `computed:${c.id}`,
+      location: `Computed value “${c.name}”`,
+      owner: c.name,
+      locals: NO_LOCALS,
+      holder: c as unknown as Holder,
+      key: 'expr',
+    });
+  }
+  return sites;
+}
+
+/** The JavaScript fragments of a code site's current value. */
+function siteFragments(kind: CodeSite['kind'], value: unknown): string[] {
+  if (kind === 'code') return typeof value === 'string' && value ? [value] : [];
+  if (kind === 'template') return templateFragments(value);
+  return propValueFragments(value as PropValue);
+}
+
+function templateFragments(value: unknown): string[] {
+  if (typeof value !== 'string' || !value.includes('{{')) return [];
+  return [...value.matchAll(TEMPLATE_RE)].map((m) => m[1]);
+}
+
+function propValueFragments(value: PropValue | undefined): string[] {
+  if (value === null || value === undefined) return [];
+  if (typeof value === 'string') return templateFragments(value);
+  if (isExpr(value)) return typeof value.$expr === 'string' ? [value.$expr] : [];
+  if (Array.isArray(value)) return value.flatMap((v) => propValueFragments(v));
+  if (typeof value === 'object') return Object.values(value).flatMap((v) => propValueFragments(v as PropValue));
+  return [];
+}
+
+/** Whether the code references one of `names` that no local hides. */
+function fragmentUses(code: string, names: ReadonlySet<string>, locals: Locals): boolean {
+  for (const id of referencedIdentifiers(code)) if (names.has(id) && !locals.has(id)) return true;
+  return false;
+}
+
+/**
  * Every place in `ext` that references `name` (or one of the names it declares). The search
- * covers components, data source definitions (other than the named one itself) and computed values.
+ * covers components, data source definitions (other than the named one itself) and computed
+ * values. Code where a local name (event param, repeat item, `response`, ...) hides `name` does
+ * not count.
  */
 export function findUsages(ext: Extension, name: string): Usage[] {
   if (!name) return [];
   const names = new Set(relatedIdentifiers(name));
-  const self = (ext.dataSources ?? []).filter((d) => d.name === name);
-  const dsIds = new Set(self.map((d) => d.id));
+  const dsIds = new Set((ext.dataSources ?? []).filter((d) => d?.name === name).map((d) => d.id));
   const out: Usage[] = [];
-  walk(ext, (node) => {
-    if (node.id === ext.rootId) return;
-    const title = nodeTitle(node);
-    const add = (field: string, what: string) => out.push({ nodeId: node.id, field, location: `${title} · ${what}` });
-    if (node.binding?.state === name) add('binding', 'Value binding');
-    if (templateUses(node.text, names)) add('text', 'Text');
-    for (const [prop, value] of Object.entries(node.props ?? {})) {
-      if (propValueUses(value, names)) add(`prop:${prop}`, propLabel(node, prop));
+  const seen = new Set<string>();
+  const add = (site: Site) => {
+    const key = `${site.nodeId ?? ''}\n${site.field}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ ...(site.nodeId ? { nodeId: site.nodeId } : {}), field: site.field, location: site.location });
+  };
+  for (const site of collectSites(ext, false)) {
+    if (site.type === 'run') {
+      if (dsIds.has(site.dataSourceId)) add(site);
+    } else if (site.type === 'name') {
+      if (site.holder[site.key] === name) add(site);
+    } else if (site.owner !== name && siteFragments(site.kind, site.holder[site.key]).some((f) => fragmentUses(f, names, site.locals))) {
+      add(site);
     }
-    if (codeUses(node.condition, names)) add('condition', 'Show when');
-    if (node.repeat && (codeUses(node.repeat.items, names) || codeUses(node.repeat.key, names))) add('repeat', 'Repeat');
-    for (const [event, steps] of Object.entries(node.events ?? {})) {
-      if (stepsUse(steps, names, name, dsIds)) add(`event:${event}`, eventLabel(node, event));
-    }
-  });
-  for (const ds of ext.dataSources ?? []) {
-    if (ds.name === name) continue;
-    if (dataSourceUses(ds, names)) out.push({ field: `dataSource:${ds.id}`, location: `Data source “${ds.name}”` });
-  }
-  for (const c of ext.computed ?? []) {
-    if (c.name === name) continue;
-    if (codeUses(c.expr, names)) out.push({ field: `computed:${c.id}`, location: `Computed value “${c.name}”` });
   }
   return out;
 }
@@ -331,7 +489,7 @@ export function referencedIdentifiers(code: string): Set<string> {
  * Replaces references to identifiers in JavaScript code. Property names after `.` and object keys
  * are kept, and shorthand properties keep their key (`{ count }` -> `{ count: total }`).
  */
-export function replaceIdentifiers(code: string, map: Map<string, string>): string {
+export function replaceIdentifiers(code: string, map: ReadonlyMap<string, string>): string {
   if (!code || map.size === 0) return code;
   let out = '';
   let last = 0;
@@ -344,172 +502,132 @@ export function replaceIdentifiers(code: string, map: Map<string, string>): stri
   return last === 0 ? code : out + code.slice(last);
 }
 
-function renameTemplate(str: string, map: Map<string, string>): string {
+function renameTemplate(str: string, map: ReadonlyMap<string, string>): string {
   if (!str.includes('{{')) return str;
   return str.replace(TEMPLATE_RE, (_m, code: string) => `{{${replaceIdentifiers(code, map)}}}`);
 }
 
-function renamePropValue(value: PropValue, map: Map<string, string>): PropValue {
+function renamePropValue(value: PropValue, map: ReadonlyMap<string, string>): PropValue {
   if (typeof value === 'string') return renameTemplate(value, map);
-  if (isExpr(value)) return { $expr: replaceIdentifiers(value.$expr, map) };
+  if (isExpr(value)) return typeof value.$expr === 'string' ? { ...value, $expr: replaceIdentifiers(value.$expr, map) } : value;
   if (Array.isArray(value)) return value.map((v) => renamePropValue(v, map)) as PropValue;
   if (value && typeof value === 'object') {
     const out: Record<string, PropValue> = {};
-    for (const [k, v] of Object.entries(value)) out[k] = renamePropValue(v, map);
+    for (const [k, v] of Object.entries(value)) out[k] = renamePropValue(v as PropValue, map);
     return out as PropValue;
   }
   return value;
 }
 
-/** Renames in place (works on immer drafts). Returns the number of changed fields. */
-function renameSteps(steps: ActionStep[] | undefined, map: Map<string, string>, from: string, to: string): number {
+/** The renamed value of a code site, or `undefined` when nothing changes. */
+function renameSiteValue(kind: CodeSite['kind'], value: unknown, map: ReadonlyMap<string, string>): unknown {
+  if (kind === 'code') {
+    if (typeof value !== 'string' || !value) return undefined;
+    const next = replaceIdentifiers(value, map);
+    return next !== value ? next : undefined;
+  }
+  if (kind === 'template') {
+    if (typeof value !== 'string') return undefined;
+    const next = renameTemplate(value, map);
+    return next !== value ? next : undefined;
+  }
+  if (value === null || value === undefined) return undefined;
+  const next = renamePropValue(value as PropValue, map);
+  return JSON.stringify(next) !== JSON.stringify(value) ? next : undefined;
+}
+
+/** `from`'s identifiers mapped to `to`'s (count -> total, setCount -> setTotal, ...). */
+function renameMap(from: string, to: string): Map<string, string> {
+  const toIds = relatedIdentifiers(to);
+  return new Map(relatedIdentifiers(from).map((id, i) => [id, toIds[i]]));
+}
+
+/** The map without the names that locals hide at a site. */
+function visibleMap(map: Map<string, string>, locals: Locals): Map<string, string> {
+  if (locals.size === 0) return map;
+  let out: Map<string, string> | null = null;
+  for (const k of map.keys()) {
+    if (!locals.has(k)) continue;
+    out ??= new Map(map);
+    out.delete(k);
+  }
+  return out ?? map;
+}
+
+/**
+ * Renames every reference to `from` (and the names it declares: setFrom, fromLoading, ...) to
+ * `to` across the extension. References hidden by a local name (an event param, a repeat item,
+ * `response` / `error`) are left alone. Mutates `ext` in place (use inside a store commit). Does
+ * not rename the declaration itself. Returns the number of changed fields.
+ */
+export function renameReferences(ext: Extension, from: string, to: string): number {
+  if (!from || !to || from === to) return 0;
+  const map = renameMap(from, to);
   let changed = 0;
-  const set = <T extends object, K extends keyof T>(obj: T, key: K, value: T[K]) => {
-    if (obj[key] !== value) {
-      obj[key] = value;
-      changed++;
+  for (const site of collectSites(ext, true)) {
+    if (site.type === 'run') continue;
+    if (site.type === 'name') {
+      if (site.holder[site.key] === from) {
+        site.holder[site.key] = to;
+        changed++;
+      }
+      continue;
     }
-  };
-  for (const s of Array.isArray(steps) ? steps : []) {
-    if (!s || typeof s !== 'object') continue;
-    switch (s.type) {
-      case 'setState':
-        if (s.state === from) set(s, 'state', to);
-        set(s, 'value', replaceIdentifiers(s.value, map));
-        break;
-      case 'addAlert':
-        set(s, 'title', renameTemplate(s.title ?? '', map));
-        set(s, 'message', renameTemplate(s.message ?? '', map));
-        break;
-      case 'openIframeModal':
-        set(s, 'uri', renameTemplate(s.uri ?? '', map));
-        set(s, 'title', renameTemplate(s.title ?? '', map));
-        break;
-      case 'copyToClipboard':
-        set(s, 'text', renameTemplate(s.text ?? '', map));
-        break;
-      case 'fetch':
-        set(s, 'url', renameTemplate(s.url ?? '', map));
-        if (s.body !== undefined) set(s, 'body', replaceIdentifiers(s.body, map));
-        if (s.resultState === from) set(s, 'resultState', to);
-        changed += renameSteps(s.onSuccess, map, from, to) + renameSteps(s.onError, map, from, to);
-        break;
-      case 'runFunction':
-        if (s.parameters !== undefined) set(s, 'parameters', replaceIdentifiers(s.parameters, map));
-        if (s.resultState === from) set(s, 'resultState', to);
-        changed += renameSteps(s.onSuccess, map, from, to) + renameSteps(s.onError, map, from, to);
-        break;
-      case 'log':
-        set(s, 'message', renameTemplate(s.message ?? '', map));
-        break;
-      case 'if':
-        set(s, 'condition', replaceIdentifiers(s.condition, map));
-        changed += renameSteps(s.then, map, from, to) + renameSteps(s.else, map, from, to);
-        break;
-      case 'custom':
-        set(s, 'code', replaceIdentifiers(s.code, map));
-        break;
-      default:
-        break;
+    const scoped = visibleMap(map, site.locals);
+    if (scoped.size === 0) continue;
+    const next = renameSiteValue(site.kind, site.holder[site.key], scoped);
+    if (next !== undefined) {
+      site.holder[site.key] = next;
+      changed++;
     }
   }
   return changed;
 }
 
+/** A place where renaming would change what the code means. */
+export interface RenameConflict extends Usage {
+  /** The new name (or one it declares, e.g. `setTo`) that something else already uses there. */
+  name: string;
+}
+
 /**
- * Renames every reference to `from` (and the names it declares: setFrom, fromLoading, ...) to
- * `to` across the extension. Mutates `ext` in place (use inside a store commit). Does not rename
- * the declaration itself. Returns the number of changed fields.
+ * Places where renaming `from` to `to` would be captured: code that references `from` where `to`
+ * (or `setTo`, `toLoading`, ...) is a local name — an event param, a repeat item / index,
+ * `response` / `error`, or a name the code itself declares or uses. Renaming there would make
+ * the reference point at that other value, so such a rename must be refused.
  */
-export function renameReferences(ext: Extension, from: string, to: string): number {
-  if (!from || !to || from === to) return 0;
-  const fromIds = relatedIdentifiers(from);
+export function renameConflicts(ext: Extension, from: string, to: string): RenameConflict[] {
+  if (!from || !to || from === to) return [];
+  const map = renameMap(from, to);
   const toIds = relatedIdentifiers(to);
-  const map = new Map(fromIds.map((id, i) => [id, toIds[i]]));
-  let changed = 0;
-  for (const node of Object.values(ext.nodes)) {
-    if (node.binding?.state === from) {
-      node.binding.state = to;
-      changed++;
-    }
-    if (typeof node.text === 'string') {
-      const next = renameTemplate(node.text, map);
-      if (next !== node.text) {
-        node.text = next;
-        changed++;
+  const out: RenameConflict[] = [];
+  const seen = new Set<string>();
+  for (const site of collectSites(ext, false)) {
+    if (site.type !== 'code') continue;
+    const scoped = visibleMap(map, site.locals);
+    if (scoped.size === 0) continue;
+    const localHit = toIds.find((id) => site.locals.has(id));
+    for (const fragment of siteFragments(site.kind, site.holder[site.key])) {
+      const words = scanIdentifiers(fragment)
+        .filter((t) => t.kind === 'ref' || t.kind === 'shorthand')
+        .map((t) => t.word);
+      if (!words.some((w) => scoped.has(w))) continue;
+      const hit = localHit ?? toIds.find((id) => words.includes(id));
+      if (!hit) continue;
+      const key = `${site.nodeId ?? ''}\n${site.field}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push({ ...(site.nodeId ? { nodeId: site.nodeId } : {}), field: site.field, location: site.location, name: hit });
       }
-    }
-    for (const [prop, value] of Object.entries(node.props ?? {})) {
-      const next = renamePropValue(value, map);
-      if (JSON.stringify(next) !== JSON.stringify(value)) {
-        node.props[prop] = next;
-        changed++;
-      }
-    }
-    if (typeof node.condition === 'string') {
-      const next = replaceIdentifiers(node.condition, map);
-      if (next !== node.condition) {
-        node.condition = next;
-        changed++;
-      }
-    }
-    if (node.repeat) {
-      const items = replaceIdentifiers(node.repeat.items, map);
-      const key = node.repeat.key !== undefined ? replaceIdentifiers(node.repeat.key, map) : undefined;
-      if (items !== node.repeat.items) {
-        node.repeat.items = items;
-        changed++;
-      }
-      if (key !== node.repeat.key) {
-        node.repeat.key = key;
-        changed++;
-      }
-    }
-    for (const steps of Object.values(node.events ?? {})) changed += renameSteps(steps, map, from, to);
-  }
-  for (const ds of ext.dataSources ?? []) {
-    if (ds.kind === 'fetch') {
-      const url = renameTemplate(ds.url ?? '', map);
-      if (url !== ds.url) {
-        ds.url = url;
-        changed++;
-      }
-      if (ds.body !== undefined) {
-        const body = replaceIdentifiers(ds.body, map);
-        if (body !== ds.body) {
-          ds.body = body;
-          changed++;
-        }
-      }
-    } else if (ds.kind === 'function' && ds.parameters !== undefined) {
-      const params = replaceIdentifiers(ds.parameters, map);
-      if (params !== ds.parameters) {
-        ds.parameters = params;
-        changed++;
-      }
-    } else if (ds.kind === 'crmSearch') {
-      if (ds.query !== undefined) {
-        const q = renameTemplate(ds.query, map);
-        if (q !== ds.query) {
-          ds.query = q;
-          changed++;
-        }
-      }
-      for (const f of ds.filters ?? []) {
-        const v = renameTemplate(f.value ?? '', map);
-        if (v !== f.value) {
-          f.value = v;
-          changed++;
-        }
-      }
+      break;
     }
   }
-  for (const c of ext.computed ?? []) {
-    const expr = replaceIdentifiers(c.expr, map);
-    if (expr !== c.expr) {
-      c.expr = expr;
-      changed++;
-    }
-  }
-  return changed;
+  return out;
+}
+
+/** Why `from` cannot be renamed to `to` (see renameConflicts), or null. */
+export function renameConflictMessage(ext: Extension, from: string, to: string): string | null {
+  const conflict = renameConflicts(ext, from, to.trim())[0];
+  if (!conflict) return null;
+  return `“${conflict.name}” already means something else in ${conflict.location} (where “${from}” is used) — choose another name`;
 }

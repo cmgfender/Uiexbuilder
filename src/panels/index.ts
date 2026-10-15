@@ -4,7 +4,16 @@ export { AppSettingsDialog, ExtensionsDialog, FunctionsDialog, ExportDialog, Pro
 export type { DialogComponentProps } from './dialogs';
 
 // Reusable logic (pure helpers other modules may build on).
-export { findUsages, renameReferences, replaceIdentifiers, referencedIdentifiers, type Usage } from './findUsages';
+export {
+  findUsages,
+  renameReferences,
+  renameConflicts,
+  renameConflictMessage,
+  replaceIdentifiers,
+  referencedIdentifiers,
+  type RenameConflict,
+  type Usage,
+} from './findUsages';
 export { validateDeclaredName, uniqueDeclaredName, declaredNames } from './names';
 export { generateUiForSource, generatedRootType } from './generators';
 export { insertGeneratedUi, renameStateVar, renameDataSource, findFunctionUsages, type FunctionUsage } from './actions';

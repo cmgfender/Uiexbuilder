@@ -4,9 +4,15 @@ import type { Extension } from '../model/types';
 import { COMMON_PROPERTIES, objectTypeKey, objectTypeLabel, propertyLabel, propertySuggestions } from './crmProperties';
 import { summarizeDataSource } from './dataSourceMeta';
 import { declaredNames, uniqueDeclaredName, validateDeclaredName } from './names';
+import { createProject } from '../model/factory';
 import {
   checkFunctionSyntax,
   convertInitial,
+  defaultEndpointPath,
+  extensionFileNameError,
+  functionFileNameError,
+  projectUidError,
+  validateEndpointPath,
   formatRelativeTime,
   previewValue,
   validateEmail,
@@ -173,5 +179,70 @@ describe('crm properties catalog', () => {
     expect(summarizeDataSource({ id: 'a', kind: 'function', name: 'r', functionId: 'f', runOnMount: true }, [])).toBe(
       'No function selected',
     );
+  });
+});
+
+describe('endpoint paths', () => {
+  it('accepts the official "/api/…" format and slash-less paths', () => {
+    // hubspot-project-components 2025.2 / 2026.03 / 2026.09 endpoint templates.
+    expect(validateEndpointPath('/api/function-one')).toBeNull();
+    expect(validateEndpointPath('/status')).toBeNull();
+    expect(validateEndpointPath('status')).toBeNull();
+    expect(validateEndpointPath('api/v2/my_fn')).toBeNull();
+  });
+  it('rejects empty, malformed and spaced paths', () => {
+    expect(validateEndpointPath('')).toMatch(/required/);
+    for (const bad of ['/', '//api', '/api/', '/bad path', '/api//x', '/api?x=1']) expect(validateEndpointPath(bad), bad).not.toBeNull();
+  });
+  it('defaults to /api/<uid>', () => {
+    expect(defaultEndpointPath('get_quote')).toBe('/api/get_quote');
+    expect(defaultEndpointPath('my.fn v2')).toBe('/api/my-fn-v2');
+    expect(defaultEndpointPath('...')).toBe('/api/function');
+    expect(validateEndpointPath(defaultEndpointPath('my.fn v2'))).toBeNull();
+  });
+});
+
+describe('project-wide uid and file name rules', () => {
+  function project() {
+    const p = createProject('Rules App');
+    p.functions = [
+      { id: 'f1', uid: 'quote_fn', fileName: 'quote', code: '', secretKeys: [] },
+      { id: 'f2', uid: 'other_fn', fileName: 'other', code: '', secretKeys: [] },
+    ];
+    return p;
+  }
+
+  it('shares one uid namespace between the app, extensions and functions', () => {
+    const p = project();
+    const card = p.extensions[0];
+    expect(projectUidError(p, p.app.uid, { kind: 'extension', id: card.id })).toBe('The app already uses this UID');
+    expect(projectUidError(p, card.uid, { kind: 'function', id: 'f1' })).toMatch(/^Card “.+” already uses this UID$/);
+    expect(projectUidError(p, 'other_fn', { kind: 'app' })).toBe('App function “other” already uses this UID');
+    // Its own uid is fine.
+    expect(projectUidError(p, card.uid, { kind: 'extension', id: card.id })).toBeNull();
+    expect(projectUidError(p, p.app.uid, { kind: 'app' })).toBeNull();
+    expect(projectUidError(p, 'bad uid', { kind: 'app' })).toMatch(/no spaces/);
+    expect(projectUidError(p, '', { kind: 'app' })).toBe('UID is required');
+    expect(projectUidError(p, 'x'.repeat(65), { kind: 'app' })).toMatch(/64/);
+  });
+
+  it('requires PascalCase extension file names, unique across every extension ignoring case', () => {
+    const p = project();
+    const [card] = p.extensions;
+    p.extensions.push({ ...card, id: 'e2', kind: 'settings', name: 'Settings', fileName: 'SettingsPage' });
+    expect(extensionFileNameError(p, 'my-card', card.id)).toMatch(/PascalCase/);
+    expect(extensionFileNameError(p, 'myCard', card.id)).toMatch(/PascalCase/);
+    expect(extensionFileNameError(p, 'SETTINGSPAGE', card.id)).toBe('“Settings” already uses this file name');
+    expect(extensionFileNameError(p, card.fileName, card.id)).toBeNull();
+    expect(extensionFileNameError(p, 'MyCard_2', card.id)).toBeNull();
+  });
+
+  it('checks function file names like validation (characters, package, case-insensitive uniqueness)', () => {
+    const p = project();
+    expect(functionFileNameError(p, 'Other', 'f1')).toBe('App function “other_fn” already uses this file name');
+    expect(functionFileNameError(p, 'package', 'f1')).toMatch(/reserved/);
+    expect(functionFileNameError(p, 'my fn', 'f1')).not.toBeNull();
+    expect(functionFileNameError(p, 'quote', 'f1')).toBeNull();
+    expect(functionFileNameError(p, 'get-quote_2', 'f1')).toBeNull();
   });
 });

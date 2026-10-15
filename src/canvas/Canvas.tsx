@@ -11,11 +11,13 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type DragEvent as ReactDragEvent,
+  type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -48,6 +50,7 @@ import {
   nodeIdOf,
 } from './domHit';
 import { componentLabel, isNodeContainer, isTextNode } from './nodeActions';
+import { CANVAS_KEYBOARD_HELP, describeCanvasChange, describeNode, type CanvasSnapshot } from './announce';
 import { useCanvasUi, useCanvasView } from './stores';
 import { renderStats } from './renderStats';
 import { insertBlock } from '../templates/actions';
@@ -221,6 +224,25 @@ function createAutoScroller(getStage: () => HTMLElement | null) {
   };
 }
 
+/**
+ * A context menu requested from the keyboard (Shift+F10 / the Menu key) targets the focused stage
+ * itself and carries no pointer button (Chromium reports button -1); a right-click targets the
+ * element under the pointer with button 2.
+ */
+export function isKeyboardContextMenu(e: { target: EventTarget | null; button: number; ctrlKey?: boolean }, stage: Element | null): boolean {
+  // Ctrl+click (macOS secondary click) reports button 0: still a pointer.
+  return !!stage && e.target === stage && e.button !== 2 && !e.ctrlKey;
+}
+
+/** Where a keyboard-opened menu appears: below the selected element's top-left corner, kept on the stage. */
+function keyboardMenuPoint(stage: HTMLElement, el: Element | null): { x: number; y: number } {
+  const s = stage.getBoundingClientRect();
+  const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(v, Math.max(lo, hi)));
+  const r = el?.getBoundingClientRect();
+  if (!r || (r.width <= 0 && r.height <= 0)) return { x: s.left + 16, y: s.top + 16 };
+  return { x: clamp(r.left + 4, s.left + 4, s.right - 16), y: clamp(r.bottom + 2, s.top + 8, s.bottom - 16) };
+}
+
 /** Applies a validated drop. Returns the inserted / moved node id. */
 export function applyDrop(payload: DragPayload, target: InsertTarget): NodeId | null {
   const st = useEditor.getState();
@@ -292,6 +314,24 @@ export function Canvas() {
     return () => ro?.disconnect();
   }, [zoom]);
 
+  // ---- automatic zoom: a card frame wider than the stage (e.g. the record tab in a small window)
+  // starts zoomed out to fit instead of being clipped; pages follow the stage width themselves.
+  const zoomAuto = useCanvasView((s) => s.auto);
+  const responsiveFrame = frame.location === 'settings' || frame.location === 'home';
+  useLayoutEffect(() => {
+    if (!zoomAuto) return;
+    const view = useCanvasView.getState();
+    if (responsiveFrame) {
+      view.setAutoZoom(1);
+      return;
+    }
+    const stage = stageRef.current;
+    const surface = surfaceRef.current;
+    if (!stage || !surface || stageWidth <= 0 || surface.offsetWidth <= 0) return;
+    const available = stage.clientWidth - STAGE_PADDING * 2;
+    view.setAutoZoom(Math.min(1, Math.floor((available / surface.offsetWidth) * 20) / 20));
+  }, [zoomAuto, responsiveFrame, stageWidth, frame.location, compactFrame, chrome, collapsed]);
+
   useEffect(() => {
     if (!fitRequest) return;
     const stage = stageRef.current;
@@ -350,6 +390,51 @@ export function Canvas() {
       reveal(id, 0);
     });
   }, []);
+
+  // ---- screen-reader announcements for keyboard work on the focused stage
+  const helpId = useId();
+  const [announcement, setAnnouncement] = useState('');
+  const announce = useCallback((message: string) => {
+    // Alternate a trailing no-break space so repeating the same sentence is spoken again.
+    setAnnouncement((prev) => (prev === message ? `${message}\u00a0` : message));
+  }, []);
+  useEffect(() => {
+    // Store actions may update in several steps (duplicate = insert, then select): compare the
+    // state before the first step with the state after the last one (end of the current task).
+    let base: CanvasSnapshot | null = null;
+    let alive = true;
+    const flush = () => {
+      const from = base;
+      base = null;
+      if (!alive || !from) return;
+      const st = useEditor.getState();
+      const stage = stageRef.current;
+      if (st.mode !== 'design' || !stage || typeof document === 'undefined' || document.activeElement !== stage) return;
+      const message = describeCanvasChange(from, { ext: selectActiveExtension(st), selectedId: st.selectedNodeId });
+      if (message) announce(message);
+    };
+    const unsubscribe = useEditor.subscribe((s, prev) => {
+      if (s.mode !== 'design' || prev.mode !== 'design') return;
+      if (s.selectedNodeId === prev.selectedNodeId && s.project === prev.project && s.activeExtensionId === prev.activeExtensionId) return;
+      if (base) return;
+      base = { ext: selectActiveExtension(prev), selectedId: prev.selectedNodeId };
+      queueMicrotask(flush);
+    });
+    return () => {
+      alive = false;
+      unsubscribe();
+    };
+  }, [announce]);
+  const onStageFocus = useCallback(
+    (e: ReactFocusEvent) => {
+      if (modeRef.current !== 'design' || e.target !== stageRef.current) return;
+      const st = useEditor.getState();
+      const ext = selectActiveExtension(st);
+      const id = st.selectedNodeId;
+      if (id && ext.nodes[id]) announce(`Selected ${describeNode(ext, id)}.`);
+    },
+    [announce],
+  );
 
   // ---- drag & drop
   const autoScroll = useMemo(() => createAutoScroller(() => stageRef.current), []);
@@ -518,6 +603,16 @@ export function Canvas() {
     if (modeRef.current !== 'design' || isChromeTarget(e.target)) return;
     e.preventDefault();
     e.stopPropagation();
+    const stage = stageRef.current;
+    if (stage && isKeyboardContextMenu(e, stage)) {
+      // Shift+F10 / Menu key: the menu of the current selection, at the selected element.
+      const st = useEditor.getState();
+      const ext = selectActiveExtension(st);
+      const id = st.selectedNodeId && ext.nodes[st.selectedNodeId] && st.selectedNodeId !== ext.rootId ? st.selectedNodeId : null;
+      const { x, y } = keyboardMenuPoint(stage, id ? findNodeElement(surfaceRef.current, id) : null);
+      useCanvasUi.getState().openMenu({ x, y, nodeId: id, keyboard: true });
+      return;
+    }
     const el = closestNodeElement(e.target, surfaceRef.current);
     const id = el ? nodeIdOf(el) : null;
     useEditor.getState().select(id);
@@ -560,6 +655,9 @@ export function Canvas() {
           tabIndex={0}
           role="region"
           aria-label={design ? 'Design canvas' : 'Card preview'}
+          aria-roledescription={design ? 'design canvas' : undefined}
+          aria-describedby={design ? helpId : undefined}
+          onFocus={onStageFocus}
           onPointerMove={onPointerMove}
           onPointerLeave={onPointerLeave}
           onClick={onClick}
@@ -596,8 +694,14 @@ export function Canvas() {
         </div>
         <OverlayLayer viewportRef={viewportRef} stageRef={stageRef} surfaceRef={surfaceRef} />
       </div>
-      <CanvasContextMenu surfaceRef={surfaceRef} />
+      <CanvasContextMenu surfaceRef={surfaceRef} returnFocus={focusStage} />
       <SaveBlockDialog />
+      <div id={helpId} className="ub-cv-sr-only">
+        {CANVAS_KEYBOARD_HELP}
+      </div>
+      <div className="ub-cv-sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="canvas-announcer">
+        {design ? announcement : ''}
+      </div>
     </div>
   );
 }

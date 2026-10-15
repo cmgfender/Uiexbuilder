@@ -15,7 +15,10 @@
   grid-template-areas:
     'top top top'
     'left center right';
-  min-width: 1100px;
+  /* Below COMPACT_BREAKPOINT (1180px) the left sidebar starts as a rail (shellStore), so the
+     editor fits 1024px windows without horizontal scrolling; this floor only applies to very
+     narrow windows. */
+  min-width: 860px;
   height: 100%;
 }
 .ub-sh-top {
@@ -26,6 +29,7 @@
 }
 .ub-sh-left {
   grid-area: left;
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -51,6 +55,7 @@
 }
 .ub-sh-right {
   grid-area: right;
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -231,6 +236,13 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+/* The app / extension names shrink (and clip) first; the right group with Export never does. */
+.ub-sh-tb-left {
+  overflow: hidden;
+  /* Room for the focus ring of the app / extension buttons. */
+  padding: 4px;
+  margin: -4px;
 }
 .ub-sh-tb-center {
   gap: 10px;
@@ -437,6 +449,23 @@
 .ub-sh-tb-save--error {
   color: var(--ub-danger);
 }
+button.ub-sh-tb-save--conflict {
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--ub-radius);
+  background: var(--ub-warning-soft);
+  color: var(--ub-warning);
+  font-weight: 600;
+  cursor: pointer;
+}
+button.ub-sh-tb-save--conflict:hover {
+  border-color: var(--ub-warning);
+}
+button.ub-sh-tb-save--conflict:focus-visible {
+  outline: none;
+  box-shadow: var(--ub-focus);
+}
 
 @media (max-width: 1440px) {
   .ub-sh-tb-product {
@@ -452,6 +481,16 @@
 @media (max-width: 1220px) {
   .ub-sh-tb-btn-label {
     display: none;
+  }
+}
+@media (max-width: 1100px) {
+  .ub-sh-tb-ext-count,
+  .ub-sh-tb-slash {
+    display: none;
+  }
+  .ub-sh-tb {
+    gap: 8px;
+    padding: 0 8px;
   }
 }
 
@@ -742,6 +781,14 @@
   font-family: var(--ub-mono);
   font-size: 10.5px;
   color: var(--ub-text-3);
+}
+.ub-sh-pal-card-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  color: var(--ub-text-2);
+  font-size: 11px;
 }
 .ub-sh-pal-card-docs {
   display: inline-flex;
@@ -1667,4 +1714,181 @@
   margin: 4px 0 0;
   color: var(--ub-text-3);
   font-size: 12px;
+}
+
+/* ---------- Import / tab conflict dialogs ---------- */
+.ub-sh-import {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  line-height: 1.5;
+}
+.ub-sh-import p {
+  margin: 0;
+}
+.ub-sh-import-versions {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 10px 12px;
+  width: 100%;
+  border: 1px solid var(--ub-border);
+  border-radius: var(--ub-radius);
+  background: var(--ub-surface-2);
+}
+.ub-sh-import-versions dt {
+  color: var(--ub-text-2);
+  font-weight: 600;
+}
+.ub-sh-import-versions dd {
+  margin: 0;
+}
+.ub-sh-import-hint {
+  color: var(--ub-text-2);
+}
+
+/* ---------- Recovery screen (crash / safe mode) ---------- */
+.ub-sh-recovery {
+  position: fixed;
+  inset: 0;
+  overflow: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 10vh 16px 32px;
+  background: var(--ub-bg);
+}
+.ub-sh-recovery-card {
+  width: min(620px, 100%);
+  padding: 28px;
+  background: var(--ub-surface);
+  border: 1px solid var(--ub-border);
+  border-radius: var(--ub-radius-lg);
+  box-shadow: var(--ub-shadow);
+}
+.ub-sh-recovery-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--ub-warning-soft);
+  color: var(--ub-warning);
+}
+.ub-sh-recovery-title {
+  margin: 12px 0 6px;
+  font-size: 18px;
+  font-weight: 600;
+}
+.ub-sh-recovery-lead {
+  margin: 0 0 12px;
+  color: var(--ub-text-2);
+  line-height: 1.5;
+}
+.ub-sh-recovery-details {
+  margin: 0 0 14px;
+  color: var(--ub-text-2);
+}
+.ub-sh-recovery-details summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+.ub-sh-recovery-details summary:focus-visible {
+  outline: none;
+  box-shadow: var(--ub-focus);
+  border-radius: var(--ub-radius-sm);
+}
+.ub-sh-recovery-details code {
+  display: block;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: var(--ub-radius);
+  background: var(--ub-surface-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ub-sh-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ub-sh-recovery-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 4px;
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--ub-border);
+  border-radius: var(--ub-radius);
+}
+.ub-sh-recovery-project {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--ub-radius-sm);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.ub-sh-recovery-project:hover {
+  background: var(--ub-surface-3);
+}
+.ub-sh-recovery-project:focus-visible {
+  outline: none;
+  box-shadow: var(--ub-focus-inset);
+}
+.ub-sh-recovery-project-name {
+  font-weight: 600;
+}
+.ub-sh-recovery-project-meta {
+  color: var(--ub-text-3);
+  font-size: 12px;
+}
+.ub-sh-recovery-foot {
+  margin: 18px 0 0;
+  color: var(--ub-text-3);
+  font-size: 12px;
+}
+
+/* ---------- Sidebar resize handles ---------- */
+.ub-sh-side-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  z-index: 4;
+  cursor: col-resize;
+  outline: none;
+  touch-action: none;
+}
+.ub-sh-side-handle--left {
+  right: -5px;
+}
+.ub-sh-side-handle--right {
+  left: -5px;
+}
+.ub-sh-side-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 3px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.ub-sh-side-handle:hover::after,
+.ub-sh-side-handle:focus-visible::after,
+.ub-sh-side-handle--dragging::after {
+  background: var(--ub-select);
+}
+.ub-sh-side-handle--dragging {
+  user-select: none;
 }

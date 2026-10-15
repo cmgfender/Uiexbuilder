@@ -251,6 +251,48 @@ describe('<LayersPanel>', () => {
     expect(activeNodes()[rule]).toBeUndefined();
   });
 
+  it('Alt+Up / Alt+Down reorder the selected layer from the tree and keep it focused', async () => {
+    const { stack, intro, open } = setup();
+    renderLayers();
+    const tree = screen.getByRole('tree');
+    act(() => useEditor.getState().select(open));
+    act(() => row(open).focus());
+    fireEvent.keyDown(row(open), { key: 'ArrowUp', altKey: true });
+    expect(activeNodes()[stack].children).toEqual([open, intro]);
+    await act(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+    expect(row(open)).toHaveFocus();
+    fireEvent.keyDown(tree, { key: 'ArrowDown', altKey: true });
+    expect(activeNodes()[stack].children).toEqual([intro, open]);
+    expect(useEditor.getState().selectedNodeId).toBe(open);
+  });
+
+  it('context menu moves a layer up and down', () => {
+    const { stack, intro, open } = setup();
+    renderLayers();
+    fireEvent.contextMenu(row(intro));
+    expect(screen.getByRole('menuitem', { name: /Move up/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('menuitem', { name: /Move down/ }));
+    expect(activeNodes()[stack].children).toEqual([open, intro]);
+    fireEvent.contextMenu(row(intro));
+    expect(screen.getByRole('menuitem', { name: /Move down/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('menuitem', { name: /Move up/ }));
+    expect(activeNodes()[stack].children).toEqual([intro, open]);
+  });
+
+  it('keeps keyboard focus in the tree after deleting the focused row', async () => {
+    const { stack, intro, open } = setup();
+    renderLayers();
+    act(() => useEditor.getState().select(intro));
+    act(() => row(intro).focus());
+    fireEvent.keyDown(row(intro), { key: 'Delete' });
+    expect(activeNodes()[stack].children).toEqual([open]);
+    await act(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+    const selected = useEditor.getState().selectedNodeId;
+    const expected = selected ? row(selected) : document.querySelector('[role="treeitem"][tabindex="0"]');
+    expect(document.activeElement).toBe(expected);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
   it('toggles visibility in the designer and shows logic badges', () => {
     const { intro, open } = setup();
     useEditor.getState().updateNode(intro, { condition: 'count > 1' });

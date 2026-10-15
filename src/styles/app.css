@@ -1,6 +1,13 @@
 /* Builder chrome (editor UI). Prefix: `ub-`. Preview components use `hsp-` (see src/preview). */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Lexend+Deca:wght@400;500;600;700&display=swap');
 
+/*
+ * Contrast (WCAG 2.1 AA): text tokens (--ub-text*, --ub-select, --ub-success / warning / danger /
+ * info, --ub-accent-text) reach 4.5:1 on every chrome surface (#fff, --ub-surface-2/-3 and their
+ * soft tints); white text on --ub-accent-strong reaches 4.5:1. Control boundaries
+ * (--ub-border-input, the switch track) and the focus ring reach 3:1. The brand orange
+ * (--ub-accent) is decorative only (logo, tab underline, icons) — never a text background.
+ */
 :root {
   --ub-font: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --ub-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -10,24 +17,31 @@
   --ub-surface-3: #eef0f4;
   --ub-border: #e1e4ea;
   --ub-border-strong: #c9ced8;
+  /* Boundary of inputs, selects and the switch track: 3:1 against white / --ub-surface-2. */
+  --ub-border-input: #828b9c;
   --ub-text: #1f2633;
   --ub-text-2: #4a5468;
-  --ub-text-3: #7a8396;
+  /* Muted text: 5.6:1 on #fff, 4.9:1 on --ub-surface-3. */
+  --ub-text-3: #5f6878;
   --ub-accent: #ff5c35;
   --ub-accent-hover: #f04a22;
+  /* Fill of primary buttons (white text 4.7:1) and its hover. */
+  --ub-accent-strong: #d1401c;
+  --ub-accent-strong-hover: #ba3612;
   --ub-accent-soft: #fff0eb;
   --ub-accent-text: #c2391a;
-  --ub-select: #2f6bff;
+  /* Selection / link blue: 6.2:1 on #fff, 5.4:1 on --ub-select-soft. */
+  --ub-select: #2457d6;
   --ub-select-soft: rgba(47, 107, 255, 0.1);
   --ub-hover: #7aa2ff;
   --ub-drop: #2f6bff;
-  --ub-success: #0f9d72;
+  --ub-success: #0a7a58;
   --ub-success-soft: #e6f6f0;
-  --ub-warning: #b7791f;
+  --ub-warning: #8a5a12;
   --ub-warning-soft: #fdf4e3;
-  --ub-danger: #d6403a;
+  --ub-danger: #c4342e;
   --ub-danger-soft: #fdecea;
-  --ub-info: #2b7bb9;
+  --ub-info: #22689e;
   --ub-info-soft: #e8f2fa;
   --ub-radius-sm: 4px;
   --ub-radius: 6px;
@@ -38,7 +52,10 @@
   --ub-topbar-h: 52px;
   --ub-left-w: 280px;
   --ub-right-w: 320px;
-  --ub-focus: 0 0 0 3px rgba(47, 107, 255, 0.25);
+  /* Keyboard focus ring: a white gap and a solid 2px ring (3:1 or more on every surface). */
+  --ub-focus-color: #2457d6;
+  --ub-focus: 0 0 0 2px var(--ub-surface), 0 0 0 4px var(--ub-focus-color);
+  --ub-focus-inset: inset 0 0 0 2px var(--ub-focus-color);
 }
 
 *,
@@ -108,12 +125,13 @@ pre,
   cursor: not-allowed;
 }
 .ub-btn--primary {
-  background: var(--ub-accent);
-  border-color: var(--ub-accent);
+  background: var(--ub-accent-strong);
+  border-color: var(--ub-accent-strong);
   color: #fff;
 }
 .ub-btn--primary:hover:not(:disabled) {
-  background: var(--ub-accent-hover);
+  background: var(--ub-accent-strong-hover);
+  border-color: var(--ub-accent-strong-hover);
 }
 .ub-btn--ghost {
   background: transparent;
@@ -175,7 +193,7 @@ pre,
   width: 100%;
   min-height: 30px;
   padding: 5px 8px;
-  border: 1px solid var(--ub-border);
+  border: 1px solid var(--ub-border-input);
   border-radius: var(--ub-radius);
   background: var(--ub-surface);
   color: var(--ub-text);
@@ -184,8 +202,9 @@ pre,
 .ub-input:focus,
 .ub-select:focus,
 .ub-textarea:focus {
-  border-color: var(--ub-select);
-  box-shadow: var(--ub-focus);
+  /* A 2px blue boundary (6:1) instead of the outer ring: fields sit in tight layouts. */
+  border-color: var(--ub-focus-color);
+  box-shadow: 0 0 0 1px var(--ub-focus-color);
 }
 .ub-input--invalid {
   border-color: var(--ub-danger) !important;
@@ -238,7 +257,8 @@ pre,
   width: 30px;
   height: 18px;
   border-radius: 999px;
-  background: var(--ub-border-strong);
+  /* Off state: 3.4:1 against the surface; the white thumb 3.4:1 against it. */
+  background: var(--ub-border-input);
   position: relative;
   transition: background 0.15s;
   flex: none;
@@ -324,7 +344,7 @@ pre,
 }
 .ub-tab:focus-visible {
   outline: none;
-  box-shadow: inset 0 0 0 2px rgba(47, 107, 255, 0.35);
+  box-shadow: var(--ub-focus-inset);
   border-radius: var(--ub-radius-sm) var(--ub-radius-sm) 0 0;
 }
 .ub-tab[aria-selected='true'] {
@@ -335,6 +355,10 @@ pre,
 /* ---------- Sections ---------- */
 .ub-section {
   border-bottom: 1px solid var(--ub-border);
+}
+.ub-section__header:focus-visible {
+  outline: none;
+  box-shadow: var(--ub-focus-inset);
 }
 .ub-section__header {
   display: flex;
@@ -474,6 +498,9 @@ pre,
   background: var(--ub-surface-3);
   outline: none;
 }
+.ub-menu__item:focus-visible {
+  box-shadow: var(--ub-focus-inset);
+}
 .ub-menu__item:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -526,6 +553,19 @@ pre,
   border-radius: var(--ub-radius);
   box-shadow: var(--ub-shadow);
   font-weight: 500;
+}
+
+/* ---------- Screen-reader only ---------- */
+.ub-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* ---------- Scrollbars ---------- */

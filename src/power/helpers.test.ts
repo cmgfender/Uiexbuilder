@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createExtension } from '../model/factory';
+import { createExtension, createProject } from '../model/factory';
+import { validateProject } from '../model/validate';
 import type { Extension } from '../model/types';
 import {
   checkHelpersSyntax,
@@ -54,6 +55,31 @@ describe('checkHelpersSyntax', () => {
     expect(checkHelpersSyntax('export function f(a: number): number { return a; }')).toBeNull();
     expect(checkHelpersSyntax('function f( {')).toMatch(/./);
     expect(checkHelpersSyntax('')).toBeNull();
+  });
+
+  it('accepts valid TypeScript that has runtime meaning, and the preview runs it like tsc', () => {
+    const code = [
+      "export enum Stage { Open = 'open', Won = 'won' }",
+      'export function o(a: string): string;',
+      'export function o(a: number): number;',
+      'export function o(a: any) { return a; }',
+      'class Money { constructor(private cents: number) {} dollars() { return this.cents / 100; } }',
+      'abstract class Shape { abstract area(): number; }',
+      'namespace Util { export const k = 3; }',
+      'function who(this: unknown, n: number) { return n; }',
+      'function isWon(s: string) { return s === Stage.Won; }',
+      'const total = new Money(250).dollars() + Util.k + o(1) + who(1);',
+    ].join('\n');
+    expect(checkHelpersSyntax(code)).toBeNull();
+    const h = compileHelpers(code);
+    expect(h.error).toBeNull();
+    expect(h.names).toEqual(['Stage', 'o', 'Money', 'Shape', 'Util', 'who', 'isWon', 'total']);
+    expect(h.values.total).toBe(7.5);
+    expect((h.values.isWon as (s: string) => boolean)('won')).toBe(true);
+  });
+
+  it('explains that imports cannot work in helper code', () => {
+    expect(checkHelpersSyntax("import { format } from 'date-fns';\nfunction f() { return 1; }")).toMatch(/import statements are not supported/);
   });
 });
 
@@ -110,5 +136,34 @@ describe('computed value names', () => {
     expect(uniqueComputedName(ext, 'double')).toBe('double2');
     expect(uniqueComputedName(ext, 'count')).toBe('count2');
     expect(uniqueComputedName(ext)).toBe('computed');
+  });
+});
+
+describe('computed names agree with validation', () => {
+  it('rejects the names validation reports as reserved (React hooks, hubspot, React)', () => {
+    for (const name of ['useState', 'useEffect', 'useMemo', 'useCallback', 'hubspot', 'React', 'context', 'class']) {
+      const project = createProject('Names');
+      const ext = project.extensions[0];
+      ext.computed = [{ id: 'c1', name, expr: '1' }];
+      const problems = validateProject(project).filter((i) => i.field === 'computed:c1' && i.severity === 'error');
+      expect(problems.length, name).toBeGreaterThan(0);
+      expect(validateComputedName(ext, name, 'c1'), name).toMatch(/reserved/);
+      expect(isComputedIdentifier(name), name).toBe(false);
+      // Runtime and codegen skip it, and a new value never gets that name.
+      expect(usableComputed(ext), name).toEqual([]);
+      ext.computed = [];
+      expect(uniqueComputedName(ext, name), name).not.toBe(name);
+    }
+  });
+
+  it('a name the Data panel accepts is not an error in the Problems panel', () => {
+    for (const name of ['total', 'useTotal', 'stateValue', '$price', '_internal']) {
+      const project = createProject('Names');
+      const ext = project.extensions[0];
+      ext.computed = [{ id: 'c1', name, expr: '1' }];
+      expect(validateComputedName(ext, name, 'c1'), name).toBeNull();
+      const problems = validateProject(project).filter((i) => i.field === 'computed:c1' && i.severity === 'error');
+      expect(problems, name).toEqual([]);
+    }
   });
 });

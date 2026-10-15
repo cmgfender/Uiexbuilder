@@ -381,7 +381,9 @@ export class JsxRenderer {
         required = false;
       }
       if (steps.length === 0 && bound === null) {
-        if (required) attrs.push({ name: event.name, value: ['{() => {}}'] });
+        // `() => undefined` rather than `() => {}`: typescript-eslint's stylistic config rejects
+        // empty functions (no-empty-function) in the exported project's lint setup.
+        if (required) attrs.push({ name: event.name, value: ['{() => undefined}'] });
         continue;
       }
       const params = event.params.map((p, i) => validLocalName(p.name, `arg${i + 1}`));

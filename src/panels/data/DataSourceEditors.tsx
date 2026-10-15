@@ -3,6 +3,7 @@ import { useId, useMemo } from 'react';
 import { ArrowDown, ArrowUp, ExternalLink, Plus, SquarePen, X } from 'lucide-react';
 import { staticOrigin } from '../../codegen/requirements';
 import { ExpressionInput, TemplateInput } from '../../inspector/controls';
+import { RequestOptions } from '../../inspector/RequestOptions';
 import { useEditor } from '../../model/store';
 import type {
   AssociationsSource,
@@ -18,7 +19,7 @@ import { CRM_OBJECT_TYPES } from '../../registry/constants';
 import { useDialogs } from '../../shell/dialogs';
 import { Button, Field, IconButton, NumberField, Select, Switch, TextInput } from '../../ui';
 import { ChipInput, SuggestInput, type Suggestion } from '../common';
-import { objectTypeKey, propertiesFor, propertySuggestions } from '../crmProperties';
+import { objectTypeKey, propertiesFor, propertyNameWarning, propertySuggestions } from '../crmProperties';
 
 const CUSTOM = '__custom__';
 
@@ -109,6 +110,7 @@ export function CrmPropertiesEditor({ ext, ds }: { ext: Extension; ds: CrmProper
           suggestions={suggestions}
           placeholder="Add a property…"
           validate={propertyName}
+          warn={(v) => propertyNameWarning(v, objectTypes)}
           describe={(v) => suggestions.find((s) => s.value === v)?.detail}
           onChange={(properties) => update(ds, { properties })}
         />
@@ -140,6 +142,7 @@ export function AssociationsEditor({ ds }: { ds: AssociationsSource }) {
           suggestions={suggestions}
           placeholder="Add a property…"
           validate={propertyName}
+          warn={(v) => propertyNameWarning(v, [ds.toObjectType])}
           describe={(v) => suggestions.find((s) => s.value === v)?.detail}
           onChange={(properties) => update(ds, { properties })}
         />
@@ -196,6 +199,7 @@ export function CrmSearchEditor({ ext, ds }: { ext: Extension; ds: CrmSearchSour
           suggestions={suggestions}
           placeholder="Add a property…"
           validate={propertyName}
+          warn={(v) => propertyNameWarning(v, [ds.objectType])}
           describe={(v) => suggestions.find((s) => s.value === v)?.detail}
           onChange={(properties) => update(ds, { properties })}
         />
@@ -373,6 +377,7 @@ export function FetchEditor({ ext, ds }: { ext: Extension; ds: FetchSource }) {
           />
         </Field>
       )}
+      <RequestOptions ext={ext} headers={ds.headers} timeout={ds.timeout} onChange={(patch) => update(ds, patch)} />
       {!ds.runOnMount && <div className="ub-pn-muted">Runs when an action uses “Run data source”. Until then the value is null.</div>}
     </>
   );

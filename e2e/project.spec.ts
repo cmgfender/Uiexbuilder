@@ -67,7 +67,8 @@ test.describe('templates, export and persistence', () => {
     await addFromPalette(page, 'Button');
     await inspector(page).getByRole('combobox', { name: 'Text content' }).fill('Persist me');
     await expect(cardNodes(page, 'Button')).toHaveText('Persist me');
-    await expect(page.getByRole('status').filter({ hasText: 'Saved locally' })).toBeVisible();
+    // The autosave status is visible but deliberately not a live region (no announcement per edit).
+    await expect(page.getByRole('banner', { name: 'Editor top bar' }).getByText('Saved locally')).toBeVisible();
 
     await page.reload();
     await expect(cardNodes(page, 'Button')).toHaveText('Persist me');

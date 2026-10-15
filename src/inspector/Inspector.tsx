@@ -7,7 +7,7 @@ import { useActiveExtension, useEditor, type RightPanelTab } from '../model/stor
 import { ROOT_TYPE, type Extension, type UINode } from '../model/types';
 import { getComponent } from '../registry';
 import type { ComponentDef } from '../registry/types';
-import { Button, EmptyState, Tabs } from '../ui';
+import { Button, EmptyState, Tabs, tabPanelProps } from '../ui';
 import { AdvancedTab } from './AdvancedTab';
 import { countSteps } from './actionModel';
 import { EventsTab } from './EventsTab';
@@ -74,8 +74,8 @@ function NodeInspector({ node, def, ext }: { node: UINode; def: ComponentDef; ex
   return (
     <div className="ub-insp" data-node-type-inspected={node.type}>
       <NodeHeader node={node} def={def} ext={ext} project={project} />
-      <Tabs<RightPanelTab> className="ub-insp-tabs" value={tab} onChange={setTab} tabs={tabs} />
-      <div className="ub-insp-body ub-scroll" role="tabpanel" aria-label={tabs.find((t) => t.value === tab)?.label}>
+      <Tabs<RightPanelTab> className="ub-insp-tabs" idBase="ub-insp" aria-label="Inspector sections" value={tab} onChange={setTab} tabs={tabs} />
+      <div className="ub-insp-body ub-scroll" {...tabPanelProps('ub-insp', tab)}>
         <NodeProblems issues={issues} />
         {tab === 'properties' && <PropertiesTab key={node.id} node={node} def={def} ext={ext} />}
         {tab === 'events' && <EventsTab key={node.id} node={node} def={def} ext={ext} project={project} />}

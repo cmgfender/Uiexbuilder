@@ -22,6 +22,7 @@ import { newId } from '../model/ids';
 import { buildParentIndex, cloneActions } from '../model/tree';
 import type { ActionStep, ActionType, Extension, NodeId, Project, StateVar } from '../model/types';
 import { getComponent } from '../registry';
+import { listScopeVariables } from './scope';
 
 export type ActionGroup = 'State' | 'Feedback' | 'HubSpot' | 'Data' | 'Logic' | 'Advanced';
 export const ACTION_GROUP_ORDER: ActionGroup[] = ['State', 'Feedback', 'HubSpot', 'Data', 'Logic', 'Advanced'];
@@ -86,6 +87,11 @@ export interface ActionContext {
   nodeId: NodeId | null;
   /** Names in scope from the event handler (and enclosing fetch / function callbacks). */
   eventParams: string[];
+  /**
+   * The fetch / app function callback the list belongs to (nearest one; If/else branches inherit
+   * it). New steps in an `onError` list default to reporting the failure.
+   */
+  branch?: 'onSuccess' | 'onError';
 }
 
 /** Modal / Panel nodes of the extension (closeOverlay targets). */
@@ -116,13 +122,54 @@ export function enclosingOverlay(ext: Extension, nodeId: NodeId | null): NodeId 
   return null;
 }
 
-/** Sensible value for a set-variable step on `v`. */
+/**
+ * Sensible value for a set-variable step on `v`: the event's value, a toggle / increment, else an
+ * empty value of the variable's type (never blank — a blank value is `undefined`, which a typed
+ * setter rejects in the exported TypeScript).
+ */
 export function defaultSetValue(v: StateVar | undefined, eventParams: string[]): string {
   if (!v) return '';
   if (eventParams.includes('value') && v.type !== 'boolean') return 'value';
   if (v.type === 'boolean') return eventParams.includes('checked') ? 'checked' : `!${v.name}`;
   if (v.type === 'number') return `${v.name} + 1`;
-  return '';
+  return emptyValueOf(v.type);
+}
+
+/** Source of an "empty" value of a state type: '' / 0 / false / [] / {} / null. */
+export function emptyValueOf(type: StateVar['type']): string {
+  switch (type) {
+    case 'string':
+      return "''";
+    case 'number':
+      return '0';
+    case 'boolean':
+      return 'false';
+    case 'array':
+      return '[]';
+    case 'object':
+      return '{}';
+    default:
+      return 'null';
+  }
+}
+
+/** Alert reporting the failure, for steps added to an onError list (`error` is an Error). */
+const ERROR_ALERT = { alertType: 'danger', title: 'Something went wrong', message: '{{ error.message }}' } as const;
+
+/** Variable names worth copying by default (an email address, phone number, link...). */
+const COPYABLE_RE = /(?:^|\.)[\w$]*(?:email|phone|mobile|url|website|domain|link|address)[\w$]*$/i;
+
+/**
+ * Default text of a "Copy to clipboard" step: the first copy-worthy record property / variable in
+ * scope (e.g. `{{ record.email }}`), else ''. The signed-in user's own context values are skipped.
+ */
+export function defaultCopyText(ctx: Pick<ActionContext, 'ext' | 'nodeId' | 'eventParams'>): string {
+  const vars = listScopeVariables(ctx.ext, ctx.nodeId, ctx.eventParams);
+  const rank = (kind: string) => (kind === 'property' ? 0 : kind === 'repeat' ? 1 : kind === 'state' || kind === 'computed' ? 2 : 3);
+  const pick = vars
+    .filter((v) => ['property', 'repeat', 'state', 'computed', 'param'].includes(v.kind) && COPYABLE_RE.test(v.name))
+    .sort((a, b) => rank(a.kind) - rank(b.kind))[0];
+  return pick ? `{{ ${pick.name} }}` : '';
 }
 
 /** A new step of the given type with smart defaults for this context. */
@@ -134,6 +181,7 @@ export function createStep(type: ActionType, ctx: ActionContext): ActionStep {
       return { id, type, state: v?.name ?? '', value: defaultSetValue(v, ctx.eventParams) };
     }
     case 'addAlert':
+      if (ctx.branch === 'onError') return { id, type, ...ERROR_ALERT };
       return { id, type, alertType: 'success', title: '', message: 'Saved successfully' };
     case 'refreshObjectProperties':
       return { id, type };
@@ -144,14 +192,16 @@ export function createStep(type: ActionType, ctx: ActionContext): ActionStep {
     case 'closeOverlay':
       return { id, type, overlayNodeId: enclosingOverlay(ctx.ext, ctx.nodeId) ?? overlayNodes(ctx.ext)[0]?.id ?? '' };
     case 'copyToClipboard':
-      return { id, type, text: '' };
+      return { id, type, text: defaultCopyText(ctx) };
     case 'runDataSource':
       return { id, type, dataSourceId: ctx.ext.dataSources[0]?.id ?? '' };
+    // Requests start with an error alert so a failure is never silent (or reported as success).
     case 'fetch':
-      return { id, type, url: 'https://api.example.com/items', method: 'GET' };
+      return { id, type, url: 'https://api.example.com/items', method: 'GET', onError: [{ id: newId('a'), type: 'addAlert', ...ERROR_ALERT }] };
     case 'runFunction':
-      return { id, type, functionId: ctx.project.functions[0]?.id ?? '' };
+      return { id, type, functionId: ctx.project.functions[0]?.id ?? '', onError: [{ id: newId('a'), type: 'addAlert', ...ERROR_ALERT }] };
     case 'log':
+      if (ctx.branch === 'onError') return { id, type, level: 'error', message: '{{ error.message }}' };
       return { id, type, level: 'info', message: '' };
     case 'if':
       return { id, type, condition: '', then: [], else: [] };

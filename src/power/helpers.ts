@@ -9,7 +9,9 @@
  *  - compileHelpers(code)       evaluates the code once (cached per source text) for the designer
  *                               preview, after stripping TypeScript syntax; returns the values of
  *                               the declared names or an error message. Never throws.
- *  - checkHelpersSyntax(code)   syntax error message (TypeScript annotations allowed), or null.
+ *  - checkHelpersSyntax(code)   syntax error message, or null. TypeScript is accepted: types are
+ *                               removed and enums, namespaces, parameter properties, overloads and
+ *                               abstract classes are lowered like tsc (see tsTransform.ts).
  *  - prepareHelpersForTypeScript(code)  the helper source as emitted into generated .tsx files:
  *                               untyped parameters get `: any` so plain JavaScript helpers
  *                               type-check under `strict`.
@@ -38,6 +40,17 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+const IMPORT_RE = /^\s*import\s*(?:[\w${}*,\s]+\sfrom\s*)?['"]/m;
+
+/** The engine's error, or a plain explanation for code the preview can never run (imports). */
+function explain(code: string, e: unknown): string {
+  const msg = message(e);
+  if (IMPORT_RE.test(code) && /import/i.test(msg)) {
+    return 'import statements are not supported in helper code — write the function here instead (hubspot and logger are available)';
+  }
+  return msg;
+}
+
 /** The helper code as a JavaScript function body (TypeScript syntax and `export` removed). */
 export function helpersToJavaScript(code: string): string {
   return stripTypeScript(code, { stripExport: true });
@@ -61,7 +74,7 @@ export function compileHelpers(code: string | undefined): CompiledHelpers {
     const values = fn() ?? {};
     result = { names, values, error: null };
   } catch (e) {
-    result = { names, values: {}, error: message(e) };
+    result = { names, values: {}, error: explain(code, e) };
   }
   if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
   cache.set(code, result);
@@ -76,7 +89,7 @@ export function checkHelpersSyntax(code: string | undefined): string | null {
     new Function(`"use strict";\n${helpersToJavaScript(code)}\n`);
     return null;
   } catch (e) {
-    return message(e);
+    return explain(code, e);
   }
 }
 

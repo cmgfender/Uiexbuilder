@@ -203,27 +203,146 @@ export function fixupOverlayRefs(nodes: Record<NodeId, UINode>): void {
   }
 }
 
-/** Converts a live subtree back into a detached template (for copy / duplicate / save as template). */
-export function toTemplate(ext: Extension, id: NodeId): NodeTemplate {
-  const node = ext.nodes[id];
-  if (!node) throw new Error(`Node ${id} not found`);
-  const tpl: NodeTemplate = { type: node.type };
-  if (node.name !== undefined) tpl.name = node.name;
-  if (Object.keys(node.props).length) tpl.props = JSON.parse(JSON.stringify(node.props));
-  if (node.text !== undefined) tpl.text = node.text;
-  if (node.binding) tpl.binding = { ...node.binding };
-  if (node.condition !== undefined) tpl.condition = node.condition;
-  if (node.repeat) tpl.repeat = { ...node.repeat };
-  if (node.events) tpl.events = JSON.parse(JSON.stringify(node.events));
-  if (node.children.length) tpl.children = node.children.map((cid) => toTemplate(ext, cid));
-  if (node.slots) {
-    const slots: Record<string, NodeTemplate[]> = {};
-    for (const [slot, ids] of Object.entries(node.slots)) {
-      if (ids.length) slots[slot] = ids.map((cid) => toTemplate(ext, cid));
+/** The `id` prop name of an overlay component (Modal / Panel), or undefined for other types. */
+export type OverlayIdPropOf = (type: string) => string | undefined;
+
+/** Default overlay detection (Modal / Panel use their `id` prop); the store passes the registry's. */
+export const DEFAULT_OVERLAY_ID_PROP: OverlayIdPropOf = (type) => (type === 'Modal' || type === 'Panel' ? 'id' : undefined);
+
+function mapSteps(steps: ActionStep[], fn: (s: ActionStep) => ActionStep): ActionStep[] {
+  return steps.map((step) => {
+    let s = fn(step);
+    if (s.type === 'if') s = { ...s, then: mapSteps(s.then ?? [], fn), else: mapSteps(s.else ?? [], fn) };
+    if (s.type === 'fetch' || s.type === 'runFunction') {
+      s = {
+        ...s,
+        ...(s.onSuccess ? { onSuccess: mapSteps(s.onSuccess, fn) } : {}),
+        ...(s.onError ? { onError: mapSteps(s.onError, fn) } : {}),
+      };
     }
-    if (Object.keys(slots).length) tpl.slots = slots;
+    return s;
+  });
+}
+
+/**
+ * Converts a live subtree back into a detached template (for copy / duplicate / save as block).
+ * Close-overlay steps that target a Modal / Panel inside the subtree become `@<overlay id>`
+ * references, so the copy closes its own overlay once instantiated (see fixupOverlayRefs).
+ */
+export function toTemplate(ext: Extension, id: NodeId, overlayIdPropOf: OverlayIdPropOf = DEFAULT_OVERLAY_ID_PROP): NodeTemplate {
+  if (!ext.nodes[id]) throw new Error(`Node ${id} not found`);
+  const inside = new Set(collectSubtree(ext, id));
+  const localRef = (overlayNodeId: string): string | null => {
+    if (!inside.has(overlayNodeId)) return null;
+    const target = ext.nodes[overlayNodeId];
+    const prop = target ? overlayIdPropOf(target.type) ?? 'id' : 'id';
+    const value = target?.props[prop];
+    return typeof value === 'string' && value !== '' ? `@${value}` : null;
+  };
+  const build = (nid: NodeId): NodeTemplate => {
+    const node = ext.nodes[nid];
+    const tpl: NodeTemplate = { type: node.type };
+    if (node.name !== undefined) tpl.name = node.name;
+    if (Object.keys(node.props).length) tpl.props = JSON.parse(JSON.stringify(node.props));
+    if (node.text !== undefined) tpl.text = node.text;
+    if (node.binding) tpl.binding = { ...node.binding };
+    if (node.condition !== undefined) tpl.condition = node.condition;
+    if (node.repeat) tpl.repeat = { ...node.repeat };
+    if (node.events) {
+      const events = JSON.parse(JSON.stringify(node.events)) as Record<string, ActionStep[]>;
+      for (const key of Object.keys(events)) {
+        events[key] = mapSteps(events[key], (s) => {
+          if (s.type !== 'closeOverlay') return s;
+          const ref = localRef(s.overlayNodeId);
+          return ref ? { ...s, overlayNodeId: ref } : s;
+        });
+      }
+      tpl.events = events;
+    }
+    const children = node.children.filter((cid) => ext.nodes[cid]);
+    if (children.length) tpl.children = children.map(build);
+    if (node.slots) {
+      const slots: Record<string, NodeTemplate[]> = {};
+      for (const [slot, ids] of Object.entries(node.slots)) {
+        const present = ids.filter((cid) => ext.nodes[cid]);
+        if (present.length) slots[slot] = present.map(build);
+      }
+      if (Object.keys(slots).length) tpl.slots = slots;
+    }
+    return tpl;
+  };
+  return build(id);
+}
+
+/** Overlay id prop values (Modal / Panel `id`) used anywhere in the extension. */
+export function usedOverlayIds(ext: Extension, overlayIdPropOf: OverlayIdPropOf = DEFAULT_OVERLAY_ID_PROP): Set<string> {
+  const out = new Set<string>();
+  for (const n of Object.values(ext.nodes)) {
+    const prop = overlayIdPropOf(n.type);
+    const v = prop ? n.props[prop] : undefined;
+    if (typeof v === 'string') out.add(v);
   }
-  return tpl;
+  return out;
+}
+
+/**
+ * A copy of `tpl` whose Modal / Panel ids do not clash with overlays the extension already has
+ * (`edit-modal` -> `edit-modal-2`). `@<id>` close-overlay references inside the template are
+ * renamed with them. Returns `tpl` itself when nothing clashes.
+ */
+export function uniquifyOverlayIds(
+  tpl: NodeTemplate,
+  ext: Extension,
+  overlayIdPropOf: OverlayIdPropOf = DEFAULT_OVERLAY_ID_PROP,
+): NodeTemplate {
+  const taken = usedOverlayIds(ext, overlayIdPropOf);
+  const renames = new Map<string, string>();
+  const collect = (t: NodeTemplate) => {
+    const prop = overlayIdPropOf(t.type);
+    const v = prop ? t.props?.[prop] : undefined;
+    if (typeof v === 'string' && !renames.has(v)) {
+      if (taken.has(v)) {
+        let i = 2;
+        while (taken.has(`${v}-${i}`)) i++;
+        renames.set(v, `${v}-${i}`);
+        taken.add(`${v}-${i}`);
+      } else {
+        taken.add(v);
+      }
+    }
+    t.children?.forEach(collect);
+    Object.values(t.slots ?? {}).forEach((list) => list.forEach(collect));
+  };
+  collect(tpl);
+  if (renames.size === 0) return tpl;
+  const rename = (t: NodeTemplate): NodeTemplate => {
+    const out: NodeTemplate = { ...t };
+    const prop = overlayIdPropOf(t.type);
+    const v = prop ? t.props?.[prop] : undefined;
+    if (prop && typeof v === 'string' && renames.has(v)) out.props = { ...t.props, [prop]: renames.get(v)! };
+    if (t.events) {
+      out.events = {};
+      for (const [key, steps] of Object.entries(t.events)) {
+        out.events[key] = mapSteps(steps, (s) => {
+          if (s.type !== 'closeOverlay' || !s.overlayNodeId.startsWith('@')) return s;
+          const to = renames.get(s.overlayNodeId.slice(1));
+          return to ? { ...s, overlayNodeId: `@${to}` } : s;
+        });
+      }
+    }
+    if (t.children) out.children = t.children.map(rename);
+    if (t.slots) out.slots = Object.fromEntries(Object.entries(t.slots).map(([k, list]) => [k, list.map(rename)]));
+    return out;
+  };
+  return rename(tpl);
+}
+
+/** Display types (component labels) of a template and all its descendants, slots included. */
+export function templateTypes(tpl: NodeTemplate, out: string[] = []): string[] {
+  out.push(tpl.type);
+  tpl.children?.forEach((c) => templateTypes(c, out));
+  Object.values(tpl.slots ?? {}).forEach((list) => list.forEach((c) => templateTypes(c, out)));
+  return out;
 }
 
 /** Inserts an instantiated subtree at a target (mutates `ext`). */
@@ -289,8 +408,14 @@ export function moveNode(ext: Extension, id: NodeId, target: InsertTarget): bool
   const ref = findParent(ext, id);
   if (!ref) return false;
   let index = target.index;
-  if (ref.parentId === target.parentId && (ref.slot ?? '') === (target.slot ?? '') && ref.index < index) {
+  const sameList = ref.parentId === target.parentId && (ref.slot ?? '') === (target.slot ?? '');
+  if (sameList && ref.index < index) {
     index -= 1;
+  }
+  if (sameList) {
+    const length = getChildList(ext.nodes[ref.parentId], ref.slot).length;
+    // Dropping a node where it already is changes nothing (no history entry, no autosave).
+    if (Math.max(0, Math.min(index, length - 1)) === ref.index) return true;
   }
   detach(ext, id);
   const parent = ext.nodes[target.parentId];
@@ -299,27 +424,15 @@ export function moveNode(ext: Extension, id: NodeId, target: InsertTarget): bool
   return true;
 }
 
-/** Duplicates a node (and subtree) right after itself. Returns the new root id. */
-export function duplicateNode(ext: Extension, id: NodeId): NodeId | null {
+/**
+ * Duplicates a node (and subtree) right after itself. Returns the new root id. Overlay ids in the
+ * copy are made unique and its close-overlay steps target the copied overlays.
+ */
+export function duplicateNode(ext: Extension, id: NodeId, overlayIdPropOf: OverlayIdPropOf = DEFAULT_OVERLAY_ID_PROP): NodeId | null {
   const ref = findParent(ext, id);
   if (!ref) return null;
-  const tpl = toTemplate(ext, id);
+  const tpl = uniquifyOverlayIds(toTemplate(ext, id, overlayIdPropOf), ext, overlayIdPropOf);
   const sub = instantiateTemplate(tpl);
-  // Overlay ids must stay unique: suffix duplicated Modal/Panel `id` props.
-  const takenOverlayIds = new Set(
-    Object.values(ext.nodes)
-      .map((n) => n.props.id)
-      .filter((v): v is string => typeof v === 'string'),
-  );
-  for (const n of Object.values(sub.nodes)) {
-    const v = n.props.id;
-    if (typeof v === 'string' && takenOverlayIds.has(v)) {
-      let i = 2;
-      while (takenOverlayIds.has(`${v}-${i}`)) i++;
-      n.props.id = `${v}-${i}`;
-      takenOverlayIds.add(n.props.id);
-    }
-  }
   insertSubtree(ext, sub, { parentId: ref.parentId, slot: ref.slot, index: ref.index + 1 });
   return sub.rootId;
 }

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { createExtension, createProject, DEFAULT_FUNCTION_CODE } from '../model/factory';
 import { useEditor } from '../model/store';
 import { ToastProvider } from '../ui';
@@ -49,7 +49,7 @@ const fn = (id: string) => useEditor.getState().project.functions.find((f) => f.
 describe('<FunctionsDialog>', () => {
   it('preselects the function passed as arg and lists its usages', () => {
     const { onClose } = renderDialog(fnB);
-    expect(screen.getByRole('option', { name: /beta/ })).toHaveAttribute('aria-selected', 'true');
+    expect(within(screen.getByRole('navigation', { name: 'Functions' })).getByRole('button', { name: /beta/ })).toHaveAttribute('aria-current', 'true');
     expect(screen.getByRole('textbox', { name: 'Function UID' })).toHaveValue('beta');
     expect(screen.getByText('Quote Card · Data source “quote”')).toBeInTheDocument();
     fireEvent.click(screen.getByText(/Quote Card · Get quote · On click/));
@@ -73,7 +73,7 @@ describe('<FunctionsDialog>', () => {
     const uid = screen.getByRole('textbox', { name: 'Function UID' });
     fireEvent.change(uid, { target: { value: 'beta' } });
     fireEvent.keyDown(uid, { key: 'Enter' });
-    expect(screen.getByRole('alert')).toHaveTextContent('already used');
+    expect(screen.getByRole('alert')).toHaveTextContent('App function “beta” already uses this UID');
     fireEvent.change(uid, { target: { value: 'get_quote' } });
     fireEvent.keyDown(uid, { key: 'Enter' });
     expect(fn(fnA).uid).toBe('get_quote');
@@ -86,11 +86,35 @@ describe('<FunctionsDialog>', () => {
     fireEvent.keyDown(secrets, { key: 'Enter' });
     expect(fn(fnA).secretKeys).toEqual(['API_KEY']);
     fireEvent.click(screen.getByLabelText('Expose as a public endpoint'));
-    expect(fn(fnA).endpoint).toEqual({ path: 'alpha', methods: ['GET'] });
+    // HubSpot's endpoint templates use paths such as "/api/function-one".
+    expect(fn(fnA).endpoint).toEqual({ path: '/api/alpha', methods: ['GET'] });
+    expect(screen.queryByText(/separated by \//)).toBeNull();
     fireEvent.click(screen.getByRole('checkbox', { name: 'POST' }));
     expect(fn(fnA).endpoint?.methods).toEqual(['GET', 'POST']);
     fireEvent.change(screen.getByLabelText('Path'), { target: { value: '/bad path' } });
-    expect(screen.getByText(/no leading slash/)).toBeInTheDocument();
+    expect(screen.getByText(/separated by \/, e\.g\. \/api\/status/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Path'), { target: { value: '/api/status' } });
+    expect(screen.queryByText(/separated by \//)).toBeNull();
+  });
+
+  it('checks uids against the whole project and file names like validation does', () => {
+    renderDialog(fnA);
+    const uid = screen.getByRole('textbox', { name: 'Function UID' });
+    fireEvent.change(uid, { target: { value: useEditor.getState().project.app.uid } });
+    fireEvent.keyDown(uid, { key: 'Enter' });
+    expect(screen.getByRole('alert')).toHaveTextContent('The app already uses this UID');
+    fireEvent.change(uid, { target: { value: useEditor.getState().project.extensions[0].uid } });
+    fireEvent.keyDown(uid, { key: 'Enter' });
+    expect(screen.getByRole('alert')).toHaveTextContent('Card “Quote Card” already uses this UID');
+    expect(fn(fnA).uid).toBe('alpha');
+    fireEvent.blur(uid);
+    const file = screen.getByRole('textbox', { name: 'Function file name' });
+    fireEvent.change(file, { target: { value: fn(fnB).fileName.toUpperCase() } });
+    fireEvent.keyDown(file, { key: 'Enter' });
+    expect(screen.getByRole('alert')).toHaveTextContent('already uses this file name');
+    fireEvent.change(file, { target: { value: 'package' } });
+    fireEvent.keyDown(file, { key: 'Enter' });
+    expect(screen.getByRole('alert')).toHaveTextContent('reserved');
   });
 
   it('adds and deletes functions', () => {
@@ -101,6 +125,12 @@ describe('<FunctionsDialog>', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete function' }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Delete function' }).at(-1)!);
     expect(useEditor.getState().project.functions).toHaveLength(2);
+  });
+
+  it('warns when the app type cannot upload app functions', () => {
+    useEditor.getState().updateApp({ authType: 'oauth' });
+    renderDialog(fnA);
+    expect(screen.getByRole('alert')).toHaveTextContent('HubSpot only allows app functions in apps with static token auth');
   });
 
   it('shows a guided empty state without functions', () => {

@@ -5,16 +5,16 @@
  */
 import { getComponent } from '../registry';
 import { canAccept } from '../model/rules';
-import { buildParentIndex, findParent, nodeLabel } from '../model/tree';
+import { buildParentIndex, collectSubtree, findParent, nodeLabel } from '../model/tree';
+import { findUsages } from '../panels/findUsages';
 import { selectActiveExtension, useEditor } from '../model/store';
-import { ROOT_TYPE, type Extension, type NodeId, type NodeTemplate, type StateVar, type UINode } from '../model/types';
+import { ROOT_TYPE, type Extension, type NodeId, type StateVar, type UINode } from '../model/types';
+import { componentLabel } from './labels';
 
 export const WRAPPER_TYPES = ['Flex', 'Box', 'Tile'] as const;
 const OVERLAY_ORDER = ['Modal', 'Panel', 'Tooltip'];
 
-export function componentLabel(type: string): string {
-  return getComponent(type)?.label ?? type;
-}
+export { componentLabel };
 
 /** Layer-style label: name, or "<Component>: <text>". */
 export function displayLabel(node: UINode): string {
@@ -132,11 +132,17 @@ export function addOverlay(id: NodeId, type: string): NodeId | null {
   return useEditor.getState().insertNode(type, { parentId: id, slot: 'overlay', index: 0 });
 }
 
-/** State variables referenced by a detached subtree (bindings, expressions, templates, actions). */
-export function usedStateVars(ext: Extension, template: NodeTemplate): Array<Omit<StateVar, 'id'>> {
-  const json = JSON.stringify(template);
+/**
+ * State variables a node subtree needs when it is saved as a block: those its expressions,
+ * `{{ }}` templates, conditions, repeats and action steps reference as identifiers (setters such as
+ * `setCount` included), or that it binds / targets by name. Literal text, option values and object
+ * keys never count (one scanner shared with "Find usages").
+ */
+export function usedStateVars(ext: Extension, nodeId: NodeId): Array<Omit<StateVar, 'id'>> {
+  if (!ext.nodes[nodeId]) return [];
+  const subtree = new Set(collectSubtree(ext, nodeId));
   return ext.state
-    .filter((v) => new RegExp(`(^|[^A-Za-z0-9_$])${v.name.replace(/[$]/g, '\\$')}([^A-Za-z0-9_$]|$)`).test(json))
+    .filter((v) => findUsages(ext, v.name).some((u) => u.nodeId !== undefined && subtree.has(u.nodeId)))
     .map(({ id: _id, ...rest }) => rest);
 }
 

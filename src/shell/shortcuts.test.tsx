@@ -217,6 +217,53 @@ describe('global shortcuts', () => {
     expect(useEditor.getState().selectedNodeId).toBe(first);
   });
 
+  it('single-key shortcuts never act while focus is on a control outside the canvas', () => {
+    const { first, second } = setup();
+    useEditor.getState().select(first);
+    const button = screen.getByRole('button', { name: 'plain button' });
+    button.focus();
+    for (const k of ['Delete', 'Backspace', 'ArrowDown', 'ArrowLeft', 'Escape']) fireEvent.keyDown(button, { key: k });
+    fireEvent.keyDown(button, { key: 'ArrowDown', altKey: true });
+    expect(activeNodes()[first]).toBeDefined();
+    expect(useEditor.getState().selectedNodeId).toBe(first);
+    expect(activeNodes()[rootChildren()[0]].children).toEqual([first, second]); // Alt+ArrowDown did not move it
+
+    // A checkbox / switch is not a text field either, but Backspace on it must not delete.
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    document.body.appendChild(box);
+    box.focus();
+    fireEvent.keyDown(box, { key: 'Backspace' });
+    expect(activeNodes()[first]).toBeDefined();
+    box.remove();
+  });
+
+  it('single-key shortcuts act on the canvas stage and inside a data-shortcuts-scope region', () => {
+    const { first, second } = setup();
+    const stage = document.createElement('div');
+    stage.className = 'ub-cv-stage';
+    stage.tabIndex = 0;
+    document.body.appendChild(stage);
+    useEditor.getState().select(first);
+    stage.focus();
+    fireEvent.keyDown(stage, { key: 'ArrowDown' });
+    expect(useEditor.getState().selectedNodeId).toBe(second);
+    fireEvent.keyDown(stage, { key: 'Delete' });
+    expect(activeNodes()[second]).toBeUndefined();
+    stage.remove();
+
+    const scoped = document.createElement('div');
+    scoped.setAttribute('data-shortcuts-scope', '');
+    const inner = document.createElement('button');
+    scoped.appendChild(inner);
+    document.body.appendChild(scoped);
+    useEditor.getState().select(first);
+    inner.focus();
+    fireEvent.keyDown(inner, { key: 'Escape' });
+    expect(useEditor.getState().selectedNodeId).not.toBe(first);
+    scoped.remove();
+  });
+
   it('is ignored while a dialog is open', () => {
     const { first } = setup();
     useEditor.getState().select(first);

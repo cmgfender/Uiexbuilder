@@ -7,6 +7,7 @@ import { isValidIdentifier, uniqueName } from '../model/ids';
 import { useEditor } from '../model/store';
 import type { Extension, RepeatConfig, UINode } from '../model/types';
 import type { ComponentDef } from '../registry/types';
+import type { Scope } from '../runtime';
 import { Button, cx, IconButton, Select, Switch, TextInput, useToast } from '../ui';
 import { ExpressionInput, usePreviewScope, useScopeVariables } from './controls';
 import { copyText } from './clipboard';
@@ -101,13 +102,34 @@ function ConditionSection({ node, ext }: { node: UINode; ext: Extension }) {
 
 // ---------------------------------------------------------------------------
 
-/** Array-valued things worth offering as repeat sources. */
-export function repeatPresets(ext: Extension): Array<{ label: string; expr: string }> {
-  const out: Array<{ label: string; expr: string }> = [];
-  for (const s of ext.state) if (s.type === 'array') out.push({ label: s.name, expr: s.name });
-  for (const ds of ext.dataSources)
-    if (ds.kind === 'associations' || ds.kind === 'crmSearch') out.push({ label: ds.name, expr: `${ds.name} ?? []` });
-  return out;
+const escapeRe = (s: string) => s.replace(/[$]/g, '\\$&');
+
+/**
+ * Array-valued things worth offering as repeat sources (the first one is the default):
+ *  1. computed values that are lists derived from another list (e.g. `filtered` from `items`) —
+ *     the usual "filter a list" pattern, so repeating over them is what the user wants;
+ *  2. array state, CRM list data sources and fetch / function sources whose data is a list;
+ *  3. other computed values that are lists.
+ * Computed values and fetch / function data are checked with their current preview values.
+ */
+export function repeatPresets(ext: Extension, scope?: Scope | null): Array<{ label: string; expr: string }> {
+  const lists: Array<{ label: string; expr: string }> = [];
+  const isArrayNow = (name: string) => !!scope && Object.prototype.hasOwnProperty.call(scope, name) && Array.isArray(scope[name]);
+  for (const s of ext.state) if (s.type === 'array') lists.push({ label: s.name, expr: s.name });
+  for (const ds of ext.dataSources) {
+    const list = ds.kind === 'associations' || ds.kind === 'crmSearch' || ((ds.kind === 'fetch' || ds.kind === 'function') && isArrayNow(ds.name));
+    if (list) lists.push({ label: ds.name, expr: `${ds.name} ?? []` });
+  }
+  const derived: Array<{ label: string; expr: string }> = [];
+  const other: Array<{ label: string; expr: string }> = [];
+  const taken = new Set(lists.map((l) => l.label));
+  for (const c of ext.computed ?? []) {
+    if (taken.has(c.name) || !isArrayNow(c.name)) continue;
+    taken.add(c.name);
+    const fromList = lists.some((l) => new RegExp(`(?<![\\w$.])${escapeRe(l.label)}(?![\\w$])`).test(c.expr));
+    (fromList ? derived : other).push({ label: c.name, expr: c.name });
+  }
+  return [...derived, ...lists, ...other];
 }
 
 function IdentifierInput({
@@ -153,9 +175,9 @@ function RepeatSection({ node, ext }: { node: UINode; ext: Extension }) {
   const updateNode = useEditor((s) => s.updateNode);
   const r = node.repeat;
   const scopeVars = useScopeVariables(ext, node.id);
-  const presets = useMemo(() => repeatPresets(ext), [ext]);
   // The preview scope binds this repeat's first item; evaluate items in the parent's terms.
   const scope = usePreviewScope(ext, node.id);
+  const presets = useMemo(() => repeatPresets(ext, scope), [ext, scope]);
   const outerNames = useMemo(
     () =>
       scopeVars

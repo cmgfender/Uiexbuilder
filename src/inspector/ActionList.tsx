@@ -4,7 +4,7 @@
  * branches and fetch / app function callbacks nest further ActionLists.
  */
 import { useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Code, CopyPlus, Plus, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Code, CopyPlus, Maximize2, Plus, Trash2 } from 'lucide-react';
 import { useEditor } from '../model/store';
 import type {
   ActionStep,
@@ -22,16 +22,19 @@ import type {
   RunDataSourceAction,
   RunFunctionAction,
   SetStateAction,
+  StateVar,
   StateVarType,
 } from '../model/types';
 import { setterName } from '../runtime';
 import { useDialogs } from '../shell/dialogs';
 import { Button, cx, IconButton, NumberField, Segmented, Select, Switch, TextInput } from '../ui';
+import { uniqueDeclaredName, validateDeclaredName } from '../panels/names';
 import {
   ACTION_GROUP_ORDER,
   actionKindInfo,
   availableActionKinds,
   createStep,
+  defaultSetValue,
   duplicateStep,
   overlayNodes,
   summarizeStep,
@@ -40,9 +43,11 @@ import {
 } from './actionModel';
 import { ChipsInput } from './ChipsInput';
 import { ExpressionInput, TemplateInput } from './controls';
+import { asOneUndoStep } from './history';
 import { Popover } from './Popover';
+import { CodeEditorDialog } from '../power/CodeEditor';
+import { RequestOptions } from './RequestOptions';
 import { moveItem } from './propValue';
-import { isValidIdentifier, toIdentifier, uniqueName } from '../model/ids';
 
 export interface ActionListProps {
   steps: ActionStep[];
@@ -105,7 +110,7 @@ export function ActionList({ steps, onChange, ctx, depth = 0, emptyText, label }
 function AddActionButton({ ctx, onAdd, compact }: { ctx: ActionContext; onAdd: (type: ActionStep['type']) => void; compact?: boolean }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const kinds = useMemo(() => availableActionKinds(ctx.ext), [ctx.ext]);
   const groups = ACTION_GROUP_ORDER.map((g) => ({ group: g, items: kinds.filter((k) => k.group === g) })).filter((g) => g.items.length);
   const close = (refocus: boolean) => {
@@ -143,20 +148,13 @@ function AddActionButton({ ctx, onAdd, compact }: { ctx: ActionContext; onAdd: (
         maxHeight={420}
         role="menu"
         aria-label="Add action"
+        autoFocus
       >
         <div
-          ref={(el) => {
-            menuRef.current = el;
-            if (el && open && !el.contains(document.activeElement))
-              requestAnimationFrame(() => el.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus());
-          }}
+          ref={menuRef}
           className="ub-insp-addmenu"
           onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              e.stopPropagation();
-              close(true);
-            } else if (e.key === 'ArrowDown') {
+            if (e.key === 'ArrowDown') {
               e.preventDefault();
               focusItem(1);
             } else if (e.key === 'ArrowUp') {
@@ -330,6 +328,7 @@ function StepForm({
       return <CloseOverlayForm step={step} onChange={onChange} ctx={ctx} />;
     case 'copyToClipboard': {
       const s = step as CopyToClipboardAction;
+      const empty = !s.text.trim();
       return (
         <Row label="Text to copy" htmlFor={`${id}-text`}>
           <TemplateInput
@@ -339,8 +338,13 @@ function StepForm({
             ext={ctx.ext}
             nodeId={ctx.nodeId}
             eventParams={ctx.eventParams}
-            placeholder="e.g. {{ record.email }}"
+            placeholder="Text or {{ variable }} to copy"
           />
+          {empty && (
+            <div className="ub-insp-note" role="status">
+              Nothing will be copied yet — type the text, or insert a {'{{ variable }}'}.
+            </div>
+          )}
         </Row>
       );
     }
@@ -382,6 +386,9 @@ function initialFor(type: StateVarType) {
   }
 }
 
+/** The new state variable being named (not yet in the extension). */
+const NEW_STATE = { kind: 'state' as const, id: '__new__' };
+
 export function StateVarSelect({
   id,
   value,
@@ -394,7 +401,8 @@ export function StateVarSelect({
 }: {
   id?: string;
   value: string;
-  onChange: (name: string) => void;
+  /** `created` is set when the user just created the variable (it is not in `ctx.ext` yet). */
+  onChange: (name: string, created?: StateVar) => void;
   ctx: ActionContext;
   placeholder?: string;
   suggestedName?: string;
@@ -404,14 +412,21 @@ export function StateVarSelect({
   const [creating, setCreating] = useState<{ name: string; type: StateVarType } | null>(null);
   const vars = ctx.ext.state;
   const missing = value && !vars.some((v) => v.name === value);
-  const taken = [...vars.map((v) => v.name), ...ctx.ext.dataSources.map((d) => d.name)];
   if (creating) {
-    const valid = isValidIdentifier(creating.name) && !taken.includes(creating.name);
+    // Same rule as the Data panel and the Problems panel (setters, data source Loading/Error
+    // names, computed values, helpers and reserved words count as taken).
+    const error = validateDeclaredName(ctx.ext, creating.name, NEW_STATE);
+    const valid = error === null;
     const submit = () => {
       if (!valid) return;
-      const v = useEditor.getState().addStateVar({ name: creating.name, type: creating.type, initial: initialFor(creating.type) });
-      setCreating(null);
-      onChange(v.name);
+      // Creating the variable and selecting it is one gesture: one undo step.
+      asOneUndoStep(() => {
+        const v = useEditor
+          .getState()
+          .addStateVar({ name: creating.name.trim(), type: creating.type, initial: initialFor(creating.type) });
+        setCreating(null);
+        onChange(v.name, v);
+      });
     };
     return (
       <div className="ub-insp-stack">
@@ -442,11 +457,7 @@ export function StateVarSelect({
             className="ub-insp-typeselect"
           />
         </div>
-        {!valid && (
-          <div className="ub-field__error">
-            {taken.includes(creating.name) ? 'That name is already used.' : 'Use letters, digits and _ (not starting with a digit).'}
-          </div>
-        )}
+        {error && <div className="ub-field__error">{error}.</div>}
         <div className="ub-insp-row-actions">
           <Button size="sm" variant="primary" disabled={!valid} onClick={submit}>
             Create variable
@@ -473,7 +484,7 @@ export function StateVarSelect({
       <IconButton
         size="sm"
         label="New state variable"
-        onClick={() => setCreating({ name: uniqueName(toIdentifier(suggestedName), taken), type: suggestedType })}
+        onClick={() => setCreating({ name: uniqueDeclaredName(ctx.ext, suggestedName, NEW_STATE), type: suggestedType })}
       >
         <Plus size={13} />
       </IconButton>
@@ -494,7 +505,18 @@ function SetStateForm({ step, onChange, ctx }: { step: SetStateAction; onChange:
   return (
     <>
       <Row label="Variable" htmlFor={`${step.id}-state`}>
-        <StateVarSelect id={`${step.id}-state`} value={step.state} onChange={(state) => onChange({ ...step, state })} ctx={ctx} />
+        <StateVarSelect
+          id={`${step.id}-state`}
+          value={step.state}
+          onChange={(state, created) => {
+            // A value the user didn't write (blank or the previous variable's default) follows
+            // the newly chosen variable, so it stays type-correct.
+            const next = created ?? ctx.ext.state.find((s) => s.name === state);
+            const untouched = !step.value.trim() || step.value === defaultSetValue(v, ctx.eventParams);
+            onChange({ ...step, state, ...(untouched && next ? { value: defaultSetValue(next, ctx.eventParams) } : {}) });
+          }}
+          ctx={ctx}
+        />
       </Row>
       <Row
         label="New value"
@@ -690,7 +712,7 @@ function CallbackLists({
         <ActionList
           steps={step.onSuccess ?? []}
           onChange={(s) => onChange({ ...step, onSuccess: s.length ? s : undefined })}
-          ctx={{ ...ctx, eventParams: [...ctx.eventParams.filter((p) => p !== 'response'), 'response'] }}
+          ctx={{ ...ctx, eventParams: [...ctx.eventParams.filter((p) => p !== 'response'), 'response'], branch: 'onSuccess' }}
           depth={depth + 1}
           emptyText="Nothing else happens."
           label="On success actions"
@@ -703,7 +725,7 @@ function CallbackLists({
         <ActionList
           steps={step.onError ?? []}
           onChange={(s) => onChange({ ...step, onError: s.length ? s : undefined })}
-          ctx={{ ...ctx, eventParams: [...ctx.eventParams.filter((p) => p !== 'error'), 'error'] }}
+          ctx={{ ...ctx, eventParams: [...ctx.eventParams.filter((p) => p !== 'error'), 'error'], branch: 'onError' }}
           depth={depth + 1}
           emptyText="Errors are only logged."
           label="On error actions"
@@ -757,6 +779,19 @@ function FetchForm({
           />
         </Row>
       )}
+      <RequestOptions
+        ext={ctx.ext}
+        nodeId={ctx.nodeId}
+        eventParams={ctx.eventParams}
+        headers={step.headers}
+        timeout={step.timeout}
+        onChange={(patch) => {
+          const next: FetchAction = { ...step, headers: patch.headers, timeout: patch.timeout };
+          if (!next.headers) delete next.headers;
+          if (next.timeout === undefined) delete next.timeout;
+          onChange(next);
+        }}
+      />
       <Row label="Store the response in" htmlFor={`${step.id}-result`}>
         <StateVarSelect
           id={`${step.id}-result`}
@@ -810,10 +845,12 @@ function RunFunctionForm({
           <Button
             size="sm"
             icon={<Plus size={13} />}
-            onClick={() => {
-              const created = useEditor.getState().addFunction();
-              onChange({ ...step, functionId: created.id });
-            }}
+            onClick={() =>
+              asOneUndoStep(() => {
+                const created = useEditor.getState().addFunction();
+                onChange({ ...step, functionId: created.id });
+              })
+            }
             title="Create a new app function"
           >
             Create
@@ -938,19 +975,54 @@ function IfForm({ step, onChange, ctx, depth }: { step: IfAction; onChange: (s: 
 
 function CustomForm({ step, onChange, ctx }: { step: CustomCodeAction; onChange: (s: ActionStep) => void; ctx: ActionContext }) {
   const setters = ctx.ext.state.map((s) => setterName(s.name));
+  const [big, setBig] = useState(false);
+  // The dialog edits the store value directly, so it always sees the latest step.
+  const latest = useRef(step);
+  latest.current = step;
   return (
     <>
-      <ExpressionInput
-        value={step.code}
-        onChange={(code) => onChange({ ...step, code })}
-        ext={ctx.ext}
-        nodeId={ctx.nodeId}
-        eventParams={ctx.eventParams}
-        statements
-        multiline
-        placeholder={'// e.g.\nconst res = await hubspot.fetch(url);\nsetItems(await res.json());'}
-        aria-label="Custom code"
-      />
+      <div className="ub-insp-codefield">
+        <ExpressionInput
+          value={step.code}
+          onChange={(code) => onChange({ ...step, code })}
+          ext={ctx.ext}
+          nodeId={ctx.nodeId}
+          eventParams={ctx.eventParams}
+          statements
+          multiline
+          placeholder={'// e.g.\nconst res = await hubspot.fetch(url);\nsetItems(await res.json());'}
+          aria-label="Custom code"
+        />
+        <IconButton label="Open custom code in a large editor" size="sm" className="ub-insp-codefield__expand" onClick={() => setBig(true)}>
+          <Maximize2 size={13} aria-hidden />
+        </IconButton>
+      </div>
+      {big && (
+        <CodeEditorDialog
+          open
+          onClose={() => setBig(false)}
+          title="Custom code"
+          intro={<>Runs as an async block when the event fires. Type a name for suggestions.</>}
+          keys={
+            <>
+              Changes apply as you type · type a name for suggestions · <kbd>Esc</kbd> closes
+            </>
+          }
+        >
+          <ExpressionInput
+            className="ub-pw-bigexpr"
+            value={step.code}
+            onChange={(code) => onChange({ ...latest.current, code })}
+            ext={ctx.ext}
+            nodeId={ctx.nodeId}
+            eventParams={ctx.eventParams}
+            statements
+            multiline
+            hidePreview
+            aria-label="Custom code (large editor)"
+          />
+        </CodeEditorDialog>
+      )}
       <div className="ub-insp-help">
         Runs as an async block. Available: <code>actions</code>, <code>hubspot</code>, <code>logger</code>
         {setters.length > 0 && (

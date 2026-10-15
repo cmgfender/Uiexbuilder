@@ -8,6 +8,7 @@ import { findParent, nodeLabel } from '../model/tree';
 import type { Extension, Project, UINode } from '../model/types';
 import { getComponent } from '../registry';
 import type { ComponentDef } from '../registry/types';
+import { formatShortcut, shortcutLabel } from '../shell/shortcuts';
 import { Badge, IconButton, Menu, useMenu, useToast, type MenuItem } from '../ui';
 import { copyText, nodeJsx } from './clipboard';
 
@@ -40,7 +41,7 @@ export function NodeHeader({ node, def, ext, project }: NodeHeaderProps) {
     {
       label: 'Duplicate',
       icon: <CopyPlus size={14} />,
-      shortcut: '⌘D',
+      shortcut: shortcutLabel('duplicate'),
       disabled: slotFull,
       onSelect: () => st().duplicateNode(node.id),
     },
@@ -48,10 +49,10 @@ export function NodeHeader({ node, def, ext, project }: NodeHeaderProps) {
     {
       label: 'Copy',
       icon: <Copy size={14} />,
-      shortcut: '⌘C',
+      shortcut: shortcutLabel('copy'),
       onSelect: () => {
         st().copyNode(node.id);
-        toast('Copied — paste with ⌘V');
+        toast(`Copied — paste with ${formatShortcut('Cmd+V')}`);
       },
     },
     ...(parentId ? [{ label: 'Select parent', icon: <ArrowUpLeft size={14} />, onSelect: () => st().select(parentId) }] : []),
@@ -68,7 +69,7 @@ export function NodeHeader({ node, def, ext, project }: NodeHeaderProps) {
     {
       label: node.locked ? 'Delete (unlock first)' : 'Delete',
       icon: <Trash2 size={14} />,
-      shortcut: '⌫',
+      shortcut: shortcutLabel('delete'),
       danger: true,
       disabled: !!node.locked,
       onSelect: () => st().removeNode(node.id),

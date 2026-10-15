@@ -129,11 +129,13 @@ describe('<DataPanel> data sources', () => {
     const ext = active();
     const root = ext.nodes[ext.rootId];
     expect(root.children).toHaveLength(1);
-    const list = ext.nodes[root.children[0]];
-    expect(list.type).toBe('DescriptionList');
+    const block = ext.nodes[root.children[0]];
+    expect(block.children.map((id) => ext.nodes[id].type)).toEqual(['LoadingSpinner', 'Alert', 'Button', 'DescriptionList']);
+    expect(ext.nodes[block.children[1]].text).toBe('{{ contactError }}');
+    const list = ext.nodes[block.children[3]];
     expect(list.children).toHaveLength(3);
     expect(ext.nodes[ext.nodes[list.children[0]].children[0]].text).toBe('{{ contact.firstname }}');
-    expect(useEditor.getState().selectedNodeId).toBe(list.id);
+    expect(useEditor.getState().selectedNodeId).toBe(block.id);
 
     // Rename again: generated references follow.
     commitInput(screen.getByRole('textbox', { name: 'Data source name' }), 'person');
@@ -141,7 +143,8 @@ describe('<DataPanel> data sources', () => {
     expect(after.nodes[after.nodes[list.children[0]].children[0]].text).toBe('{{ person.firstname }}');
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete source' }));
-    expect(screen.getByRole('alert')).toHaveTextContent('is used in 3 places');
+    // 3 property values plus the loading / error / loaded conditions, the error text and the retry button.
+    expect(screen.getByRole('alert')).toHaveTextContent('is used in 9 places');
     fireEvent.click(screen.getByRole('button', { name: 'Delete anyway' }));
     expect(active().dataSources).toHaveLength(0);
   });
@@ -160,7 +163,7 @@ describe('<DataPanel> data sources', () => {
     expect(active().dataSources[0]).toMatchObject({ properties: ['firstname', 'email', 'jobtitle'] });
   });
 
-  it('adds an association source and generates a table with loading and empty states', () => {
+  it('adds an association source and generates a table with loading, error and empty states', () => {
     renderPanel();
     fireEvent.click(screen.getByRole('button', { name: 'Add data' }));
     fireEvent.click(screen.getByRole('menuitem', { name: /Associated records/ }));
@@ -172,9 +175,10 @@ describe('<DataPanel> data sources', () => {
     fireEvent.click(screen.getByRole('button', { name: /Generate UI/ }));
     const ext = active();
     const flex = ext.nodes[ext.nodes[ext.rootId].children[0]];
-    expect(flex.children.map((id) => ext.nodes[id].type)).toEqual(['LoadingSpinner', 'Table', 'EmptyState']);
+    expect(flex.children.map((id) => ext.nodes[id].type)).toEqual(['LoadingSpinner', 'Alert', 'Button', 'Table', 'EmptyState']);
     expect(ext.nodes[flex.children[0]].condition).toBe('associatedDealsLoading');
-    expect(ext.nodes[flex.children[2]].condition).toBe('!associatedDealsLoading && associatedDeals.length === 0');
+    expect(ext.nodes[flex.children[1]].condition).toBe('!associatedDealsLoading && associatedDealsError');
+    expect(ext.nodes[flex.children[4]].condition).toBe('!associatedDealsLoading && !associatedDealsError && associatedDeals.length === 0');
   });
 
   it('creates an app function when adding a function source to a project without functions', () => {
@@ -257,6 +261,23 @@ describe('<DataPanel> functions and mock data', () => {
     expect(mock[0].properties.dealname).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Clear mock for deals (use generated)' }));
     expect(active().mock.dataSources[id]).toBeUndefined();
+  });
+
+  it('simulates loading, empty and error states per data source', () => {
+    act(() => {
+      useEditor.getState().addDataSource({ kind: 'fetch', name: 'weather', url: 'https://api.example.com/w', method: 'GET', runOnMount: true } as DataSource);
+    });
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: /Mock data/ }));
+    const id = active().dataSources[0].id;
+    const group = screen.getByRole('group', { name: 'Simulate weather' });
+    expect(within(group).getByRole('button', { name: 'Normal' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(within(group).getByRole('button', { name: 'Error' }));
+    expect(active().mock.simulate).toEqual({ [id]: 'error' });
+    fireEvent.click(within(group).getByRole('button', { name: 'Loading' }));
+    expect(active().mock.simulate).toEqual({ [id]: 'loading' });
+    fireEvent.click(within(group).getByRole('button', { name: 'Normal' }));
+    expect(active().mock.simulate).toBeUndefined();
   });
 });
 

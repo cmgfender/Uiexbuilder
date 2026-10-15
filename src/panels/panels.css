@@ -263,6 +263,37 @@
   outline: none;
   box-shadow: var(--ub-focus);
 }
+.ub-pn-chip--warn {
+  background: var(--ub-warning-soft);
+  color: var(--ub-warning);
+}
+.ub-pn-chip__icon {
+  flex: none;
+  margin-right: 2px;
+}
+.ub-pn-chips__notice {
+  margin-top: 4px;
+}
+.ub-pn-chip-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.ub-pn-chip-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  color: var(--ub-warning);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.ub-pn-chip-warning__icon {
+  flex: none;
+  margin-top: 2px;
+}
 .ub-pn-chips__input {
   flex: 1;
   min-width: 70px;
@@ -1281,4 +1312,24 @@
 /* Item opened from the Problems panel: a short highlight. */
 .ub-pn-item--flash {
   animation: ub-pn-flash 1.4s ease-out 1;
+}
+
+/* Mock data › Simulate in preview */
+.ub-pn-simulate {
+  flex-wrap: wrap;
+  row-gap: 4px;
+  margin-top: 6px;
+}
+.ub-pn-simulate .ub-item__name,
+.ub-pn-simulate .ub-pn-item__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ub-pn-simulate .ub-segmented {
+  flex: none;
+}
+.ub-pn-simulate .ub-segmented button {
+  padding: 2px 6px;
+  font-size: 11px;
 }

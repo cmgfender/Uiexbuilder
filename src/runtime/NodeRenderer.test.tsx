@@ -162,7 +162,11 @@ describe('NodeRenderer — condition & repeat', () => {
     }
     r.update({ mode: 'preview' });
     expect(r.nodes(byName(ext, 'none').id)).toHaveLength(0);
-    expect(r.nodes(byName(ext, 'broken').id)).toHaveLength(0);
+    // A repeat whose items expression throws fails like the card would on HubSpot.
+    const broken = r.nodes(byName(ext, 'broken').id);
+    expect(broken).toHaveLength(1);
+    expect(broken[0]).toHaveClass('hsp-rt-error');
+    expect(broken[0]).toHaveTextContent('doesNotExist is not defined');
   });
 
   it('caps design-mode repeats to keep the canvas fast', () => {
@@ -254,7 +258,7 @@ describe('Runtime — state & actions', () => {
     expect(errors[0].message).toContain('Set a');
   });
 
-  it('shows alerts in PreviewHost with interpolated text, dismissable and auto-dismissed', async () => {
+  it('shows alerts above the card content with interpolated text, dismissable and auto-dismissed', async () => {
     Object.assign(RUNTIME_TIMING, { alertDismissMs: 150 });
     const { project, ext } = makeDoc([], { state: [{ name: 'count', type: 'number', initial: 7 }] });
     const r = renderDoc(project, ext);
@@ -267,7 +271,9 @@ describe('Runtime — state & actions', () => {
     expect(alert).toHaveClass('hsp-rt-alert', 'hsp-rt-alert-success');
     expect(alert).toHaveTextContent('Saved 7 items');
     expect(alert).toHaveTextContent('Hi Jordan');
-    expect(alert.closest('.hsp-overlay-host')).not.toBeNull();
+    // In the flow of the card body (never drawn over fields), not in the overlay layer.
+    expect(alert.closest('.hsp-overlay-host')).toBeNull();
+    expect(alert.closest('.card-frame')).not.toBeNull();
 
     await userEvent.click(screen.getByRole('button', { name: 'Dismiss alert' }));
     expect(screen.queryByRole('alert')).toBeNull();
@@ -324,6 +330,8 @@ describe('Runtime — state & actions', () => {
     );
     expect(r.api.logs.some((l) => l.level === 'warn' && l.message === 'User 1001')).toBe(true);
     expect(written).toEqual(['jordan.lee@example.com']);
+    // The preview confirms the copy (HubSpot copies silently).
+    expect(r.api.alerts.some((a) => a.title === 'Copied to clipboard (preview)' && a.message === '“jordan.lee@example.com”')).toBe(true);
   });
 
   it('runs custom code with setters, actions and logger; errors are logged and abort', async () => {

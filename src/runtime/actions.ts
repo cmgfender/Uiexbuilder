@@ -254,9 +254,17 @@ async function copyText(host: ActionHost, text: string): Promise<void> {
     if (!clipboard?.writeText) throw new Error('Clipboard API is not available');
     await clipboard.writeText(text);
     host.log('action', `Copied to clipboard: "${text}"`);
+    // HubSpot copies silently; the preview says what was copied so the action can be tested.
+    host.addAlert({ type: 'info', title: 'Copied to clipboard (preview)', message: clipText(text) || '(empty text)' });
   } catch (e) {
     host.log('warn', `Copy to clipboard failed (${errorMessage(e)}). Text: "${text}"`);
+    host.addAlert({ type: 'warning', title: 'Copy to clipboard (preview)', message: `The browser blocked the copy. Text: ${clipText(text) || '(empty text)'}` });
   }
+}
+
+function clipText(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > 60 ? `“${flat.slice(0, 59)}…”` : flat ? `“${flat}”` : '';
 }
 
 function simulatedNotice(host: ActionHost, call: string, explanation: string): void {
@@ -363,11 +371,18 @@ async function runFetchStep(step: FetchAction, scope: Scope, host: ActionHost): 
   const url = interpolate(step.url ?? '', scope);
   let response: unknown;
   try {
-    const body = step.body?.trim() ? evalStrict(host, step, 'body', step.body, scope) : undefined;
-    host.log('action', `hubspot.fetch ${step.method} ${url}`, body);
+    const method = (step.method ?? 'GET').toUpperCase();
+    // Like HubSpot, GET requests carry no body (a hidden, stale body is not evaluated either).
+    const body = method !== 'GET' && step.body?.trim() ? evalStrict(host, step, 'body', step.body, scope) : undefined;
+    const headers: Record<string, string> = {};
+    for (const h of Array.isArray(step.headers) ? step.headers : []) {
+      if (h && typeof h.key === 'string' && h.key.trim()) headers[h.key.trim()] = interpolate(h.value ?? '', scope);
+    }
+    const timeout = typeof step.timeout === 'number' && step.timeout > 0 ? step.timeout : undefined;
+    host.log('action', `hubspot.fetch ${method} ${url}`, body);
     let res: Response;
     try {
-      res = await previewFetch(url, { method: step.method, body });
+      res = await previewFetch(url, { method, body, headers, ...(timeout ? { timeout } : {}) });
       response = await readJsonResponse(res);
     } catch (e) {
       logFetchFailure(host, url, e);

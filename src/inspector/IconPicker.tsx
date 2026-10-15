@@ -108,22 +108,14 @@ export function IconPicker({ id, value, onChange, placeholder, allowClear = true
         maxHeight={360}
         role="dialog"
         aria-label="Choose an icon"
+        autoFocus
       >
-        <div
-          className="ub-insp-iconpick"
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              e.stopPropagation();
-              close(true);
-            }
-          }}
-        >
+        <div className="ub-insp-iconpick">
           <div className="ub-insp-vp__search">
             <Search size={13} aria-hidden />
             <input
               id={`${id ?? 'icon'}-search`}
-              autoFocus
+              data-autofocus
               value={query}
               placeholder={`Search ${ICON_NAMES.length} icons…`}
               aria-label="Search icons"

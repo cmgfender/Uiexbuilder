@@ -1,4 +1,5 @@
 /** Test helpers for inspector tests (not imported by app code). */
+import { vi } from 'vitest';
 import { createExtension, createProject } from '../model/factory';
 import { selectActiveExtension, useEditor } from '../model/store';
 import type { Extension, NodeTemplate, Project, UINode } from '../model/types';
@@ -32,4 +33,18 @@ export function selectTop(n = 0): UINode {
   const node = topNode(n);
   useEditor.getState().select(node.id);
   return node;
+}
+
+/**
+ * Browsers don't focus an element inside a `visibility: hidden` popover (its first, unpositioned
+ * render); jsdom does. Mimics the browser so popover focus handling is tested for real. Returns
+ * the restore function.
+ */
+export function focusLikeBrowser(): () => void {
+  const orig = HTMLElement.prototype.focus;
+  const spy = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (this: HTMLElement, opts?: FocusOptions) {
+    if (this.closest<HTMLElement>('.ub-insp-pop')?.style.visibility === 'hidden') return;
+    orig.call(this, opts);
+  });
+  return () => spy.mockRestore();
 }

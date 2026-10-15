@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useEditor } from '../model/store';
+import { repeatPresets } from './AdvancedTab';
 import { nodeJsx } from './clipboard';
 import { Inspector } from './Inspector';
 import { ext, loadWith, nodeById, selectTop } from './testUtils';
@@ -79,5 +80,47 @@ describe('Copy JSX', () => {
     expect(jsx).toContain('<Button');
     expect(jsx).toContain('Save');
     expect(jsx).not.toContain('Other');
+  });
+});
+
+describe('repeat sources', () => {
+  it('prefer a computed list derived from another list and include array data', () => {
+    loadWith([], 'card', {
+      state: [
+        { id: 's1', name: 'items', type: 'array', initial: [] },
+        { id: 's2', name: 'search', type: 'string', initial: '' },
+      ],
+      computed: [
+        { id: 'c0', name: 'letters', expr: "['a']" },
+        { id: 'c1', name: 'filtered', expr: 'items.filter((i) => matches(i, search))' },
+        { id: 'c2', name: 'title', expr: "'x'" },
+      ],
+      dataSources: [
+        { id: 'd1', name: 'api', kind: 'fetch', url: 'https://x.test', method: 'GET', runOnMount: true },
+        { id: 'd2', name: 'single', kind: 'fetch', url: 'https://x.test/1', method: 'GET', runOnMount: true },
+      ],
+    });
+    const scope = { items: [], search: '', letters: ['a'], filtered: [], title: 'x', api: [{ id: 1 }], single: { id: 1 } };
+    expect(repeatPresets(ext(), scope).map((p) => p.expr)).toEqual(['filtered', 'items', 'api ?? []', 'letters']);
+    // Without live values only declared lists are known.
+    expect(repeatPresets(ext()).map((p) => p.expr)).toEqual(['items']);
+  });
+
+  it('a new repeat defaults to the filtered list', async () => {
+    loadWith([{ type: 'Text', text: 'Row' }], 'card', {
+      state: [
+        { id: 's1', name: 'items', type: 'array', initial: ['apple', 'banana'] },
+        { id: 's2', name: 'search', type: 'string', initial: 'an' },
+      ],
+      computed: [{ id: 'c1', name: 'filtered', expr: 'items.filter((i) => i.includes(search))' }],
+    });
+    useEditor.setState({ rightPanel: 'advanced' });
+    const node = selectTop();
+    render(<Inspector />);
+    await userEvent.click(screen.getByRole('checkbox', { name: /Repeat for each item/ }));
+    expect(nodeById(node.id).repeat?.items).toBe('filtered');
+    expect(screen.getByText('1 item right now')).toBeInTheDocument();
+    const chips = within(screen.getByLabelText('Lists')).getAllByRole('button');
+    expect(chips.map((c) => c.textContent)).toEqual(['filtered', 'items']);
   });
 });

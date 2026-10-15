@@ -10,7 +10,9 @@ import { buildCommands, type Command } from './commands';
 import { CommandPalette, isPaletteShortcut } from './CommandPalette';
 import { fuzzyMatch, highlightParts, SCORE } from './fuzzy';
 import { MAX_RESULTS, rankCommands } from './paletteModel';
-import { clearRecent, pushRecent, readRecent } from './recent';
+import { useCanvasView } from '../canvas/stores';
+import { getRecentComponents, recordRecentComponent, resetRecentComponentsCache } from '../shell/paletteModel';
+import { clearRecent, pushRecent, readRecent, RECENT_COMMANDS_KEY } from './recent';
 import { usePowerUi } from './uiStore';
 
 const ext = (): Extension => selectActiveExtension(useEditor.getState());
@@ -181,12 +183,100 @@ describe('rankCommands', () => {
   });
 });
 
+describe('rankCommands: common searches', () => {
+  const top = (query: string) => rankCommands(commands(), query).items.map((i) => i.command.id);
+
+  it('ranks title matches above keyword matches and drops scattered subsequence noise', () => {
+    expect(top('computed')[0]).toBe('data:addComputed');
+    expect(top('helper')[0]).toBe('data:helpers');
+    expect(top('undo')).toEqual(['action:undo']);
+    expect(top('delete')[0]).toBe('action:delete');
+    // Abbreviations still work.
+    expect(top('ibtn')[0]).toBe('insert:Button');
+  });
+
+  it('understands synonyms and mixed title / keyword words', () => {
+    expect(top('copy code')[0]).toBe('action:copyJsx');
+    expect(top('new variable')[0]).toBe('data:addState');
+    expect(top('select greeting')[0]).toBe(`goto:${nodeByName('Greeting').id}`);
+    expect(top('duplicate card')[0]).toBe('ext:duplicate');
+  });
+
+  it('only the API data source matches "fetch"; with a button selected the Fetch URL action comes first', () => {
+    const fetchSources = top('fetch').filter((id) => id.startsWith('data:addSource:'));
+    expect(fetchSources).toEqual(['data:addSource:fetch']);
+    act(() => useEditor.getState().select(nodeByName('Save button').id));
+    expect(top('fetch')[0]).toBe('event:add:fetch');
+  });
+
+  it('offers zoom commands that drive the canvas zoom', () => {
+    useCanvasView.getState().setZoom(1);
+    expect(top('zoom').slice(0, 4).sort()).toEqual(['view:zoomFit', 'view:zoomIn', 'view:zoomOut', 'view:zoomReset'].sort());
+    const byId = (id: string) => commands().find((c) => c.id === id)!;
+    expect(byId('view:zoomReset').disabledReason).toMatch(/already at 100%/);
+    act(() => void byId('view:zoomIn').run({ notify: () => {} }));
+    expect(useCanvasView.getState().zoom).toBeGreaterThan(1);
+    act(() => void byId('view:zoomReset').run({ notify: () => {} }));
+    expect(useCanvasView.getState().zoom).toBe(1);
+    act(() => void byId('view:zoomOut').run({ notify: () => {} }));
+    expect(useCanvasView.getState().zoom).toBeLessThan(1);
+    useCanvasView.getState().setZoom(1);
+  });
+});
+
+describe('event and extension commands', () => {
+  it('adds an action to the selected component’s first event and opens the Events tab', () => {
+    const add = () => commands().find((c) => c.id === 'event:add:addAlert')!;
+    expect(add().disabledReason).toMatch(/Select a button/);
+    act(() => useEditor.getState().select(nodeByName('Greeting').id));
+    expect(add().disabledReason).toMatch(/has no events/);
+    const button = nodeByName('Save button').id;
+    act(() => useEditor.getState().select(button));
+    expect(add().disabledReason).toBeUndefined();
+    expect(add().subtitle).toBe('When clicked — Save button');
+    const notes: string[] = [];
+    act(() => void add().run({ notify: (m) => notes.push(m) }));
+    expect(ext().nodes[button].events?.onClick?.map((s) => s.type)).toEqual(['addAlert']);
+    expect(useEditor.getState().rightPanel).toBe('events');
+    expect(notes[0]).toMatch(/Show alert/);
+  });
+
+  it('duplicates the active card', () => {
+    const before = useEditor.getState().project.extensions.length;
+    const notes: string[] = [];
+    act(() => void commands().find((c) => c.id === 'ext:duplicate')!.run({ notify: (m) => notes.push(m) }));
+    expect(useEditor.getState().project.extensions.length).toBe(before + 1);
+    expect(ext().name).toBe('Main Card copy');
+    expect(notes[0]).toMatch(/Duplicated “Main Card”/);
+  });
+});
+
 describe('recent commands storage', () => {
   it('keeps the most recent first without duplicates', () => {
     pushRecent('a');
     pushRecent('b');
     pushRecent('a');
     expect(readRecent()).toEqual(['a', 'b']);
+  });
+
+  it('does not share its storage key with the component palette', () => {
+    resetRecentComponentsCache();
+    pushRecent('action:undo');
+    recordRecentComponent('Button');
+    pushRecent('view:code');
+    expect(readRecent()).toEqual(['view:code', 'action:undo']);
+    resetRecentComponentsCache();
+    expect(getRecentComponents()).toEqual(['Button']);
+    expect(window.localStorage.getItem(RECENT_COMMANDS_KEY)).toBe(JSON.stringify(['view:code', 'action:undo']));
+  });
+
+  it('migrates command ids from the old shared key once', () => {
+    window.localStorage.removeItem(RECENT_COMMANDS_KEY);
+    window.localStorage.setItem('uiex-builder:palette-recent', JSON.stringify(['Button', 'dialog:export', 'Text', 'view:code']));
+    expect(readRecent()).toEqual(['dialog:export', 'view:code']);
+    pushRecent('action:redo');
+    expect(readRecent()).toEqual(['action:redo', 'dialog:export', 'view:code']);
+    window.localStorage.removeItem('uiex-builder:palette-recent');
   });
 });
 

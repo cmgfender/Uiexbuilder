@@ -14,7 +14,7 @@
   outline: none;
 }
 .ub-codeview:focus-visible {
-  box-shadow: inset 0 0 0 2px rgba(47, 107, 255, 0.35);
+  box-shadow: var(--ub-focus-inset);
 }
 .ub-codeview__inner {
   display: flex;
@@ -65,7 +65,7 @@
 .ub-codeview .token.prolog,
 .ub-codeview .token.doctype,
 .ub-codeview .token.cdata {
-  color: #7a8396;
+  color: #5f6878;
   font-style: italic;
 }
 .ub-codeview .token.punctuation {
@@ -117,7 +117,7 @@
 }
 .ub-codeview .token.regex,
 .ub-codeview .token.variable {
-  color: #b7791f;
+  color: #8a5a12;
 }
 .ub-codeview .token.interpolation-punctuation,
 .ub-codeview .token.template-punctuation {
@@ -140,5 +140,5 @@
 .ub-codeview .token.list,
 .ub-codeview .token.hr,
 .ub-codeview .token.blockquote {
-  color: #7a8396;
+  color: #5f6878;
 }

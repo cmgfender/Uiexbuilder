@@ -142,7 +142,8 @@ export function createDataSource(
         toObjectType: objectTypeId(target),
         properties: defaultPropertiesFor(target),
         pageLength: 10,
-        formatted: false,
+        // Lists feed tables: show '$48,000.00' / 'Contract sent' rather than 48000 / contractsent.
+        formatted: true,
       };
     }
     case 'crmSearch':
@@ -156,7 +157,7 @@ export function createDataSource(
         filters: [],
         sorts: [],
         pageLength: 10,
-        formatted: false,
+        formatted: true,
       };
     case 'fetch':
       return {

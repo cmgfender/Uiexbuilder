@@ -25,11 +25,20 @@ data, then export a **ready-to-deploy HubSpot developer project**.
   copy, refetch data, `hubspot.fetch`, app functions, logging, if/else, custom code).
 - **Data sources**: `useCrmProperties`, `useAssociations`, `useCrmSearch`, `hubspot.fetch`
   endpoints and app functions (`hubspot.serverless`), each with editable mock data.
-- **Interactive preview** that simulates HubSpot: alerts, overlays, iframe modal, state, data.
+- **Interactive preview** that simulates HubSpot: alerts, overlays, iframe modal, state, data —
+  including the first render while data is still loading, and simulated loading / empty / error
+  states per data source (Data › Mock data › Simulate).
 - **Code view & export**: live generated TSX and project files; export a `.zip` project
   (platform `2026.03`) with `hsproject.json`, `app-hsmeta.json`, card/settings/page configs,
   app functions, README and a re-importable `.uiex.json` builder document.
-- **Templates**: starter cards and drop-in blocks; **validation** with a problems panel.
+- **Templates**: starter cards and drop-in blocks; **validation** with a problems panel and
+  one-click fixes (missing scopes and permitted URLs, misspelt names, CRM property typos, …),
+  including checks for things that only break once deployed (reading data before it has loaded,
+  `context.crm` outside cards, app functions the app type can't upload).
+- **Safe by default**: a `.uiex.json` someone else made opens with its code paused (helpers,
+  calls, custom code) until you choose **Trust and run code**; runaway loops are stopped; a
+  document that crashes the editor opens a recovery screen instead of a blank page. Projects
+  autosave in this browser, and a second tab never silently overwrites the first.
 
 ## Getting started
 
@@ -52,11 +61,15 @@ Other scripts:
 2. Install the HubSpot CLI and authenticate: `npm install -g @hubspot/cli` then `hs account auth`.
 3. Install the extension dependencies: `cd src/app/cards && npm install` (repeat for
    `src/app/settings` / `src/app/pages` if present).
-4. From the project root run `hs project upload` (or `hs project dev` for local development).
-5. In HubSpot, open a record → **Customize** the record view → add your card from the
+4. If your app functions use secrets, add each one first: `hs secret add <NAME>`.
+5. From the project root run `hs project upload` (or `hs project dev` for local development).
+6. Install the app in your account: `hs project install-app` for a private app with static auth
+   (OAuth apps use the install link from the app's **Distribution** page).
+7. In HubSpot, open a record → **Customize** the record view → add your card from the
    **Card library** (filter by *App*).
 
-The exported README lists the scopes and permitted URLs the project needs.
+The exported README repeats these steps for your project (its secrets, functions, endpoints and
+where each card goes) and lists the scopes and permitted URLs it needs.
 
 ## Project layout
 

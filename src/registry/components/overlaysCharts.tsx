@@ -123,13 +123,50 @@ function useOverlayLifecycle(active: boolean, trigger: PreviewProps['trigger']):
   }, [active]);
 }
 
-/** Moves keyboard focus into an opened dialog so Escape / Tab work like in HubSpot. */
+/**
+ * Moves keyboard focus into an opened dialog so Escape / Tab work like in HubSpot, and gives it
+ * back to the element that had it (usually the trigger button) when the dialog closes.
+ */
 function useAutoFocus(active: boolean): RefObject<HTMLDivElement> {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (active) ref.current?.focus({ preventScroll: true });
+    if (!active) return undefined;
+    const opener = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null;
+    ref.current?.focus({ preventScroll: true });
+    const surface = ref.current;
+    return () => {
+      // Only restore when focus is still in the dialog (or was dropped to <body> by the unmount).
+      const current = document.activeElement;
+      const lost = !current || current === document.body || (surface?.contains(current) ?? false);
+      if (lost && opener && opener !== document.body && opener.isConnected) opener.focus({ preventScroll: true });
+    };
   }, [active]);
   return ref;
+}
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** Keeps Tab / Shift+Tab inside a modal dialog (focus wraps from the last element to the first). */
+function trapTab(e: ReactKeyboardEvent<HTMLDivElement>): void {
+  if (e.key !== 'Tab') return;
+  const surface = e.currentTarget;
+  const items = Array.from(surface.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => !el.closest('[aria-hidden="true"]'));
+  if (items.length === 0) {
+    e.preventDefault();
+    surface.focus({ preventScroll: true });
+    return;
+  }
+  const first = items[0];
+  const last = items[items.length - 1];
+  const active = document.activeElement;
+  if (e.shiftKey && (active === first || active === surface)) {
+    e.preventDefault();
+    last.focus({ preventScroll: true });
+  } else if (!e.shiftKey && (active === last || !surface.contains(active))) {
+    e.preventDefault();
+    first.focus({ preventScroll: true });
+  }
 }
 
 function OverlayHeader({ title, onClose }: { title: string; onClose?: () => void }) {
@@ -190,7 +227,10 @@ function OverlayFrame({ kind, preview, surfaceClass, backdrop }: OverlayFramePro
     if (e.key === 'Escape') {
       e.stopPropagation();
       close();
+      return;
     }
+    // Modal dialogs (and modal panels) keep keyboard focus inside, like HubSpot's.
+    if (backdrop) trapTab(e);
   };
   return (
     <div

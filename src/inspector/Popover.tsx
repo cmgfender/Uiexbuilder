@@ -1,8 +1,14 @@
 /**
  * Anchored popover rendered in a portal (position: fixed) so it is never clipped by the
  * inspector's scroll container. Flips above the anchor when there is no room below, follows the
- * anchor on scroll/resize and closes on outside pointer down. Keyboard handling (Escape, arrows)
- * is left to the content / the anchor's owner.
+ * anchor on scroll/resize and closes on outside pointer down.
+ *
+ * Interactive popovers (pickers, menus) pass `autoFocus`: once the popover is positioned (its
+ * first render is hidden off-screen, where `focus()` fails) focus moves to the element marked
+ * `data-autofocus` (else the first input / menu item / button), and Escape closes it and returns
+ * focus to the anchor. Escape is caught in the capture phase so the global shortcuts (deselect)
+ * and an enclosing dialog never see it. Passive popovers (autocomplete lists) leave focus and
+ * keys to their owner.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
@@ -22,6 +28,15 @@ export interface PopoverProps {
   role?: string;
   'aria-label'?: string;
   id?: string;
+  /** Move focus into the popover when it opens; Escape closes it and refocuses the anchor. */
+  autoFocus?: boolean;
+  /**
+   * The rectangle to place the popover against instead of the anchor's box (e.g. the caret's line
+   * in a multi-line field, so suggestions don't cover the line being typed). Null falls back to
+   * the anchor. Re-read whenever `anchorKey` changes and on scroll / resize.
+   */
+  anchorRect?: () => { left: number; top: number; right: number; bottom: number; width: number } | null;
+  anchorKey?: unknown;
 }
 
 interface Pos {
@@ -31,16 +46,40 @@ interface Pos {
   maxHeight: number;
 }
 
-export function Popover({ anchor, open, onClose, children, width, maxHeight = 320, align = 'start', className, ...rest }: PopoverProps) {
+/** Element that should receive focus when an interactive popover opens. */
+export const AUTOFOCUS_SELECTOR = '[data-autofocus]';
+const FOCUSABLE_SELECTOR =
+  'input:not([disabled]), textarea:not([disabled]), [role="menuitem"]:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+export function Popover({
+  anchor,
+  open,
+  onClose,
+  children,
+  width,
+  maxHeight = 320,
+  align = 'start',
+  className,
+  autoFocus,
+  anchorRect,
+  anchorKey,
+  ...rest
+}: PopoverProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const anchorRectRef = useRef(anchorRect);
+  anchorRectRef.current = anchorRect;
   const [pos, setPos] = useState<Pos | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
   useLayoutEffect(() => {
-    if (!open || !anchor) return;
+    if (!open || !anchor) {
+      setPos(null);
+      return;
+    }
     const update = () => {
-      const r = anchor.getBoundingClientRect();
+      const box = anchor.getBoundingClientRect();
+      const r = anchorRectRef.current?.() ?? box;
       const el = ref.current;
       const w = width === 'anchor' ? r.width : (width ?? el?.offsetWidth ?? 240);
       const h = Math.min(el?.scrollHeight ?? maxHeight, maxHeight);
@@ -69,7 +108,33 @@ export function Popover({ anchor, open, onClose, children, width, maxHeight = 32
       window.removeEventListener('scroll', update, true);
       window.removeEventListener('resize', update);
     };
-  }, [open, anchor, width, maxHeight, align]);
+  }, [open, anchor, width, maxHeight, align, anchorKey]);
+
+  // Focus the content once it is visible (autoFocus on a hidden element is a no-op).
+  const visible = open && !!anchor && pos !== null;
+  useLayoutEffect(() => {
+    if (!autoFocus || !visible) return;
+    const el = ref.current;
+    if (!el || el.contains(document.activeElement)) return;
+    const target = el.querySelector<HTMLElement>(AUTOFOCUS_SELECTOR) ?? el.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
+    target?.focus({ preventScroll: true });
+  }, [autoFocus, visible]);
+
+  useEffect(() => {
+    if (!open || !autoFocus) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      const t = e.target as Node | null;
+      const inside = !!t && (!!ref.current?.contains(t) || !!anchor?.contains(t));
+      if (!inside) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onCloseRef.current();
+      anchor?.focus();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [open, autoFocus, anchor]);
 
   useEffect(() => {
     if (!open) return;

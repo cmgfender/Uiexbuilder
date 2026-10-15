@@ -16,7 +16,7 @@ import {
   type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, Copy, Plus, X } from 'lucide-react';
+import { Check, Copy, Plus, TriangleAlert, X } from 'lucide-react';
 import type { JsonValue } from '../model/types';
 import { Button, IconButton, TextArea, TextInput, cx } from '../ui';
 import { copyText } from './utils';
@@ -144,16 +144,18 @@ export interface Suggestion {
 
 function filterSuggestions(suggestions: Suggestion[], query: string, exclude: Set<string>, limit = 8): Suggestion[] {
   const q = query.trim().toLowerCase();
+  const exact: Suggestion[] = [];
   const out: Suggestion[] = [];
   const later: Suggestion[] = [];
   for (const s of suggestions) {
     if (exclude.has(s.value)) continue;
     const v = s.value.toLowerCase();
     const d = (s.detail ?? '').toLowerCase();
-    if (!q || v.startsWith(q)) out.push(s);
+    if (q && v === q) exact.push(s);
+    else if (!q || v.startsWith(q)) out.push(s);
     else if (v.includes(q) || d.includes(q)) later.push(s);
   }
-  return [...out, ...later].slice(0, limit);
+  return [...exact, ...out, ...later].slice(0, limit);
 }
 
 /** Position of a floating list under its anchor (viewport coordinates), kept in sync on scroll/resize. */
@@ -233,14 +235,18 @@ function SuggestionList({
   );
 }
 
-/** Keyboard handling for a suggestion list. Returns true when the key was consumed. */
-function useSuggestionNav(items: Suggestion[], wantOpen: boolean) {
+/**
+ * Keyboard handling for a suggestion list. Returns true when the key was consumed. With
+ * `highlightFirst`, the first item is active whenever the list opens or changes (a combobox where
+ * Enter takes the visible suggestion).
+ */
+function useSuggestionNav(items: Suggestion[], wantOpen: boolean, highlightFirst = false) {
   const [active, setActive] = useState(-1);
   // Escape hides the list until the suggestions change (typing) or the field is re-focused.
   const [dismissed, setDismissed] = useState(false);
   const open = wantOpen && !dismissed;
   const signature = items.map((i) => i.value).join('\n');
-  useEffect(() => setActive(-1), [items.length, open]);
+  useEffect(() => setActive(highlightFirst && open && items.length > 0 ? 0 : -1), [signature, items.length, open, highlightFirst]);
   useEffect(() => setDismissed(false), [signature]);
   useEffect(() => {
     if (!wantOpen) setDismissed(false);
@@ -273,12 +279,20 @@ function useSuggestionNav(items: Suggestion[], wantOpen: boolean) {
 // ChipInput: a list of strings edited as chips, with autocomplete
 // ---------------------------------------------------------------------------
 
+export interface ChipWarning {
+  message: string;
+  /** A replacement value offered as a one-click fix. */
+  fix?: string;
+}
+
 export interface ChipInputProps {
   values: string[];
   onChange: (values: string[]) => void;
   suggestions?: Suggestion[];
   placeholder?: string;
   validate?: (value: string) => string | null;
+  /** Non-blocking warning for an added value (shown on the chip and below the field). */
+  warn?: (value: string) => ChipWarning | null;
   'aria-label': string;
   /** Monospace chips (identifiers, scopes). Default true. */
   mono?: boolean;
@@ -287,12 +301,20 @@ export interface ChipInputProps {
   disabled?: boolean;
 }
 
+/**
+ * Chips with autocomplete. While suggestions are shown for typed text, the first one is
+ * highlighted and Enter / Tab add it (as in any combobox); Shift+Enter, or Escape then Enter, adds
+ * the text as typed. Text matching no suggestion is added on Enter, Tab, comma or blur. Leaving
+ * the field with text that only partly matches suggestions keeps it as a draft instead of adding
+ * a half-typed value.
+ */
 export function ChipInput({
   values,
   onChange,
   suggestions = [],
   placeholder = 'Add…',
   validate,
+  warn,
   mono = true,
   describe,
   disabled,
@@ -301,13 +323,19 @@ export function ChipInput({
   const [draft, setDraft] = useState('');
   const [focused, setFocused] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const listId = useId();
+  const noticeId = useId();
   const present = useMemo(() => new Set(values), [values]);
   const items = useMemo(() => filterSuggestions(suggestions, draft, present), [suggestions, draft, present]);
-  const nav = useSuggestionNav(items, focused && items.length > 0);
+  const nav = useSuggestionNav(items, focused && items.length > 0, draft.trim() !== '');
   const open = nav.open;
+  const warnings = useMemo(
+    () => (warn ? values.map((v) => ({ value: v, warning: warn(v) })).filter((w): w is { value: string; warning: ChipWarning } => !!w.warning) : []),
+    [values, warn],
+  );
 
   const add = useCallback(
     (raw: string | string[]): boolean => {
@@ -323,6 +351,7 @@ export function ChipInput({
         if (!next.includes(v)) next.push(v);
       }
       setError(null);
+      setNotice(null);
       if (next.length !== values.length) onChange(next);
       setDraft('');
       return true;
@@ -331,6 +360,22 @@ export function ChipInput({
   );
 
   const remove = (v: string) => onChange(values.filter((x) => x !== v));
+  const replace = (from: string, to: string) => {
+    const next: string[] = [];
+    for (const v of values) {
+      const value = v === from ? to : v;
+      if (!next.includes(value)) next.push(value);
+    }
+    onChange(next);
+  };
+
+  /** Typed text that matches suggestions only partly (e.g. `life` while `lifecyclestage` is offered). */
+  const isPartialMatch = (text: string): boolean => {
+    const q = text.trim().toLowerCase();
+    if (!q) return false;
+    const candidates = filterSuggestions(suggestions, text, present);
+    return candidates.length > 0 && !candidates.some((s) => s.value.toLowerCase() === q);
+  };
 
   return (
     <div className="ub-pn-chips-wrap">
@@ -344,16 +389,24 @@ export function ChipInput({
           }
         }}
       >
-        {values.map((v) => (
-          <span key={v} className={cx('ub-pn-chip', mono && 'ub-pn-chip--mono')} title={describe?.(v)}>
-            <span className="ub-pn-chip__text">{v}</span>
-            {!disabled && (
-              <button type="button" className="ub-pn-chip__remove" aria-label={`Remove ${v}`} title={`Remove ${v}`} onClick={() => remove(v)}>
-                <X size={11} aria-hidden />
-              </button>
-            )}
-          </span>
-        ))}
+        {values.map((v) => {
+          const warning = warnings.find((w) => w.value === v)?.warning;
+          return (
+            <span
+              key={v}
+              className={cx('ub-pn-chip', mono && 'ub-pn-chip--mono', warning && 'ub-pn-chip--warn')}
+              title={warning?.message ?? describe?.(v)}
+            >
+              {warning && <TriangleAlert size={11} aria-hidden className="ub-pn-chip__icon" />}
+              <span className="ub-pn-chip__text">{v}</span>
+              {!disabled && (
+                <button type="button" className="ub-pn-chip__remove" aria-label={`Remove ${v}`} title={`Remove ${v}`} onClick={() => remove(v)}>
+                  <X size={11} aria-hidden />
+                </button>
+              )}
+            </span>
+          );
+        })}
         {!disabled && (
           <input
             ref={inputRef}
@@ -366,14 +419,22 @@ export function ChipInput({
             aria-controls={open ? listId : undefined}
             aria-autocomplete="list"
             aria-activedescendant={open && nav.active >= 0 ? `${listId}-${nav.active}` : undefined}
+            aria-describedby={notice ? noticeId : undefined}
             spellCheck={false}
             onFocus={() => setFocused(true)}
             onBlur={() => {
               setFocused(false);
-              if (draft.trim()) add(draft);
+              if (!draft.trim()) return;
+              // Never save half-typed text that is the start of a suggestion: keep it as a draft.
+              if (suggestions.length > 0 && isPartialMatch(draft)) {
+                setNotice(`“${draft.trim()}” was not added. Pick a suggestion, or press Shift+Enter to add it as typed.`);
+                return;
+              }
+              add(draft);
             }}
             onChange={(e) => {
               setError(null);
+              setNotice(null);
               const v = e.target.value;
               if (/[,\n]/.test(v)) add(v.split(/[,\n]/));
               else setDraft(v);
@@ -386,9 +447,17 @@ export function ChipInput({
               }
             }}
             onKeyDown={(e) => {
+              if (e.key === 'Enter' && e.shiftKey) {
+                // Shift+Enter: the text exactly as typed.
+                if (draft.trim()) {
+                  e.preventDefault();
+                  add(draft);
+                }
+                return;
+              }
               if (nav.onKey(e)) return;
               if (e.key === 'Enter' || e.key === 'Tab') {
-                if (open && nav.active >= 0) {
+                if (open && nav.active >= 0 && items[nav.active]) {
                   e.preventDefault();
                   add(items[nav.active].value);
                 } else if (draft.trim()) {
@@ -409,6 +478,31 @@ export function ChipInput({
         <div className="ub-field__error" role="alert">
           {error}
         </div>
+      )}
+      {notice && !error && (
+        <div className="ub-field__hint ub-pn-chips__notice" id={noticeId} role="status">
+          {notice}
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <ul className="ub-pn-chip-warnings" aria-label="Warnings">
+          {warnings.map(({ value, warning }) => (
+            <li key={value} className="ub-pn-chip-warning">
+              <TriangleAlert size={12} aria-hidden className="ub-pn-chip-warning__icon" />
+              <span>
+                {warning.message}
+                {warning.fix && !disabled && (
+                  <>
+                    {' '}
+                    <button type="button" className="ub-pn-link" onClick={() => replace(value, warning.fix!)}>
+                      Use “{warning.fix}”
+                    </button>
+                  </>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

@@ -415,6 +415,18 @@ export function normalizeExpression(code: string): string {
   return out;
 }
 
+/**
+ * Text that is safe inside a `//` or `/* *\/` comment: whitespace runs (including the line
+ * terminators \r, \n, U+2028 and U+2029, which would end a line comment) collapse to one space,
+ * and `*\/` cannot close a block comment.
+ */
+export function commentText(value: unknown): string {
+  return String(value ?? '')
+    .replace(/[\s\u2028\u2029]+/g, ' ')
+    .replace(/\*\//g, '* /')
+    .trim();
+}
+
 const SIMPLE_CHAIN_RE = /^[A-Za-z_$][A-Za-z0-9_$]*(?:\??\.[A-Za-z_$][A-Za-z0-9_$]*)*$/;
 
 /** A bare identifier or property chain (`a`, `a.b`, `a?.b.c`). */

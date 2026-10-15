@@ -13,6 +13,7 @@ import {
   useState,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
@@ -252,25 +253,86 @@ export interface TabsProps<T extends string> {
   onChange: (value: T) => void;
   tabs: Array<{ value: T; label: ReactNode; icon?: ReactNode; badge?: ReactNode }>;
   className?: string;
+  'aria-label'?: string;
+  /**
+   * Id prefix linking the tabs to the panel the caller renders: each tab gets the id
+   * `${idBase}-tab-${value}` and `aria-controls="${idBase}-panel"`; spread
+   * `tabPanelProps(idBase, value)` on the panel element.
+   */
+  idBase?: string;
 }
 
-export function Tabs<T extends string>({ value, onChange, tabs, className }: TabsProps<T>) {
+/** Props for the panel element that belongs to `<Tabs idBase>` (id, role and accessible name). */
+export function tabPanelProps(idBase: string, value: string) {
+  return { id: `${idBase}-panel`, role: 'tabpanel' as const, 'aria-labelledby': `${idBase}-tab-${value}` };
+}
+
+/**
+ * Moves between the tabs of a tablist with Left/Right (wrapping), Home and End, and returns the
+ * index to activate (null for other keys). Shared by the kit Tabs and hand-built tab strips.
+ */
+export function tabKeyTarget(key: string, index: number, count: number): number | null {
+  if (count === 0) return null;
+  switch (key) {
+    case 'ArrowRight':
+      return (index + 1) % count;
+    case 'ArrowLeft':
+      return index <= 0 ? count - 1 : index - 1;
+    case 'Home':
+      return 0;
+    case 'End':
+      return count - 1;
+    default:
+      return null;
+  }
+}
+
+/**
+ * ARIA tabs: one Tab stop (the selected tab, roving tabindex); Left/Right/Home/End move to and
+ * activate the neighbouring tab.
+ */
+export function Tabs<T extends string>({ value, onChange, tabs, className, idBase, ...rest }: TabsProps<T>) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const selectedIndex = tabs.findIndex((t) => t.value === value);
   return (
-    <div className={cx('ub-tabs', className)} role="tablist">
-      {tabs.map((t) => (
-        <button
-          key={t.value}
-          type="button"
-          role="tab"
-          aria-selected={t.value === value}
-          className="ub-tab"
-          onClick={() => onChange(t.value)}
-        >
-          {t.icon}
-          {t.label}
-          {t.badge}
-        </button>
-      ))}
+    <div
+      ref={listRef}
+      className={cx('ub-tabs', className)}
+      role="tablist"
+      aria-label={rest['aria-label']}
+      onKeyDown={(e) => {
+        if (e.altKey || e.ctrlKey || e.metaKey) return;
+        const buttons = Array.from(listRef.current?.querySelectorAll<HTMLElement>(':scope > [role="tab"]') ?? []);
+        const current = buttons.indexOf(e.target as HTMLElement);
+        if (current === -1) return;
+        const next = tabKeyTarget(e.key, current, tabs.length);
+        if (next === null) return;
+        e.preventDefault();
+        e.stopPropagation();
+        buttons[next]?.focus();
+        if (tabs[next].value !== value) onChange(tabs[next].value);
+      }}
+    >
+      {tabs.map((t, i) => {
+        const selected = t.value === value;
+        return (
+          <button
+            key={t.value}
+            type="button"
+            role="tab"
+            id={idBase ? `${idBase}-tab-${t.value}` : undefined}
+            aria-controls={idBase ? `${idBase}-panel` : undefined}
+            aria-selected={selected}
+            tabIndex={selected || (selectedIndex === -1 && i === 0) ? 0 : -1}
+            className="ub-tab"
+            onClick={() => onChange(t.value)}
+          >
+            {t.icon}
+            {t.label}
+            {t.badge}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -319,6 +381,55 @@ export function EmptyState({ icon, title, children }: { icon?: ReactNode; title:
 }
 
 // ---------------------------------------------------------------------------
+// Focus helpers
+// ---------------------------------------------------------------------------
+
+const FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'area[href]',
+  'button:not([disabled])',
+  'input:not([disabled]):not([type="hidden"])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  'iframe',
+  'summary',
+  '[tabindex]',
+  '[contenteditable=""]',
+  '[contenteditable="true"]',
+].join(', ');
+
+function isRendered(el: HTMLElement): boolean {
+  const check = (el as HTMLElement & { checkVisibility?: (o?: object) => boolean }).checkVisibility;
+  // jsdom has no layout (and no checkVisibility): treat everything as rendered there.
+  return typeof check === 'function' ? check.call(el, { visibilityProperty: true }) : !el.closest('[hidden]');
+}
+
+/** Elements inside `root` that Tab can reach, in DOM order (skips tabindex=-1, disabled, inert and hidden). */
+export function tabbableElements(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (el) => el.tabIndex >= 0 && !el.closest('[inert]') && isRendered(el),
+  );
+}
+
+/** The element focused when a kit Menu last closed (the menu's opener), for dialogs opened from a menu item. */
+let lastMenuReturn: { el: HTMLElement; at: number } | null = null;
+
+function recentMenuOpener(maxAgeMs = 1000): HTMLElement | null {
+  if (!lastMenuReturn || Date.now() - lastMenuReturn.at > maxAgeMs) return null;
+  return lastMenuReturn.el.isConnected ? lastMenuReturn.el : null;
+}
+
+/** Background (`#root`) is made inert while at least one kit dialog is open. */
+let openDialogs = 0;
+
+function setBackgroundInert(inert: boolean): void {
+  const root = typeof document !== 'undefined' ? document.getElementById('root') : null;
+  if (!root) return;
+  if (inert) root.setAttribute('inert', '');
+  else root.removeAttribute('inert');
+}
+
+// ---------------------------------------------------------------------------
 // Dialog
 // ---------------------------------------------------------------------------
 
@@ -331,6 +442,12 @@ export interface DialogProps {
   wide?: boolean;
 }
 
+/**
+ * Modal dialog (portalled to <body>). While open: Tab / Shift+Tab cycle inside it, the app behind
+ * it (`#root`) is inert, Escape closes the topmost dialog. On open the dialog keeps focus on an
+ * autofocused field or focuses itself (announcing its title); on close focus returns to the
+ * opener — the menu trigger when the dialog was opened from a menu item.
+ */
 export function Dialog({ open, onClose, title, children, footer, wide }: DialogProps) {
   const titleId = useId();
   const ref = useRef<HTMLDivElement>(null);
@@ -342,7 +459,12 @@ export function Dialog({ open, onClose, title, children, footer, wide }: DialogP
   });
   useEffect(() => {
     if (!open) return;
-    const restore = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const node = ref.current;
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // The opener: the focused element outside this dialog, else the trigger of the menu whose item
+    // opened it (the menu item itself is gone by now).
+    let restore = active && active !== document.body && !node?.contains(active) ? active : null;
+    if (!restore) restore = recentMenuOpener();
     const onKey = (e: KeyboardEvent) => {
       // Bubble phase: widgets inside the dialog (autocomplete lists, menus, inline editors) handle
       // Escape first and mark it handled with preventDefault().
@@ -355,15 +477,44 @@ export function Dialog({ open, onClose, title, children, footer, wide }: DialogP
       onCloseRef.current();
     };
     window.addEventListener('keydown', onKey);
-    ref.current?.focus();
+    openDialogs++;
+    setBackgroundInert(true);
+    // Keep focus on a field the content focused itself (autoFocus); otherwise focus the dialog.
+    if (node && !node.contains(document.activeElement)) node.focus({ preventScroll: true });
     return () => {
       window.removeEventListener('keydown', onKey);
+      openDialogs = Math.max(0, openDialogs - 1);
+      if (openDialogs === 0) setBackgroundInert(false);
       // Return focus to where it was (e.g. the button that opened the dialog).
-      const lost = !document.activeElement || document.activeElement === document.body;
+      const now = document.activeElement;
+      const lost = !now || now === document.body || !now.isConnected || (node?.contains(now) ?? false);
       if (lost && restore && restore.isConnected) restore.focus({ preventScroll: true });
     };
   }, [open]);
   if (!open) return null;
+  /** Focus trap: Tab from the last control wraps to the first, Shift+Tab from the first (or the dialog) to the last. */
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Tab' || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
+    const node = ref.current;
+    if (!node) return;
+    const items = tabbableElements(node);
+    const active = document.activeElement;
+    if (items.length === 0) {
+      e.preventDefault();
+      node.focus({ preventScroll: true });
+      return;
+    }
+    const first = items[0];
+    const last = items[items.length - 1];
+    const inside = !!active && node.contains(active);
+    if (e.shiftKey && (!inside || active === first || active === node)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (!inside || active === last)) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
   return createPortal(
     <div ref={backdropRef} className="ub-dialog-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
@@ -373,6 +524,7 @@ export function Dialog({ open, onClose, title, children, footer, wide }: DialogP
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
+        onKeyDown={onKeyDown}
       >
         <div className="ub-dialog__header">
           <h2 className="ub-dialog__title" id={titleId}>
@@ -410,11 +562,34 @@ export interface MenuProps {
   y: number;
   items: MenuItem[];
   onClose: () => void;
+  /**
+   * Where focus goes when the menu closes while focus is inside it (Escape, choosing an item):
+   * an element, or a function resolved at close time. Default: the element that was focused when
+   * the menu opened (its trigger).
+   */
+  returnFocus?: HTMLElement | null | (() => HTMLElement | null | undefined);
+  'aria-label'?: string;
 }
 
-export function Menu({ x, y, items, onClose }: MenuProps) {
+/**
+ * Menu with the ARIA menu keyboard model: it focuses its first enabled item when it opens,
+ * Up/Down (wrapping), Home/End and Tab / Shift+Tab move between items, Escape closes it, and
+ * closing returns focus to the opener.
+ */
+export function Menu({ x, y, items, onClose, returnFocus, ...rest }: MenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ x, y });
+  // The element focused when the menu opened (read during the first render, before the menu
+  // moves focus to its first item).
+  const [opener] = useState<HTMLElement | null>(() =>
+    typeof document !== 'undefined' && document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+      ? document.activeElement
+      : null,
+  );
+  const returnFocusRef = useRef(returnFocus);
+  useLayoutEffect(() => {
+    returnFocusRef.current = returnFocus;
+  });
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -425,14 +600,60 @@ export function Menu({ x, y, items, onClose }: MenuProps) {
     });
   }, [x, y]);
   useEffect(() => {
+    const el = ref.current;
+    enabledMenuItems(el)[0]?.focus({ preventScroll: true });
+    return () => {
+      const rf = returnFocusRef.current;
+      const resolved = typeof rf === 'function' ? rf() : rf;
+      const target = resolved && resolved.isConnected ? resolved : opener && opener.isConnected ? opener : null;
+      lastMenuReturn = target ? { el: target, at: Date.now() } : null;
+      // Only when focus was in the menu (now removed): an item that moved focus on purpose
+      // (an inline rename field, a dialog's autofocus) keeps it.
+      const active = document.activeElement;
+      const lost = !active || active === document.body || !active.isConnected || (el?.contains(active) ?? false);
+      if (lost && target) target.focus({ preventScroll: true });
+    };
+    // Mount / unmount only: focus moves into the menu once.
+  }, []);
+  useEffect(() => {
     const onDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      // Handled: an enclosing dialog stays open and global shortcuts ignore it.
+      if (e.key === 'Escape') {
+        // Handled: an enclosing dialog stays open and global shortcuts ignore it.
+        e.preventDefault();
+        onClose();
+        return;
+      }
+      if (e.altKey || e.ctrlKey || e.metaKey) return;
+      const list = enabledMenuItems(ref.current);
+      if (!list.length) return;
+      const i = list.indexOf(document.activeElement as HTMLElement);
+      const n = list.length;
+      let next: number;
+      switch (e.key) {
+        case 'ArrowDown':
+          next = i === -1 ? 0 : (i + 1) % n;
+          break;
+        case 'ArrowUp':
+          next = i <= 0 ? n - 1 : i - 1;
+          break;
+        case 'Home':
+          next = 0;
+          break;
+        case 'End':
+          next = n - 1;
+          break;
+        case 'Tab':
+          next = e.shiftKey ? (i <= 0 ? n - 1 : i - 1) : (i + 1) % n;
+          break;
+        default:
+          return;
+      }
       e.preventDefault();
-      onClose();
+      e.stopPropagation();
+      list[next].focus();
     };
     window.addEventListener('mousedown', onDown, true);
     window.addEventListener('keydown', onKey, true);
@@ -444,7 +665,7 @@ export function Menu({ x, y, items, onClose }: MenuProps) {
     };
   }, [onClose]);
   return createPortal(
-    <div ref={ref} className="ub-menu" role="menu" style={{ left: pos.x, top: pos.y }}>
+    <div ref={ref} className="ub-menu" role="menu" aria-label={rest['aria-label']} style={{ left: pos.x, top: pos.y }}>
       {items.map((item, i) =>
         item.separator ? (
           <div key={i} className="ub-menu__sep" role="separator" />
@@ -453,6 +674,7 @@ export function Menu({ x, y, items, onClose }: MenuProps) {
             key={i}
             type="button"
             role="menuitem"
+            tabIndex={-1}
             className={cx('ub-menu__item', item.danger && 'ub-menu__item--danger')}
             disabled={item.disabled}
             onClick={() => {
@@ -469,6 +691,10 @@ export function Menu({ x, y, items, onClose }: MenuProps) {
     </div>,
     document.body,
   );
+}
+
+function enabledMenuItems(menu: HTMLElement | null): HTMLElement[] {
+  return menu ? Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)')) : [];
 }
 
 /** Hook for a dropdown menu anchored to a button. */

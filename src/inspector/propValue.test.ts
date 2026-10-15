@@ -17,6 +17,7 @@ import {
   urlHint,
   formatPreviewValue,
 } from './propValue';
+import { evaluate, interpolate } from '../runtime/expr';
 
 describe('literal -> expression (fx on)', () => {
   it('quotes plain strings and keeps other JSON', () => {
@@ -29,8 +30,12 @@ describe('literal -> expression (fx on)', () => {
   });
   it('turns templates into expressions', () => {
     expect(stringToExpr('{{ count }}')).toBe('count');
-    expect(stringToExpr('Hello {{ name }}!')).toBe('`Hello ${name}!`');
-    expect(stringToExpr('a `b` ${c} {{ d }}')).toBe('`a \\`b\\` \\${c} ${d}`');
+    expect(stringToExpr('Hello {{ name }}!')).toBe('`Hello ${toText(name)}!`');
+    expect(stringToExpr('a `b` ${c} {{ d }}')).toBe('`a \\`b\\` \\${c} ${toText(d)}`');
+    // Every value goes through toText like interpolation; literals need no conversion.
+    expect(stringToExpr("x {{ a || 'n/a' }} {{ fmt(total) }} {{ 'lit' }} {{ String(n) }}")).toBe(
+      "`x ${toText(a || 'n/a')} ${toText(fmt(total))} ${'lit'} ${String(n)}`",
+    );
   });
   it('unset yields an empty expression', () => {
     expect(literalToExpr(undefined)).toBe('');
@@ -47,7 +52,11 @@ describe('expression -> literal (fx off)', () => {
   });
   it('keeps expression text for string props as a template', () => {
     expect(exprToLiteral('count + 1', { kind: 'string' })).toEqual({ ok: true, value: '{{ count + 1 }}' });
-    expect(exprToLiteral('`Hi ${name}`', { kind: 'string' })).toEqual({ ok: true, value: 'Hi {{ name }}' });
+    expect(exprToLiteral('`Hi ${toText(name)}`', { kind: 'string' })).toEqual({ ok: true, value: 'Hi {{ name }}' });
+    // Expressions written by earlier versions (`?? ''`) still convert back.
+    expect(exprToLiteral("`Hi ${name ?? ''}`", { kind: 'string' })).toEqual({ ok: true, value: 'Hi {{ name }}' });
+    // A bare `${name}` prints "null" for null; String() keeps that in the template.
+    expect(exprToLiteral('`Hi ${name}`', { kind: 'string' })).toEqual({ ok: true, value: 'Hi {{ String(name) }}' });
   });
   it('refuses dynamic values for non-string kinds', () => {
     expect(exprToLiteral('count + 1', { kind: 'number' })).toEqual({ ok: false });
@@ -57,6 +66,34 @@ describe('expression -> literal (fx off)', () => {
     const tpl = 'Hello {{ user.name }}, you have {{ count }} items';
     const code = stringToExpr(tpl);
     expect(templateLiteralToTemplate(code)).toBe(tpl);
+    for (const t of ["{{ a || 'x' }} and {{ fmt(b) }}", "{{ 'q' }}-{{ String(n) }}", "v: {{ x ?? '' }}", 'id {{ a[0] }}']) {
+      expect(templateLiteralToTemplate(stringToExpr(t))).toBe(t);
+    }
+  });
+
+  it('keeps the rendered text when toggling fx on and off (null, booleans, objects, arrays)', () => {
+    const scope = { owner: null, missing: undefined, name: 'Ada', count: 3, deal: { amount: 5 }, done: false, tags: ['a', 'b'] };
+    const cases = [
+      'Owner: {{ owner }}',
+      'Hi {{ name }} ({{ count }})',
+      'x{{ missing }}y',
+      'Amount {{ deal.amount }}',
+      'Done: {{ done }}',
+      'Deal {{ deal }}',
+      'Tags {{ tags }}',
+    ];
+    for (const tpl of cases) {
+      const literal = interpolate(tpl, scope);
+      const code = stringToExpr(tpl);
+      const r = evaluate(code, scope);
+      expect(r.ok && r.value).toBe(literal);
+      // ... and back again.
+      expect(interpolate(templateLiteralToTemplate(code)!, scope)).toBe(literal);
+    }
+    // Expression -> literal keeps JS string conversion for hand-written placeholders.
+    const handWritten = '`Owner: ${owner}`';
+    const r = evaluate(handWritten, scope);
+    expect(interpolate(templateLiteralToTemplate(handWritten)!, scope)).toBe(r.ok ? r.value : 'x');
   });
 });
 

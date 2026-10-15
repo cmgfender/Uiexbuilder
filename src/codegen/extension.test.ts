@@ -214,7 +214,7 @@ describe('props', () => {
     // Paginated through an expression: everything stays.
     expect(jsx).toMatch(/<Table\s+paginated=\{many\}\s+pageCount=\{3\}\s+page=\{page\}\s+onPageChange=/);
     expect(jsx).toContain('<TableHeader sortDirection="never">A</TableHeader>');
-    expect(jsx).toMatch(/<TableHeader\s+sortDirection="none"\s+disabled\s+onSortChange=\{\(\) => \{\}\}\s*>\s*B\s*<\/TableHeader>/);
+    expect(jsx).toMatch(/<TableHeader\s+sortDirection="none"\s+disabled\s+onSortChange=\{\(\) => undefined\}\s*>\s*B\s*<\/TableHeader>/);
   });
 
   it('breaks long attribute lists one per line', () => {
@@ -311,7 +311,7 @@ describe('event handlers', () => {
     const jsx = jsxOf(gen([
       { type: 'Table', props: { paginated: true, pageCount: 3 }, children: [{ type: 'TableBody', children: [] }] },
     ]));
-    expect(jsx).toContain('onPageChange={() => {}}');
+    expect(jsx).toContain('onPageChange={() => undefined}');
   });
 
   it('makes handlers async only when a step awaits', () => {
@@ -411,7 +411,8 @@ describe('actions', () => {
       "const res = await hubspot.fetch(\n        `https://api.example.com/items/${toText(id)}`,\n        { method: 'POST', body: { id } },\n      );",
     );
     expect(src).toContain('if (!res.ok) {');
-    expect(src).toContain('const response = await res.json();\n      setResult(response);');
+    expect(src).toContain('const response = await readJson(res);\n      setResult(response);');
+    expect(src).toContain('const readJson = async (response: Response): Promise<any> => {');
     expect(src).toContain('} catch (error: any) {\n      logger.error(toText(error.message));');
     expect(src).toContain("await hubspot.serverless('my_function', {\n        parameters: { id },\n        propertiesToSend: ['email'],\n      });");
     expect(src).toContain('} catch (error) {\n      logger.error(error instanceof Error ? error.message : String(error));');
@@ -476,14 +477,17 @@ describe('data sources', () => {
         p.functions = [{ id: 'f_1', uid: 'get_quote', fileName: 'getQuote', code: '', secretKeys: [] }];
       },
     });
-    expect(src).toContain("import { useCallback, useEffect, useState } from 'react';");
+    expect(src).toContain("import { useCallback, useEffect, useRef, useState } from 'react';");
     expect(src).toContain('const [items, setItems] = useState<any>(null);');
     expect(src).toContain('const [itemsLoading, setItemsLoading] = useState<boolean>(true);');
-    expect(src).toContain('const [quoteLoading, setQuoteLoading] = useState<boolean>(false);');
+    // Status values nothing reads are not destructured (lint-clean), their setters are.
+    expect(src).toContain('const [, setQuoteLoading] = useState<boolean>(false);');
     expect(src).toContain('const loadItems = useCallback(async () => {');
     expect(src).toContain('}, [q]);');
     expect(src).toContain("const result = await hubspot.serverless('get_quote');\n      setQuote(result);");
-    expect(src).toContain('  useEffect(() => {\n    void loadItems();\n');
+    expect(src).toContain(
+      '  const itemsRequested = useRef(false);\n  useEffect(() => {\n    if (itemsRequested.current) return;\n    itemsRequested.current = true;\n    void loadItems();\n  }, [loadItems]);',
+    );
     expect(src).not.toContain('void loadQuote()');
   });
 });
@@ -567,7 +571,7 @@ describe('name collisions', () => {
       state: [st('menus', 'array', [])],
       dataSources: [{ id: 'd1', kind: 'fetch', name: 'useEffect', url: 'https://a.example.com', method: 'GET', runOnMount: true }],
     });
-    expect(src).toContain("import { useCallback, useEffect as useEffectHook, useState } from 'react';");
+    expect(src).toContain("import {\n  useCallback,\n  useEffect as useEffectHook,\n  useRef,\n  useState,\n} from 'react';");
     expect(src).toContain('Dropdown as DropdownComponent,');
     expect(src).toContain('<DropdownComponent.ButtonItem>One</DropdownComponent.ButtonItem>');
     expect(src).toContain('  useEffectHook(() => {');

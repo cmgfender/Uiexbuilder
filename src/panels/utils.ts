@@ -1,5 +1,6 @@
 /** Small pure helpers for the Data panel and dialogs (validation, conversions, formatting). */
-import type { JsonValue, StateVarType } from '../model/types';
+import { uidProblem } from '../model/ids';
+import type { JsonValue, Project, StateVarType } from '../model/types';
 
 // ---------------------------------------------------------------------------
 // State variable values
@@ -108,20 +109,63 @@ export function validateProjectSlug(name: string): string | null {
   return null;
 }
 
-/** HubSpot uid: letters, digits, `_`, `-` and `.`, up to 64 characters. */
+/** HubSpot uid: letters, digits, `_`, `-` and `.`, up to 64 characters (see uidProblem). */
 export function validateUid(uid: string, taken: string[] = []): string | null {
-  if (!uid.trim()) return 'UID is required';
-  if (uid.length > 64) return 'Use 64 characters or fewer';
-  if (!/^[A-Za-z0-9_.-]+$/.test(uid)) return 'Use letters, numbers, _, - or . (no spaces)';
+  const problem = uidProblem(uid);
+  if (problem) return `UID ${problem}`;
   if (taken.includes(uid)) return 'This UID is already used in the project';
   return null;
 }
 
-/** Component / function file base name (no extension). */
-export function validateFileBase(name: string, taken: string[] = []): string | null {
+// Project-wide naming rules. They match validateProject (invalid-uid, duplicate-uid,
+// invalid-file-name, duplicate-file-name), so an editor never accepts a value the Problems panel
+// then reports — every dialog and inspector field that edits a uid or file name uses them.
+
+/** Who owns a uid: the app, an extension or an app function. */
+export type UidOwner = { kind: 'app' } | { kind: 'extension'; id: string } | { kind: 'function'; id: string };
+
+type NamedProject = Pick<Project, 'app' | 'extensions' | 'functions'>;
+
+const EXTENSION_KIND_LABEL: Record<string, string> = { card: 'Card', settings: 'The settings page', home: 'The app home page' };
+
+/**
+ * A HubSpot uid of the app, an extension or an app function: uidProblem's characters and length,
+ * and unique across the whole project (app, extensions and functions share one namespace).
+ */
+export function projectUidError(project: NamedProject, uid: string, owner: UidOwner): string | null {
+  const problem = uidProblem(uid);
+  if (problem) return `UID ${problem}`;
+  if (owner.kind !== 'app' && project.app?.uid === uid) return 'The app already uses this UID';
+  const ext = (project.extensions ?? []).find((e) => e && e.uid === uid && !(owner.kind === 'extension' && e.id === owner.id));
+  if (ext) return `${EXTENSION_KIND_LABEL[ext.kind] ?? 'Extension'} “${ext.name || ext.fileName}” already uses this UID`;
+  const fn = (project.functions ?? []).find((f) => f && f.uid === uid && !(owner.kind === 'function' && f.id === owner.id));
+  if (fn) return `App function “${fn.fileName || fn.uid}” already uses this UID`;
+  return null;
+}
+
+/** Extension component file names (src/app/<dir>/<Name>.tsx): PascalCase. */
+export const EXTENSION_FILE_NAME_RE = /^[A-Z][A-Za-z0-9_]*$/;
+/** App function file names (src/app/functions/<name>.js). */
+export const FUNCTION_FILE_NAME_RE = /^[A-Za-z0-9_-]+$/;
+
+/** An extension's file name: PascalCase and unique (ignoring case) across every extension. */
+export function extensionFileNameError(project: NamedProject, name: string, extensionId: string): string | null {
   if (!name.trim()) return 'File name is required';
-  if (!/^[A-Za-z0-9_-]+$/.test(name)) return 'Use letters, numbers, _ or - (no spaces or extension)';
-  if (taken.some((t) => t.toLowerCase() === name.toLowerCase())) return 'Another file already uses this name';
+  if (!EXTENSION_FILE_NAME_RE.test(name)) return 'Use PascalCase: a capital letter, then letters, digits or _ (e.g. ContactSummaryCard)';
+  const lower = name.toLowerCase();
+  const other = (project.extensions ?? []).find((e) => e && e.id !== extensionId && typeof e.fileName === 'string' && e.fileName.toLowerCase() === lower);
+  if (other) return `“${other.name || other.fileName}” already uses this file name`;
+  return null;
+}
+
+/** An app function's file name: letters, digits, _ and -, not `package`, unique (ignoring case) among functions. */
+export function functionFileNameError(project: NamedProject, name: string, functionId: string): string | null {
+  if (!name.trim()) return 'File name is required';
+  if (!FUNCTION_FILE_NAME_RE.test(name)) return 'Use letters, numbers, _ or - (no spaces or extension)';
+  if (name.toLowerCase() === 'package') return 'This name is reserved (package.json)';
+  const lower = name.toLowerCase();
+  const other = (project.functions ?? []).find((f) => f && f.id !== functionId && typeof f.fileName === 'string' && f.fileName.toLowerCase() === lower);
+  if (other) return `App function “${other.uid}” already uses this file name`;
   return null;
 }
 
@@ -181,10 +225,23 @@ export function validateSecretKey(key: string): string | null {
   return null;
 }
 
+/**
+ * Path of a public app function endpoint, e.g. `/api/status` — the format of HubSpot's official
+ * endpoint templates (a leading slash, segments of letters, digits, `-` and `_`). A path without
+ * the leading slash is accepted too.
+ */
+export const ENDPOINT_PATH_RE = /^\/?[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*$/;
+
 export function validateEndpointPath(path: string): string | null {
   if (!path.trim()) return 'Path is required';
-  if (!/^[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*$/.test(path)) return 'Use letters, numbers, - and _ separated by / (no leading slash)';
+  if (!ENDPOINT_PATH_RE.test(path)) return 'Use letters, numbers, - and _ in segments separated by /, e.g. /api/status';
   return null;
+}
+
+/** Default endpoint path for a function uid: `/api/<uid as a path segment>`, like HubSpot's template. */
+export function defaultEndpointPath(uid: string): string {
+  const segment = uid.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'function';
+  return `/api/${segment}`;
 }
 
 /** Compiles CommonJS function source without running it. Returns an error message or null. */

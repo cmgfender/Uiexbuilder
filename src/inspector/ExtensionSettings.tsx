@@ -4,11 +4,11 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { Home, LayoutPanelLeft, MousePointerClick, Plus, Settings, X } from 'lucide-react';
-import { UID_MAX_LENGTH } from '../model/ids';
 import { useEditor } from '../model/store';
 import { ROOT_TYPE, type CardLocation, type Extension, type Project } from '../model/types';
 import { CRM_OBJECT_TYPES } from '../registry/constants';
 import { useDialogs } from '../shell/dialogs';
+import { extensionFileNameError, projectUidError } from '../panels/utils';
 import { showLeftTab } from '../shell/shellStore';
 import { Badge, Button, Select, TextArea, TextInput } from '../ui';
 import { InspectorSection } from './Section';
@@ -29,26 +29,18 @@ const KIND_INFO: Record<Extension['kind'], { label: string; help: string; icon: 
   home: { label: 'App home', help: 'Your app’s home page, opened from the HubSpot apps menu.', icon: Home },
 };
 
-/** HubSpot uid characters (letters, digits, _, - and .); see uidProblem in src/model/ids. */
-export const UID_RE = /^[A-Za-z0-9_.-]+$/;
-export const FILE_NAME_RE = /^[A-Z][A-Za-z0-9_]*$/;
 const CUSTOM_OBJECT_RE = /^(p_[a-z0-9_]+|2-\d+)$/i;
 
+/** The project-wide uid rule (shared with the Extensions / Functions / App settings dialogs and validation). */
 export function uidError(uid: string, ext: Extension, project: Project): string | null {
   if (!uid) return 'Required.';
-  if (!UID_RE.test(uid)) return 'Use letters, digits, _, - or . only (no spaces).';
-  if (uid.length > UID_MAX_LENGTH) return `Use ${UID_MAX_LENGTH} characters or fewer.`;
-  if (project.extensions.some((e) => e.id !== ext.id && e.uid === uid)) return 'Another extension already uses this uid.';
-  if (project.app.uid === uid) return 'The app already uses this uid.';
-  if (project.functions.some((f) => f.uid === uid)) return 'An app function already uses this uid.';
-  return null;
+  return projectUidError(project, uid, { kind: 'extension', id: ext.id });
 }
 
+/** PascalCase and unique among the extensions, ignoring case (as validateProject checks). */
 export function fileNameError(name: string, ext: Extension, project: Project): string | null {
   if (!name) return 'Required.';
-  if (!FILE_NAME_RE.test(name)) return 'Use PascalCase: start with a capital letter, then letters and digits.';
-  if (project.extensions.some((e) => e.id !== ext.id && e.fileName === name)) return 'Another extension already uses this file name.';
-  return null;
+  return extensionFileNameError(project, name, ext.id);
 }
 
 /** Text field that keeps an invalid draft locally and only stores valid values. */

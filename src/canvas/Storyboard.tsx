@@ -9,9 +9,9 @@ import { selectActiveExtension, useEditor, type EditorState } from '../model/sto
 import { walk } from '../model/tree';
 import { NodeRenderer } from '../runtime';
 import { getComponent } from '../registry';
-import type { Extension, UINode } from '../model/types';
-import { CHROME_ATTR, STORYBOARD_ATTR } from './domHit';
-import { componentLabel } from './nodeActions';
+import type { Extension } from '../model/types';
+import { CHROME_ATTR, OBSTACLE_ATTR, STORYBOARD_ATTR } from './domHit';
+import { componentLabel, overlayCaption, quoteCaption, triggerCaption } from './labels';
 
 export interface StoryItem {
   overlayId: string;
@@ -23,30 +23,6 @@ export interface StoryItem {
   hidden: boolean;
 }
 
-function quote(text: string | undefined, max = 32): string {
-  const t = (text ?? '').replace(/\s+/g, ' ').trim();
-  if (!t) return '';
-  return ` “${t.length > max ? `${t.slice(0, max)}…` : t}”`;
-}
-
-function overlayCaption(node: UINode): string {
-  const title = node.props.title;
-  if (typeof title === 'string' && title.trim()) return title;
-  if (node.text?.trim()) return node.text;
-  const id = node.props.id;
-  return typeof id === 'string' ? id : '';
-}
-
-/** What the designer sees on the trigger (its text / label), else its layer name. */
-function triggerCaption(node: UINode): string {
-  if (node.text?.trim()) return node.text;
-  for (const key of ['label', 'alt', 'title']) {
-    const v = node.props[key];
-    if (typeof v === 'string' && v.trim()) return v;
-  }
-  return node.name ?? '';
-}
-
 /** Storyboard entries in document order (nested overlays included). */
 export function storyItems(ext: Extension): StoryItem[] {
   const items: StoryItem[] = [];
@@ -56,8 +32,8 @@ export function storyItems(ext: Extension): StoryItem[] {
     if (!overlayId || !overlay) return;
     const def = getComponent(overlay.type);
     const hover = !!def?.slotOnly && !def.overlay;
-    const what = `${componentLabel(overlay.type)}${quote(overlayCaption(overlay))}`;
-    const by = `${componentLabel(node.type)}${quote(triggerCaption(node))}`;
+    const what = `${componentLabel(overlay.type)}${quoteCaption(overlayCaption(overlay))}`;
+    const by = `${componentLabel(node.type)}${quoteCaption(triggerCaption(node))}`;
     items.push({
       overlayId,
       overlayType: overlay.type,
@@ -89,7 +65,7 @@ const StoryFrame = memo(function StoryFrame({ item }: { item: StoryItem }) {
         type="button"
         className="ub-cv-sb-frame__title"
         title="Select the component that opens this overlay"
-        {...{ [CHROME_ATTR]: '' }}
+        {...{ [CHROME_ATTR]: '', [OBSTACLE_ATTR]: '' }}
         onClick={(e) => {
           e.stopPropagation();
           useEditor.getState().select(item.triggerId);

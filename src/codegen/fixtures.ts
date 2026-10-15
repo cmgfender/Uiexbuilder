@@ -274,7 +274,7 @@ export function createFeatureProject(): Project {
               },
             ],
           },
-          { type: 'Text', text: '{{ weather.temperature }} / {{ quote }} / {{ postData }} / {{ anything }} / {{ filters.a }}' },
+          { type: 'Text', text: '{{ weather?.temperature }} / {{ quote }} / {{ postData }} / {{ anything }} / {{ filters.a }}' },
           { type: 'Text', text: 'Hi {{ nullableName }}' },
           { type: 'Input', props: { label: 'Nullable', name: 'nullable' }, binding: { state: 'nullableName' } },
           { type: 'Button', text: 'Empty handlers', events: { onClick: [] } },

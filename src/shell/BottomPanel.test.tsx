@@ -78,6 +78,26 @@ describe('<BottomPanel>', () => {
     expect(useEditor.getState().bottomPanel).toBeNull();
   });
 
+  it('tabs follow the ARIA tabs keyboard model and name their panel', () => {
+    resetEditor();
+    renderPanel();
+    const tab = (name: RegExp) => screen.getByRole('tab', { name });
+    // Collapsed: the last used tab is still the one Tab stop.
+    expect(tab(/Code/)).toHaveAttribute('tabindex', '0');
+    expect(tab(/Problems/)).toHaveAttribute('tabindex', '-1');
+    act(() => tab(/Code/).focus());
+    fireEvent.keyDown(tab(/Code/), { key: 'ArrowRight' });
+    expect(useEditor.getState().bottomPanel).toBe('problems');
+    expect(tab(/Problems/)).toHaveFocus();
+    expect(tab(/Problems/)).toHaveAttribute('aria-controls', 'ub-sh-bottom-panel');
+    expect(screen.getByRole('tabpanel', { name: /Problems/ })).toBeInTheDocument();
+    fireEvent.keyDown(tab(/Problems/), { key: 'End' });
+    expect(useEditor.getState().bottomPanel).toBe('console');
+    fireEvent.keyDown(tab(/Console/), { key: 'ArrowRight' });
+    expect(useEditor.getState().bottomPanel).toBe('code');
+    expect(tab(/Code/)).toHaveFocus();
+  });
+
   it('resizes with the keyboard handle', () => {
     resetEditor();
     useEditor.getState().setBottomPanel('problems');

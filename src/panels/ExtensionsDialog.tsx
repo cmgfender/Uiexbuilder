@@ -9,7 +9,7 @@ import { ChipInput, CommitInput } from './common';
 import type { DialogComponentProps } from './dialogTypes';
 import { EXTENSION_KIND_LABEL, ExtensionIcon } from './icons';
 import { CARD_LOCATIONS } from './locations';
-import { validateFileBase, validateUid } from './utils';
+import { extensionFileNameError, projectUidError } from './utils';
 
 
 const OBJECT_TYPE_SUGGESTIONS = CRM_OBJECT_TYPES.map((t) => ({ value: t.value, detail: t.label }));
@@ -131,7 +131,6 @@ function ExtensionRow({
   }, [highlight]);
   const toast = useToast();
   const update = (patch: Partial<Extension>) => useEditor.getState().updateExtension(ext.id, patch);
-  const others = all.filter((e) => e.id !== ext.id);
   const last = all.length <= 1;
   const nodeCount = Object.keys(ext.nodes).length - 1;
 
@@ -213,12 +212,7 @@ function ExtensionRow({
           value={ext.fileName}
           suffix=".tsx"
           aria-label={`File name of ${ext.name}`}
-          validate={(v) =>
-            validateFileBase(
-              v,
-              others.filter((o) => o.kind === ext.kind).map((o) => o.fileName),
-            )
-          }
+          validate={(v) => extensionFileNameError(useEditor.getState().project, v, ext.id)}
           onCommit={(fileName) => update({ fileName })}
         />
       </td>
@@ -227,7 +221,7 @@ function ExtensionRow({
           code
           value={ext.uid}
           aria-label={`UID of ${ext.name}`}
-          validate={(v) => validateUid(v, others.map((o) => o.uid))}
+          validate={(v) => projectUidError(useEditor.getState().project, v, { kind: 'extension', id: ext.id })}
           onCommit={(uid) => update({ uid })}
         />
       </td>

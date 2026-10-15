@@ -4,7 +4,7 @@ import { useEditor } from '../model/store';
 import type { NodeTemplate, Project } from '../model/types';
 import { useDialogs } from './dialogs';
 import { useProblems } from './problems';
-import { useShell } from './shellStore';
+import { LEFT_WIDTH, RIGHT_WIDTH, useShell } from './shellStore';
 import { resetRecentComponentsCache } from './paletteModel';
 
 /** Resets every store to a fresh project (optionally with given top-level content). */
@@ -27,7 +27,18 @@ export function resetEditor(project?: Project): Project {
   });
   useDialogs.getState().close();
   useProblems.getState().setIssues([]);
-  useShell.setState({ leftCollapsed: false, rightCollapsed: false, saveStatus: 'idle', paletteFocusNonce: 0 });
+  useShell.setState({
+    leftCollapsed: false,
+    rightCollapsed: false,
+    leftWidth: LEFT_WIDTH,
+    rightWidth: RIGHT_WIDTH,
+    saveStatus: 'idle',
+    saveError: null,
+    paletteFocusNonce: 0,
+    conflict: null,
+    compact: false,
+    leftAutoCollapsed: false,
+  });
   return p;
 }
 

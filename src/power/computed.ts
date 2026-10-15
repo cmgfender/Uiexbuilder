@@ -3,6 +3,7 @@
  * declared after state, data hooks and data source loaders, in list order (each sees the ones
  * before it). Pure helpers shared by the store, the runtime and the editor UI.
  */
+import { isValidIdentifier } from '../model/ids';
 import type { ComputedValue, DataSource, Extension } from '../model/types';
 import { helperNames } from './helpers';
 
@@ -17,7 +18,13 @@ const RESERVED_WORDS = new Set(
   ).split(' '),
 );
 
-/** Names a computed value can never take (component params, generated helpers, globals it would break). */
+/**
+ * Names a computed value can never take although they are not JavaScript keywords: component
+ * parameters, values every generated file imports (`hubspot`, React and its hooks — a
+ * `const useState` in the component would break the hook calls above it) and globals it would
+ * break. Together with the keywords this is the reserved set of `isValidIdentifier`
+ * (src/model/ids.ts), which validation uses; codegen skips these names too.
+ */
 export const COMPUTED_FORBIDDEN_NAMES: ReadonlySet<string> = new Set([
   'context',
   'actions',
@@ -26,6 +33,12 @@ export const COMPUTED_FORBIDDEN_NAMES: ReadonlySet<string> = new Set([
   'Infinity',
   'arguments',
   'eval',
+  'hubspot',
+  'React',
+  'useState',
+  'useEffect',
+  'useCallback',
+  'useMemo',
 ]);
 
 /** Globals and generated names that a computed value should not shadow (rejected by validation). */
@@ -60,9 +73,12 @@ export function declaredScopeNames(ext: Pick<Extension, 'state' | 'dataSources'>
   return out;
 }
 
-/** True when `name` is a syntactically valid, non-reserved identifier. */
+/**
+ * True when `name` is a syntactically valid, non-reserved identifier — the same rule validation
+ * applies (`isValidIdentifier`), so a name the Data panel accepts is never a Problems error.
+ */
 export function isComputedIdentifier(name: string): boolean {
-  return IDENT_RE.test(name) && !RESERVED_WORDS.has(name) && !COMPUTED_FORBIDDEN_NAMES.has(name);
+  return IDENT_RE.test(name) && !RESERVED_WORDS.has(name) && !COMPUTED_FORBIDDEN_NAMES.has(name) && isValidIdentifier(name);
 }
 
 /**
@@ -93,7 +109,7 @@ export function validateComputedName(ext: Extension, name: string, selfId?: stri
   if (!IDENT_RE.test(trimmed)) {
     return /^[0-9]/.test(trimmed) ? 'Names cannot start with a number' : 'Use letters, numbers, _ or $ only (no spaces or dashes)';
   }
-  if (RESERVED_WORDS.has(trimmed) || COMPUTED_FORBIDDEN_NAMES.has(trimmed)) return `“${trimmed}” is a reserved word`;
+  if (!isComputedIdentifier(trimmed)) return `“${trimmed}” is a reserved word`;
   if (BUILT_IN_NAMES.has(trimmed)) return `“${trimmed}” is a built-in name — expressions would lose access to it`;
   for (const s of ext.state ?? []) {
     if (s.name === trimmed) return `Already used by state variable “${s.name}”`;

@@ -130,6 +130,40 @@ describe('<TopBar>', () => {
     expect(useEditor.getState().project.id).toBe(other.id);
   });
 
+  it('does not announce routine autosaves; announces failures; a conflict becomes a button', () => {
+    resetEditor();
+    renderBar();
+    act(() => useShell.getState().setSaveStatus('pending'));
+    const saving = screen.getByText('Saving…');
+    expect(saving.closest('[role="status"], [aria-live]')).toBeNull();
+    act(() => useShell.getState().setSaveStatus('saved'));
+    expect(screen.getByText('Saved locally').closest('[role="status"], [aria-live]')).toBeNull();
+    act(() => useShell.getState().setSaveStatus('error'));
+    expect(screen.getByRole('alert')).toHaveTextContent(/Not saved/);
+
+    act(() => {
+      useShell.getState().setConflict({ projectId: useEditor.getState().project.id, dismissed: true });
+      useShell.getState().setSaveStatus('conflict');
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Changed in another tab/ }));
+    expect(useShell.getState().conflict).toMatchObject({ dismissed: false });
+  });
+
+  it('compact windows start with the left sidebar as a rail without changing the saved setting', () => {
+    resetEditor();
+    renderBar();
+    act(() => useShell.getState().setCompact(true));
+    expect(screen.getByRole('button', { name: 'Show left sidebar' })).toBeInTheDocument();
+    expect(useShell.getState().leftCollapsed).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Show left sidebar' }));
+    expect(screen.getByRole('button', { name: 'Hide left sidebar' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide left sidebar' }));
+    expect(useShell.getState().leftCollapsed).toBe(false); // temporary in compact mode
+    expect(useShell.getState().leftAutoCollapsed).toBe(true);
+    act(() => useShell.getState().setCompact(false));
+    expect(screen.getByRole('button', { name: 'Hide left sidebar' })).toBeInTheDocument();
+  });
+
   it('shows the autosave status and toggles panels', () => {
     resetEditor();
     renderBar();

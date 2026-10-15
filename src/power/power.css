@@ -316,6 +316,138 @@
   line-height: 18px;
 }
 
+/* ---------- Code editor (CodeEditor.tsx): transparent textarea over highlighted text ---------- */
+/* `.ub-codeview` (CodeViewer.css) supplies the font, token colours and the scroll container. */
+.ub-pw-ed {
+  --ub-pw-ed-line: 19px;
+  height: var(--ub-pw-ed-height, 320px);
+  min-height: 120px;
+  max-height: none;
+  border: 1px solid var(--ub-border-input);
+  border-radius: var(--ub-radius);
+  background: var(--ub-surface);
+  font-size: 12.5px;
+  line-height: var(--ub-pw-ed-line);
+  cursor: text;
+}
+.ub-pw-ed:focus-within {
+  border-color: var(--ub-focus-color);
+  box-shadow: 0 0 0 1px var(--ub-focus-color);
+}
+.ub-pw-ed--invalid {
+  border-color: var(--ub-danger);
+}
+.ub-pw-ed__inner {
+  display: flex;
+  width: max-content;
+  min-width: 100%;
+  min-height: 100%;
+}
+.ub-pw-ed__gutter {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  flex: none;
+  margin: 0;
+  padding: 10px 8px 10px 10px;
+  min-width: calc(var(--ub-pw-ed-gutter, 2ch) + 18px);
+  border-right: 1px solid var(--ub-border);
+  background: var(--ub-surface-2);
+  color: var(--ub-text-3);
+  font: inherit;
+  line-height: var(--ub-pw-ed-line);
+  text-align: right;
+  white-space: pre;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ub-pw-ed__area {
+  position: relative;
+  flex: 1;
+}
+/* Glyph positions depend only on font, line height and the left / top padding, which both layers
+   share. The highlighted layer is wider and taller than the text, so the textarea never scrolls. */
+.ub-pw-ed__hl,
+.ub-pw-ed__input {
+  margin: 0;
+  padding: 10px 8px 10px 12px;
+  border: 0;
+  font: inherit;
+  font-variant-ligatures: none;
+  letter-spacing: normal;
+  line-height: var(--ub-pw-ed-line);
+  tab-size: 2;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+.ub-pw-ed__hl {
+  padding-right: 48px;
+  padding-bottom: calc(10px + var(--ub-pw-ed-line));
+  pointer-events: none;
+  background: transparent;
+}
+.ub-pw-ed__hl code {
+  display: block;
+  font: inherit;
+}
+.ub-pw-ed__line {
+  min-height: var(--ub-pw-ed-line);
+}
+.ub-pw-ed__input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  overflow: hidden;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--ub-text);
+}
+.ub-pw-ed__input::placeholder {
+  color: var(--ub-text-3);
+  -webkit-text-fill-color: var(--ub-text-3);
+}
+.ub-pw-ed__input::selection {
+  background: rgba(47, 107, 255, 0.22);
+}
+
+/* Large editor dialog */
+.ub-pw-bigeditor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ub-pw-bigeditor .ub-pw-ed {
+  --ub-pw-ed-height: min(62vh, 640px);
+}
+.ub-pw-bigeditor__intro code {
+  font-size: 11.5px;
+}
+.ub-pw-bigeditor__keys {
+  margin-right: auto;
+  align-self: center;
+  color: var(--ub-text-3);
+  font-size: 12px;
+}
+.ub-pw-bigeditor__keys kbd {
+  padding: 0 4px;
+  border: 1px solid var(--ub-border);
+  border-radius: 4px;
+  background: var(--ub-surface);
+  font-family: inherit;
+  font-size: 11px;
+}
+/* The expression field (inspector ExpressionInput) gets room to breathe in the large editor. */
+.ub-pw-bigexpr textarea {
+  min-height: min(48vh, 480px);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
 /* ---------- Command palette ---------- */
 .ub-pw-cp-backdrop {
   position: fixed;

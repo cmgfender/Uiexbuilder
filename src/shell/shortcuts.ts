@@ -5,15 +5,21 @@
  * Bindings use Cmd on macOS and Ctrl elsewhere (either modifier is accepted). Events are ignored
  * while focus is in a text field / contenteditable, or while a dialog or menu is open — except
  * Cmd+S, which always saves. Cmd+K belongs to the command palette and is not handled here.
+ *
+ * Single-key editing shortcuts (Delete / Backspace, Escape, the arrow keys and Alt+arrows) act on
+ * the canvas selection only while focus is "on the canvas" (see `isShortcutScope`): nothing
+ * focused, the design canvas stage, or an element marked `data-shortcuts-scope` (the layers tree).
+ * Elsewhere — inspector controls, buttons, switches, the code viewer — those keys keep their usual
+ * meaning, so a keyboard user can never delete a component by pressing Backspace on a switch.
  */
 import { useEffect } from 'react';
 import { selectActiveExtension, useEditor, type LeftPanelTab } from '../model/store';
-import { saveProject } from '../model/persistence';
 import { useDialogs } from './dialogs';
 import { useToast } from '../ui';
 import {
   cutNodeSafe,
   duplicateNodeSafe,
+  historyStep,
   moveSelectedAmongSiblings,
   pasteAt,
   removeNodeSafe,
@@ -24,6 +30,7 @@ import {
   wrapNodeSafe,
   type Notify,
 } from './actions';
+import { saveCurrentProject, saveErrorMessage } from './persistence';
 import { focusPaletteSearch, showLeftTab, toggleBottomPanel, useShell } from './shellStore';
 
 export type ShortcutGroup = 'General' | 'Edit' | 'Selection' | 'View';
@@ -140,6 +147,16 @@ export function isEditableTarget(el: EventTarget | null): boolean {
   return !!html.closest('[contenteditable="true"], [contenteditable=""]');
 }
 
+/**
+ * True when single-key editing shortcuts may act on the selection: focus is nowhere (body), on the
+ * design canvas stage, or inside an element that opts in with `data-shortcuts-scope`.
+ */
+export function isShortcutScope(el: EventTarget | null): boolean {
+  if (!el || !(el instanceof Element)) return true;
+  if (typeof document !== 'undefined' && (el === document.body || el === document.documentElement)) return true;
+  return !!el.closest('.ub-cv-stage, [data-shortcuts-scope]');
+}
+
 /** Elements that handle arrow keys themselves (lists, menus, trees, sliders...). */
 function ownsArrowKeys(el: EventTarget | null): boolean {
   if (!el || !(el instanceof Element)) return false;
@@ -175,13 +192,20 @@ function hasTextSelection(): boolean {
 
 const LEFT_TABS: LeftPanelTab[] = ['components', 'layers', 'templates', 'data'];
 
-/** Saves immediately (Cmd+S) and reports the result. */
+/**
+ * Saves immediately (Cmd+S) and reports the result. When another tab saved a different version
+ * of the project meanwhile, nothing is overwritten: the conflict dialog asks which one to keep.
+ */
 export function saveNow(notify: Notify): boolean {
-  const project = useEditor.getState().project;
-  const ok = saveProject(project);
-  useShell.getState().setSaveStatus(ok ? 'saved' : 'error');
-  notify(ok ? 'Saved in this browser' : 'Could not save — browser storage is unavailable');
-  return ok;
+  const outcome = saveCurrentProject();
+  if (outcome === 'conflict') {
+    const conflict = useShell.getState().conflict;
+    if (conflict) useShell.getState().setConflict({ ...conflict, dismissed: false });
+    notify('Not saved — this project changed in another tab');
+    return false;
+  }
+  notify(outcome === 'saved' ? 'Saved in this browser' : `Could not save. ${saveErrorMessage()}`);
+  return outcome === 'saved';
 }
 
 /**
@@ -212,12 +236,11 @@ export function handleGlobalKeyDown(e: KeyboardEvent, notify: Notify): boolean {
   if (mod && !e.altKey) {
     switch (key) {
       case 'z':
-        if (e.shiftKey) editor.redo();
-        else editor.undo();
+        historyStep(e.shiftKey ? 'redo' : 'undo', notify);
         return true;
       case 'y':
         if (e.shiftKey) return false;
-        editor.redo();
+        historyStep('redo', notify);
         return true;
       case 'Enter':
         editor.setMode(editor.mode === 'design' ? 'preview' : 'design');
@@ -276,6 +299,8 @@ export function handleGlobalKeyDown(e: KeyboardEvent, notify: Notify): boolean {
   }
 
   if (!designing) return false;
+  // Delete / Escape / arrows only act on the selection while focus is on the canvas (or nowhere).
+  if (!isShortcutScope(focus)) return false;
 
   if (e.altKey && !e.shiftKey && (key === 'ArrowUp' || key === 'ArrowDown')) {
     if (ownsArrowKeys(focus) || !hasSelection) return false;
