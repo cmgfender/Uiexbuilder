@@ -60,8 +60,11 @@ export type PropType =
    * editors offer label/value plus `description`.
    */
   | { kind: 'options'; optionFields?: Array<'description' | 'initialIsChecked' | 'readOnly'> }
-  /** string[] */
-  | { kind: 'stringList'; placeholder?: string }
+  /**
+   * string[]. `options`, when set, restricts the items to these values (e.g. chart `colorList`,
+   * typed `ChartColor[]`): editors offer them as choices and codegen treats each item like an enum.
+   */
+  | { kind: 'stringList'; placeholder?: string; options?: EnumOption[] }
   /** { year, month, date } — month is 0-based as in @hubspot/ui-extensions BaseDate. */
   | { kind: 'date' }
   /** { hours, minutes } */
@@ -98,7 +101,12 @@ export interface PropDef {
   requiredWhen?: (props: Record<string, unknown>) => boolean;
   /** Allow switching to an expression ({ $expr }). Defaults to true. */
   bindable?: boolean;
-  /** Hide this prop in the inspector unless the predicate passes (given the node's literal props). */
+  /**
+   * Hide this prop in the inspector unless the predicate passes, given the node's props
+   * (expression props appear as `{ $expr }` objects; treat them as set). Codegen omits a hidden
+   * prop (and a value binding to it), so use this for props that only exist in some variants of a
+   * discriminated union, e.g. Table `pageCount` (only when `paginated`).
+   */
   visibleWhen?: (props: Record<string, unknown>) => boolean;
   deprecated?: boolean;
 }

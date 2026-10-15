@@ -13,12 +13,15 @@ export type ImportSource = 'react' | typeof UI_EXTENSIONS | typeof UI_EXTENSIONS
 
 /** Collects named imports per module (values and types separately). */
 export class ImportSet {
-  private readonly values = new Map<ImportSource, Set<string>>();
+  /** Imported name -> local identifier (differs when the import is aliased). */
+  private readonly values = new Map<ImportSource, Map<string, string>>();
   private readonly types = new Map<ImportSource, Set<string>>();
 
-  add(source: ImportSource, name: string): void {
-    if (!this.values.has(source)) this.values.set(source, new Set());
-    this.values.get(source)!.add(name);
+  /** Imports `name` from `source` as `local` (defaults to the name itself). Idempotent. */
+  add(source: ImportSource, name: string, local = name): void {
+    if (!this.values.has(source)) this.values.set(source, new Map());
+    const names = this.values.get(source)!;
+    if (!names.has(name)) names.set(name, local);
   }
 
   addType(source: ImportSource, name: string): void {
@@ -30,10 +33,15 @@ export class ImportSet {
     return this.values.get(source)?.has(name) ?? false;
   }
 
-  /** Every imported value name (used to avoid identifier collisions). */
+  /** The local identifier of an imported value, or undefined when it is not imported. */
+  localName(source: ImportSource, name: string): string | undefined {
+    return this.values.get(source)?.get(name);
+  }
+
+  /** Every local identifier of imported values (used to avoid identifier collisions). */
   allValueNames(): Set<string> {
     const out = new Set<string>();
-    for (const names of this.values.values()) names.forEach((n) => out.add(n));
+    for (const names of this.values.values()) names.forEach((local) => out.add(local));
     return out;
   }
 
@@ -43,7 +51,13 @@ export class ImportSet {
     const lines: string[] = [];
     for (const source of order) {
       const values = this.values.get(source);
-      if (values?.size) lines.push(...printImport(sortNames([...values]), source, false));
+      if (values?.size) {
+        const specifiers = sortNames([...values.keys()]).map((name) => {
+          const local = values.get(name)!;
+          return local === name ? name : `${name} as ${local}`;
+        });
+        lines.push(...printImport(specifiers, source, false));
+      }
       const types = this.types.get(source);
       if (types?.size) lines.push(...printImport(sortNames([...types]), source, true));
     }
@@ -101,6 +115,7 @@ export class NameAllocator {
   }
 }
 
+/** Module-level helpers generated code can use (declared once, only when used). */
 export type HelperName = 'toText' | 'asArray';
 
 /** How a data source is exposed in generated code. */
@@ -122,7 +137,6 @@ export interface GenContext {
   /** CRM record locations get CrmHostActions (refreshObjectProperties, ...). */
   isCrm: boolean;
   imports: ImportSet;
-  helpers: Set<HelperName>;
   names: NameAllocator;
   /** Valid state variables by name. */
   states: Map<string, StateVar>;
@@ -137,6 +151,16 @@ export interface GenContext {
   userIdentifiers: Set<string>;
   /** The generated code uses `any` (adds an eslint-disable comment for no-explicit-any). */
   usesAny: boolean;
+  /** State setters the generated code calls (unused setters are not destructured). */
+  usedSetters: Set<string>;
+  /**
+   * Names the document declares inside the component (state, setters, data source names, repeat
+   * variables, handler params). Module-level identifiers with these names (imports, helpers)
+   * would be shadowed, so they are referenced through an alias instead.
+   */
+  shadowed: Set<string>;
+  /** Module-level helpers that are used, with their local names (renamed when shadowed). */
+  helperNames: Map<HelperName, string>;
 }
 
 export const CRM_LOCATIONS: ReadonlySet<ExtensionLocation> = new Set([
@@ -148,6 +172,13 @@ export const CRM_LOCATIONS: ReadonlySet<ExtensionLocation> = new Set([
 
 export function setterName(stateName: string): string {
   return `set${stateName.charAt(0).toUpperCase()}${stateName.slice(1)}`;
+}
+
+/** The setter of a user state variable, recorded as used (see GenContext.usedSetters). */
+export function stateSetter(ctx: GenContext, stateName: string): string {
+  const name = setterName(stateName);
+  ctx.usedSetters.add(name);
+  return name;
 }
 
 export function capitalize(name: string): string {
@@ -186,11 +217,34 @@ export const BASE_RESERVED = [
   'Date',
 ];
 
+/** Parameters of every extension component; document names cannot redeclare them. */
+export const COMPONENT_PARAMS: readonly string[] = ['context', 'actions'];
+
+/**
+ * Names declared at component scope by the valid state variables (value + setter), plus the
+ * component parameters. Used to drop document entries that would redeclare a name.
+ */
+export function declaredStateNames(states: Iterable<StateVar>): Set<string> {
+  const declared = new Set<string>(COMPONENT_PARAMS);
+  for (const s of states) {
+    declared.add(s.name);
+    declared.add(setterName(s.name));
+  }
+  return declared;
+}
+
 export function createContext(project: Project, ext: Extension): GenContext {
   const location = extensionLocation(ext);
   const states = new Map<string, StateVar>();
+  const declared = new Set<string>(COMPONENT_PARAMS);
   for (const s of Array.isArray(ext.state) ? ext.state : []) {
-    if (s && isIdentifierName(s.name) && !states.has(s.name)) states.set(s.name, s);
+    if (!s || !isIdentifierName(s.name)) continue;
+    // Skip entries that would redeclare a name (duplicates, `count` + `setCount`, `context`).
+    const setter = setterName(s.name);
+    if (declared.has(s.name) || declared.has(setter)) continue;
+    declared.add(s.name);
+    declared.add(setter);
+    states.set(s.name, s);
   }
   const functions = new Map((Array.isArray(project.functions) ? project.functions : []).map((f) => [f.id, f]));
   return {
@@ -199,7 +253,6 @@ export function createContext(project: Project, ext: Extension): GenContext {
     location,
     isCrm: CRM_LOCATIONS.has(location),
     imports: new ImportSet(),
-    helpers: new Set(),
     names: new NameAllocator(BASE_RESERVED),
     states,
     dataSources: new Map(),
@@ -208,7 +261,41 @@ export function createContext(project: Project, ext: Extension): GenContext {
     referenced: new Set(),
     userIdentifiers: new Set(),
     usesAny: false,
+    usedSetters: new Set(),
+    shadowed: new Set(),
+    helperNames: new Map(),
   };
+}
+
+/** Base for an alias of a shadowed import: `TextComponent`, `useCrmSearchHook`, `hubspotApi`. */
+function aliasBase(name: string): string {
+  if (/^use[A-Z]/.test(name)) return `${name}Hook`;
+  if (/^[A-Z]/.test(name)) return `${name}Component`;
+  return `${name}Api`;
+}
+
+/**
+ * Imports `name` from `source` and returns the identifier generated code must use for it: the
+ * name itself, or a unique alias (`import { Text as TextComponent }`) when the document declares
+ * the same name inside the component.
+ */
+export function importValue(ctx: GenContext, source: ImportSource, name: string): string {
+  const existing = ctx.imports.localName(source, name);
+  if (existing) return existing;
+  const local = ctx.shadowed.has(name) ? ctx.names.allocate(aliasBase(name)) : name;
+  ctx.imports.add(source, name, local);
+  return local;
+}
+
+/** Marks a module-level helper as used and returns its (possibly renamed) identifier. */
+export function useHelper(ctx: GenContext, helper: HelperName): string {
+  let local = ctx.helperNames.get(helper);
+  if (!local) {
+    // The default name is reserved up front (BASE_RESERVED), so allocate() yields e.g. `toText2`.
+    local = ctx.shadowed.has(helper) ? ctx.names.allocate(helper) : helper;
+    ctx.helperNames.set(helper, local);
+  }
+  return local;
 }
 
 /** Records the free identifiers of a user code fragment (for `context` / `actions` / imports). */

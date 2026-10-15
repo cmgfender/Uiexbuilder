@@ -549,11 +549,11 @@ describe('Runtime — lifecycle', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Interactions with real registry components (written concurrently by other modules).
+// Interactions with real registry components.
 // ---------------------------------------------------------------------------
 
 describe('Runtime — component interactions', () => {
-  it.skipIf(!getComponent('Input'))('two-way binding updates the bound state', async () => {
+  it('two-way binding updates the bound state', async () => {
     const { project, ext } = makeDoc(
       [
         { type: 'Input', name: 'nameInput', props: { name: 'name', label: 'Name' }, binding: { state: 'name' } },
@@ -576,7 +576,7 @@ describe('Runtime — component interactions', () => {
     expect(input).toHaveValue('Linus');
   });
 
-  it.skipIf(!getComponent('Button'))('runs onClick actions of a button in preview mode only', async () => {
+  it('runs onClick actions of a button in preview mode only', async () => {
     const { project, ext } = makeDoc(
       [
         {
@@ -598,7 +598,7 @@ describe('Runtime — component interactions', () => {
     await waitFor(() => expect(r.api.stateValues.count).toBe(1));
   });
 
-  it.skipIf(!getComponent('Button') || !getComponent('Modal'))(
+  it(
     'opens a Modal overlay from its trigger and closes it with closeOverlay',
     async () => {
       const modal = getComponent('Modal')!.create!();
@@ -626,7 +626,7 @@ describe('Runtime — component interactions', () => {
     },
   );
 
-  it.skipIf(!getComponent('Button') || !getComponent('Modal'))(
+  it(
     'gives overlays the repeat scope of their trigger and runs the overlay onClose handler',
     async () => {
       const { project, ext } = makeDoc(
@@ -663,7 +663,7 @@ describe('Runtime — component interactions', () => {
     },
   );
 
-  it.skipIf(!getComponent('Button') || !getComponent('Tooltip'))('shows a Tooltip bubble on hover', async () => {
+  it('shows a Tooltip bubble on hover', async () => {
     const { project, ext } = makeDoc([
       {
         type: 'Button',
@@ -690,7 +690,7 @@ describe('Runtime — component interactions', () => {
     expect(r.container.querySelector('.hsp-rt-tooltip')).toBeNull();
   });
 
-  it.skipIf(!getComponent('Button') || !getComponent('Tooltip'))('falls back to a title attribute without PreviewHost', () => {
+  it('falls back to a title attribute without PreviewHost', () => {
     const { project, ext } = makeDoc([
       { type: 'Button', name: 'help', text: 'Help', slots: { overlay: [{ type: 'Tooltip', text: 'Tip text' }] } },
     ]);

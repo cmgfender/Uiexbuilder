@@ -104,17 +104,24 @@ export function printNumber(value: number): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * Characters that cannot appear verbatim in JSX text: syntax (`{ } < >`), entities (`&`), line
+ * breaks / tabs (JSX collapses them) and quotes, which the exported project's eslint config
+ * (eslint-plugin-react recommended: react/no-unescaped-entities) rejects.
+ */
+const JSX_TEXT_UNSAFE_RE = /[{}<>&'"\r\n\t\u2028\u2029]/;
+
+/**
  * Text that can be emitted verbatim as JSX text: no JSX-special characters, no line breaks and no
  * leading/trailing whitespace (which JSX would trim when children sit on their own line).
  */
 export function isJsxTextSafe(text: string): boolean {
   if (text === '' || text.trim() !== text) return false;
-  return !/[{}<>&\r\n\t\u2028\u2029]/.test(text);
+  return !JSX_TEXT_UNSAFE_RE.test(text);
 }
 
 /** Like isJsxTextSafe, but edge whitespace is allowed (used for text between expressions). */
 export function isJsxTextFragmentSafe(text: string): boolean {
-  return !/[{}<>&\r\n\t\u2028\u2029]/.test(text);
+  return !JSX_TEXT_UNSAFE_RE.test(text);
 }
 
 /** `"value"` when the string can be a JSX attribute string, otherwise null (use `{'value'}`). */

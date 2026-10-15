@@ -9,7 +9,6 @@
  * Projects are written under node_modules/.tmp so `@hubspot/ui-extensions` and `react` resolve
  * from the repository's node_modules.
  */
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
 import { build } from 'esbuild';
@@ -17,11 +16,9 @@ import * as prettier from 'prettier';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { createProject } from '../model/factory';
 import { ALL_COMPONENTS } from '../registry';
-import { createFeatureProject, createKitchenSinkProject } from './fixtures';
+import { formatDiagnostics, scratchDir, typecheck, writeFiles } from '../test/typecheck';
+import { createEdgeCaseProject, createFeatureProject, createKitchenSinkProject } from './fixtures';
 import { formatSource, generateProjectFiles, type GeneratedFile } from './index';
-
-const REPO_ROOT = process.cwd();
-const OUT_DIR = path.join(REPO_ROOT, 'node_modules', '.tmp', 'codegen-check');
 
 interface CaseOutput {
   name: string;
@@ -30,14 +27,11 @@ interface CaseOutput {
 }
 
 const cases: CaseOutput[] = [];
+let outDir = '';
 
 function writeCase(name: string, files: GeneratedFile[]): CaseOutput {
-  const dir = path.join(OUT_DIR, name);
-  for (const file of files) {
-    const target = path.join(dir, file.path);
-    mkdirSync(path.dirname(target), { recursive: true });
-    writeFileSync(target, file.contents);
-  }
+  const dir = path.join(outDir, name);
+  writeFiles(dir, files);
   return { name, dir, files };
 }
 
@@ -45,19 +39,12 @@ function tsxPaths(c: CaseOutput): string[] {
   return c.files.filter((f) => f.path.endsWith('.tsx')).map((f) => path.join(c.dir, f.path));
 }
 
-function formatDiagnostics(diagnostics: readonly ts.Diagnostic[]): string {
-  return ts.formatDiagnostics(diagnostics, {
-    getCanonicalFileName: (f) => f,
-    getCurrentDirectory: () => REPO_ROOT,
-    getNewLine: () => '\n',
-  });
-}
-
 beforeAll(() => {
-  rmSync(OUT_DIR, { recursive: true, force: true });
+  outDir = scratchDir('codegen-check');
   cases.push(writeCase('default', generateProjectFiles(createProject())));
   cases.push(writeCase('features', generateProjectFiles(createFeatureProject())));
   cases.push(writeCase('kitchen-sink', generateProjectFiles(createKitchenSinkProject())));
+  cases.push(writeCase('edge-cases', generateProjectFiles(createEdgeCaseProject())));
 });
 
 describe('generated projects', () => {
@@ -69,24 +56,7 @@ describe('generated projects', () => {
   });
 
   it('type-check with zero diagnostics (strict, bundler resolution)', () => {
-    const rootNames = cases.flatMap(tsxPaths);
-    const program = ts.createProgram({
-      rootNames,
-      options: {
-        strict: true,
-        jsx: ts.JsxEmit.ReactJSX,
-        module: ts.ModuleKind.ESNext,
-        moduleResolution: ts.ModuleResolutionKind.Bundler,
-        target: ts.ScriptTarget.ES2022,
-        allowImportingTsExtensions: true,
-        isolatedModules: true,
-        noEmit: true,
-        skipLibCheck: true,
-        types: [],
-      },
-    });
-    const diagnostics = ts.getPreEmitDiagnostics(program);
-    expect(formatDiagnostics(diagnostics)).toBe('');
+    expect(formatDiagnostics(typecheck(cases.flatMap(tsxPaths)))).toBe('');
   });
 
   it("type-check with each UI directory's generated tsconfig.json (Node16)", () => {
@@ -102,8 +72,8 @@ describe('generated projects', () => {
           },
         });
         expect(parsed).toBeDefined();
-        const program = ts.createProgram({ rootNames: parsed!.fileNames, options: parsed!.options });
-        expect(`${c.name}/${config.path}\n${formatDiagnostics(ts.getPreEmitDiagnostics(program))}`).toBe(
+        const diagnostics = typecheck(parsed!.fileNames, parsed!.options);
+        expect(`${c.name}/${config.path}\n${formatDiagnostics(diagnostics)}`).toBe(
           `${c.name}/${config.path}\n`,
         );
       }
@@ -124,7 +94,8 @@ describe('generated projects', () => {
           external: ['react', 'react/*', '@hubspot/*'],
         });
         expect(result.errors).toEqual([]);
-        expect(result.outputFiles[0].text).toContain('hubspot.extend');
+        // `hubspot` may be imported under an alias when the document shadows it.
+        expect(result.outputFiles[0].text).toMatch(/\bhubspot(?:Api\d*)?\.extend\(/);
       }
     }
   });

@@ -46,7 +46,9 @@ describe('propertyKey', () => {
 describe('JSX escaping', () => {
   it('detects text that can be emitted verbatim', () => {
     expect(isJsxTextSafe('Hello world')).toBe(true);
-    expect(isJsxTextSafe("It's \"fine\"")).toBe(true);
+    // Quotes are valid JSX but rejected by react/no-unescaped-entities in the exported lint config.
+    expect(isJsxTextSafe("It's")).toBe(false);
+    expect(isJsxTextSafe('say "hi"')).toBe(false);
     expect(isJsxTextSafe('a {b}')).toBe(false);
     expect(isJsxTextSafe('a < b')).toBe(false);
     expect(isJsxTextSafe('Tom & Jerry')).toBe(false);

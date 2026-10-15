@@ -3,25 +3,20 @@
  *  1. no template            -> the plain string
  *  2. exactly one segment    -> the raw value of the expression       (value semantics)
  *  3. text mixed with segments -> a string, each segment through toText()
- *  4. literal arrays/objects -> rules 1-3 applied to every string at any depth
+ *  4. literal arrays/objects -> rules 1-3 applied to every string at any depth (see
+ *                               JsxRenderer.typedLiteral, which also casts by the prop's type)
  *  5. text children          -> always a string (a single segment still goes through toText)
  */
 import { hasTemplate, parseTemplate, singleExpression } from '../model/template';
-import type { JsonValue } from '../model/types';
 import type { GenContext } from './context';
-import { noteUserCode } from './context';
+import { noteUserCode, useHelper } from './context';
 import {
   asOperand,
   escapeTemplateLiteralText,
   isJsxTextFragmentSafe,
   isJsxTextSafe,
-  jsArray,
-  jsCode,
-  jsObject,
   normalizeExpression,
-  printNumber,
   quoteString,
-  type JsNode,
 } from './printer';
 
 /** Coerces a document field that should be a string (documents may be hand-edited). */
@@ -39,8 +34,7 @@ export function userExpr(ctx: GenContext, code: string): string {
 }
 
 function toTextCall(ctx: GenContext, code: string): string {
-  ctx.helpers.add('toText');
-  return `toText(${asOperand(userExpr(ctx, code))})`;
+  return `${useHelper(ctx, 'toText')}(${asOperand(userExpr(ctx, code))})`;
 }
 
 /** Template literal for a mixed template (rule 3). */
@@ -89,24 +83,6 @@ export function templateText(ctx: GenContext, value: string): string {
   const only = parts[0];
   if (parts.length === 1 && only.kind === 'expr') return toTextCall(ctx, only.code);
   return templateLiteral(ctx, str);
-}
-
-/** A literal JSON value with template strings at any depth (rule 4) as a JsNode. */
-export function literalNode(ctx: GenContext, value: JsonValue): JsNode {
-  if (typeof value === 'string') return jsCode(asOperand(templateValue(ctx, value).code));
-  if (typeof value === 'number') return jsCode(printNumber(value));
-  if (typeof value === 'boolean') return jsCode(String(value));
-  if (value === null) return jsCode('null');
-  if (Array.isArray(value)) return jsArray(value.map((v) => literalNode(ctx, v)));
-  return jsObject(Object.entries(value).map(([k, v]) => [k, literalNode(ctx, v)]));
-}
-
-/** Whether a literal JSON value contains a template string somewhere. */
-export function literalHasTemplate(value: JsonValue): boolean {
-  if (typeof value === 'string') return hasTemplate(value);
-  if (Array.isArray(value)) return value.some(literalHasTemplate);
-  if (value && typeof value === 'object') return Object.values(value).some(literalHasTemplate);
-  return false;
 }
 
 /**

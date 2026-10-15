@@ -68,7 +68,20 @@ event's params (e.g. `value`, `event`). Custom code additionally gets `actions`,
   (body/footer); TableHeader ⊂ TableRow (head); Tab ⊂ Tabs; StatisticsItem ⊂ Statistics;
   DescriptionListItem ⊂ DescriptionList; ModalBody/ModalFooter ⊂ Modal; PanelBody/PanelSection/
   PanelFooter ⊂ Panel; Dropdown.ButtonItem ⊂ Dropdown; ...).
-* Inputs declare `valueBinding` (value prop, change event, state type, initial value).
+* Inputs declare `valueBinding` (value prop, change event, state type, initial value). Other
+  controlled components may too (Tabs `selected`, Table `page`, TableHeader `sortDirection`,
+  StepIndicator `currentStep`); runtime and codegen treat bindings generically (inject the bound
+  prop, set state from the event's first param).
+* Discriminated unions: `PropDef.requiredWhen(props)` marks a prop required only in some variants
+  (Table `pageCount` when `paginated`); `EventDef.requiredWhen(props)` marks a handler that exists
+  only in such variants — codegen emits a no-op handler when it passes and nothing is configured.
+  `PropDef.visibleWhen(props)` hides a prop in the inspector (expression props arrive as
+  `{ $expr }` objects); codegen omits hidden props and bindings to them, because TypeScript
+  rejects them in the other variants.
+* Constrained values: `options` props list the extra per-option keys the HubSpot option type
+  accepts in `optionFields` (Select/MultiSelect: none; ToggleGroup: description, initialIsChecked,
+  readOnly); a `stringList` with `options` only accepts those items (chart `colorList`:
+  `ChartColor[]`).
 * CRM components set `locations` to where they are available (see
   `extension-points.synced.d.ts`: `crm.record.tab`, `crm.preview`, `helpdesk.sidebar` get all CRM
   components; `crm.record.sidebar` only CrmActionButton/CrmActionLink; settings/home none).
@@ -87,7 +100,19 @@ event's params (e.g. `value`, `event`). Custom code additionally gets `actions`,
 * Overlay components (Modal/Panel) render differently for `p.overlay.presentation`:
   `'inline'` = static card-like block for the designer storyboard; `'open'` = absolutely
   positioned within the nearest `.hsp-overlay-host` container (modal centered with backdrop, panel
-  sliding from the right), with a close button calling `p.overlay.close()`.
+  sliding from the right), with a close button calling `p.overlay.close()`. While open they fire
+  their own `onOpen` / `onClose` through `trigger`; the runtime never fires these itself.
+* `hubspot.css` disables pointer events on `<a>` / `<button>` in design mode, so clickable
+  previews render their design-mode root as a `<span>` (selection clicks must reach the root).
+
+### Conformance (`src/registry/conformance.test.ts`)
+Mechanically checks the registry against the installed package: every exported component (and
+compound member such as `Dropdown.ButtonItem`) is registered unless allowlisted with a reason
+(deprecated `Card`, `Stack`, `Textarea`); for every component a card is generated with its
+`create()` template, a required-props-only node, one node per prop sample (every enum option, and
+so on), every event, every slot content and a value binding, and type-checked strictly; every
+template renders through the runtime in both modes; placement rules agree with `parents`,
+`accepts` and slots. A failure means the registry (or codegen) is wrong, not the test.
 
 ## 3. Placement rules (`src/model/rules.ts`)
 `canAccept(ext, parentId, childType, slot?, movingId?)` combines `children.mode/accepts`,
@@ -103,8 +128,13 @@ Hooks: `useActiveExtension()`, `useSelectedNode()`, `selectActiveExtension(state
 ## 5. Runtime (`src/runtime`) — see `src/runtime/types.ts`
 `RuntimeProvider`, `useRuntime`, `NodeRenderer`, `ExtensionRenderer`, `PreviewHost`,
 `DropPlaceholder`; expression helpers in `expr.ts`. DOM contract for the canvas:
-`data-node-id`, `data-node-type`, `data-uiex-clone`, `data-uiex-cond`,
-`data-drop-placeholder-for`. The overlay host element has class `hsp-overlay-host`.
+`data-node-id`, `data-node-type`, `data-uiex-clone`, `data-uiex-cond`, `data-uiex-repeat-empty`
+(design-mode stand-in for a repeat over an empty array), `data-drop-placeholder-for` (+
+`data-drop-slot`); a node whose preview throws renders a `.hsp-rt-error` box that keeps its
+`data-node-id`. The overlay host element has class `hsp-overlay-host` (must be inside a
+`position: relative` card frame). In design mode the canvas may dispatch a bubbling
+`CustomEvent(UIEX_REVEAL_EVENT)` (`'uiex:reveal'`, exported by `registry/components/layout`) on a
+selected node's element so enclosing Tabs / Accordions reveal it.
 
 ## 6. Codegen (`src/codegen`)
 `generateExtensionSource(project, ext)`, `generateProjectFiles(project)`,
@@ -115,7 +145,9 @@ components and `useCrmProperties`/`useAssociations`.
 
 ## 7. Conventions
 * TypeScript strict, no `any` leaks into public APIs (internal `any` in previews is fine).
-* Tests: Vitest (`*.test.ts(x)` next to the code), Playwright e2e in `/e2e`.
+* Tests: Vitest (`*.test.ts(x)` next to the code), Playwright e2e in `/e2e`. Vitest globals are
+  off; `src/test/setup.ts` registers Testing Library's `cleanup` after each test. Generated code is
+  type-checked with the helpers in `src/test/typecheck.ts`.
 * Builder chrome uses `src/ui` primitives and `ub-` CSS classes (`src/styles/app.css`).
 * Don't edit files owned by another module unless the task says so; if a contract change is truly
   needed, make the smallest backwards-compatible addition and document it here.

@@ -429,6 +429,103 @@ export function createFeatureProject(): Project {
 }
 
 // ---------------------------------------------------------------------------
+// Edge cases
+// ---------------------------------------------------------------------------
+
+/**
+ * Documents that are valid but awkward to generate: names that shadow imports and helpers,
+ * entries that would redeclare a name, typed state inside nested literal props, repeat variables
+ * shadowing outer names and event params, conditional / repeated overlays and quoted text.
+ */
+export function createEdgeCaseProject(): Project {
+  stepCounter = 0;
+  const project = createProject('Edge Cases');
+  project.functions = [{ ...createAppFunction([], 'echo'), id: 'f_echo', uid: 'echo' }];
+  const card = createExtension({
+    name: 'Edge Card',
+    content: [
+      // Document names equal to imports (`Text`, `Button`, `logger`, `hubspot`) and helpers.
+      { type: 'Text', text: "Don't {{ Text }} {{ logger }} {{ toText }} {{ contact }} {{ count }}" },
+      { type: 'Heading', text: 'Say "hi"' },
+      {
+        type: 'Flex',
+        repeat: { items: 'asArray', itemName: 'Button', indexName: 'hubspot' },
+        children: [
+          {
+            type: 'Button',
+            text: '{{ Button.name }} #{{ hubspot }}',
+            events: {
+              onClick: [
+                s({ type: 'log', level: 'info', message: 'Clicked {{ Button.name }}' }),
+                s({ type: 'fetch', url: 'https://api.example.com/items', method: 'GET', resultState: 'useCrmSearch' }),
+                s({ type: 'runFunction', functionId: 'f_echo', parameters: '{ index: hubspot }' }),
+                s({ type: 'setState', state: 'count', value: 'count + 1' }),
+              ],
+            },
+          },
+          // Repeat variables shadowing outer repeat variables and an event param (`value`).
+          {
+            type: 'Input',
+            repeat: { items: 'Button.fields', itemName: 'value', indexName: 'hubspot' },
+            props: { label: '{{ value.label }}', name: 'field' },
+            events: { onChange: [s({ type: 'setState', state: 'count', value: 'value.length + hubspot' })] },
+          },
+        ],
+      },
+      // Typed state in nested literal props (object fields, options, dates).
+      { type: 'Text', props: { format: { fontWeight: '{{ weight }}', italic: '{{ count }}' } }, text: 'Nested' },
+      {
+        type: 'Select',
+        props: { label: 'Pick', name: 'pick', options: [{ label: '{{ count }}', value: '{{ count }}' }, { label: 'B', value: '{{ weight }}' }] },
+      },
+      { type: 'DateInput', props: { label: 'Date', name: 'date', value: { year: '{{ weight }}', month: '{{ count }}', date: 1 } } },
+      // Conditional overlay.
+      {
+        type: 'Button',
+        text: 'Open',
+        slots: {
+          overlay: [
+            {
+              type: 'Modal',
+              condition: 'count > 0',
+              props: { id: 'edge-modal', title: 'Edge' },
+              children: [
+                {
+                  type: 'ModalBody',
+                  children: [{ type: 'Button', text: 'Close', events: { onClick: [s({ type: 'closeOverlay', overlayNodeId: '@edge-modal' })] } }],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  });
+  card.state = [
+    state('Text', 'string', 'text'),
+    state('logger', 'string', 'log'),
+    state('toText', 'string', 'converted'),
+    state('asArray', 'array', [{ name: 'A', fields: [{ label: 'One' }] }]),
+    state('count', 'number', 0),
+    state('weight', 'string', 'bold'),
+    state('useCrmSearch', 'any', null),
+    state('contact', 'string', ''),
+    // Would redeclare names: skipped by codegen (validation reports them).
+    state('setCount', 'number', 1),
+    state('count', 'string', 'duplicate'),
+    state('context', 'string', 'shadow'),
+  ];
+  card.dataSources = [
+    // Collides with the `contact` state: skipped.
+    { id: 'ds_contact', kind: 'crmProperties', name: 'contact', properties: ['email'] },
+    // Shadows React's useState (imported under an alias).
+    { id: 'ds_use_state', kind: 'fetch', name: 'useState', url: 'https://api.example.com/state', method: 'GET', runOnMount: true },
+  ];
+  project.extensions = [card];
+  return project;
+}
+
+// ---------------------------------------------------------------------------
 // Kitchen sink
 // ---------------------------------------------------------------------------
 
@@ -459,8 +556,11 @@ function withEvents(def: ComponentDef, tpl: NodeTemplate, states: StateVar[]): N
   return out;
 }
 
-/** Wraps a template so it sits in a valid parent (parents chain, overlay slots). */
-function placeTemplate(def: ComponentDef, tpl: NodeTemplate, depth = 0): NodeTemplate {
+/**
+ * Wraps a template so it sits in a valid parent: inside its first listed parent (recursively), or
+ * in the overlay slot of the first root-level trigger that accepts it (overlays, slot-only types).
+ */
+export function placeTemplate(def: ComponentDef, tpl: NodeTemplate, depth = 0): NodeTemplate {
   if (depth > 8) return tpl;
   if (def.overlay || def.slotOnly) {
     const trigger = ALL_COMPONENTS.find((d) => d.slots?.some((slot) => slot.accepts.includes(def.type)) && !d.parents?.length);

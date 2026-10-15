@@ -6,13 +6,13 @@
  * break onto their own lines with 2-space indentation.
  */
 import { getComponent } from '../registry';
-import type { ComponentDef, EventDef, PropDef } from '../registry/types';
+import type { ComponentDef, EventDef, PropDef, PropType } from '../registry/types';
 import type { ActionStep, JsonValue, NodeId, PropValue, UINode } from '../model/types';
 import { isExpr, ROOT_TYPE } from '../model/types';
 import { toPascalCase } from '../model/ids';
 import { collectStepCode, emitSteps, stepsNeedAsync, type HandlerScope } from './actions';
 import type { GenContext, NameAllocator } from './context';
-import { setterName } from './context';
+import { importValue, stateSetter, useHelper } from './context';
 import {
   asConditionalTest,
   asOperand,
@@ -21,12 +21,17 @@ import {
   indentLines,
   isIdentifierName,
   isJsxAttributeName,
+  jsArray,
+  jsCode,
+  jsObject,
   jsxAttributeString,
   PRINT_WIDTH,
   printJs,
+  printNumber,
   scanCode,
+  type JsNode,
 } from './printer';
-import { asString, literalNode, templateValue, textChildren, userExpr } from './templates';
+import { asString, templateValue, textChildren, userExpr } from './templates';
 
 /** A handler declared in the component body. */
 export interface HandlerDecl {
@@ -116,10 +121,9 @@ export class JsxRenderer {
       const used = (name: string) => mentions([...element, ...(body ?? [])], name);
       const itemParam = used(itemName) ? itemName : `_${itemName}`;
       const indexParam = used(indexName) ? `, ${indexName}: number` : '';
-      this.ctx.helpers.add('asArray');
       this.ctx.usesAny = true;
       const items = asOperand(userExpr(this.ctx, node.repeat.items));
-      const head = `asArray(${items}).map((${itemParam}: any${indexParam}) =>`;
+      const head = `${useHelper(this.ctx, 'asArray')}(${items}).map((${itemParam}: any${indexParam}) =>`;
       if (body) return { kind: 'expr', lines: [head, ...indentLines(body), ')'] };
       return { kind: 'expr', lines: [`${head} (`, ...indentLines(element), '))'] };
     }
@@ -142,8 +146,11 @@ export class JsxRenderer {
   }
 
   private renderElement(node: UINode, def: ComponentDef, scope: RepeatBinding[], col: number, key?: string): string[] {
-    const tag = def.type;
-    this.ctx.imports.add(def.importFrom, def.importName ?? def.type.split('.')[0]);
+    // Compound components (`Dropdown.ButtonItem`) import their namespace (`Dropdown`) once.
+    const importName = def.importName ?? def.type.split('.')[0];
+    const local = importValue(this.ctx, def.importFrom, importName);
+    const inNamespace = def.type === importName || def.type.startsWith(`${importName}.`);
+    const tag = inNamespace ? local + def.type.slice(importName.length) : def.type;
     const attrCol = col + INDENT.length;
     const attrs: Attr[] = [];
     if (key !== undefined) attrs.push({ name: 'key', value: [`{${key}}`] });
@@ -209,7 +216,8 @@ export class JsxRenderer {
       /^on[A-Z]/.test(name) ||
       slotNames.has(name) ||
       (binding !== null && name === binding.prop) ||
-      !isJsxAttributeName(name);
+      !isJsxAttributeName(name) ||
+      isHiddenProp(def, node, name);
 
     const known = def.props.map((p) => p.name);
     const names = [
@@ -247,10 +255,30 @@ export class JsxRenderer {
     if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
       return { name, value: [`{${value === null ? 'null' : String(value)}}`] };
     }
-    const lines = printJs(literalNode(this.ctx, value as JsonValue), attrCol, attrCol + name.length + 2, 1);
+    const target: ValueType = propDef ? propDef.type : { kind: 'loose' };
+    const lines = printJs(this.typedLiteral(value as JsonValue, target), attrCol, attrCol + name.length + 2, 1);
     lines[0] = `{${lines[0]}`;
     lines[lines.length - 1] += '}';
     return { name, value: lines };
+  }
+
+  /**
+   * A literal array / object prop value with template strings at any depth (template rule 4).
+   * Template values nested in positions whose type the registry describes (object fields such as
+   * Text `format.fontWeight`, option labels / values, string lists) are cast like top-level props
+   * when their static type cannot fit; positions of unknown shape (JSON props) are left as is.
+   */
+  private typedLiteral(value: JsonValue, target: ValueType): JsNode {
+    if (typeof value === 'string') {
+      const t = templateValue(this.ctx, value);
+      if (t.origin === 'literal') return jsCode(t.code);
+      return jsCode(asOperand(this.castTo(t.code, t.origin, target)));
+    }
+    if (typeof value === 'number') return jsCode(printNumber(value));
+    if (typeof value === 'boolean') return jsCode(String(value));
+    if (value === null) return jsCode('null');
+    if (Array.isArray(value)) return jsArray(value.map((v) => this.typedLiteral(v, elementType(target))));
+    return jsObject(Object.entries(value).map(([k, v]) => [k, this.typedLiteral(v, fieldType(target, k))]));
   }
 
   /**
@@ -261,8 +289,12 @@ export class JsxRenderer {
    * props) are cast whenever the value has such a known primitive type.
    */
   private castIfNeeded(code: string, origin: 'expr' | 'interpolated' | 'literal', propDef: PropDef | undefined): string {
+    return this.castTo(code, origin, propDef ? propDef.type : { kind: 'unknown' });
+  }
+
+  private castTo(code: string, origin: 'expr' | 'interpolated' | 'literal', target: ValueType): string {
     if (origin === 'literal') return code;
-    let staticType: 'string' | 'number' | 'boolean' | 'nullable' | null = null;
+    let staticType: StaticType | null = null;
     if (origin === 'interpolated') staticType = 'string';
     else {
       const state = this.ctx.states.get(code);
@@ -270,7 +302,7 @@ export class JsxRenderer {
         staticType = state.initial === null ? 'nullable' : state.type;
       }
     }
-    if (staticType === null || (propDef && propAccepts(propDef, staticType))) return code;
+    if (staticType === null || typeAccepts(target, staticType)) return code;
     this.ctx.usesAny = true;
     return `${code} as any`;
   }
@@ -283,6 +315,9 @@ export class JsxRenderer {
     if (!node.binding || !def.valueBinding) return null;
     const state = this.ctx.states.get(node.binding.state);
     if (!state) return null;
+    // A binding to a prop the current union variant does not have (e.g. Table `page` while not
+    // paginated) is inactive, like the hidden prop itself.
+    if (isHiddenProp(def, node, def.valueBinding.prop)) return null;
     return { prop: def.valueBinding.prop, event: def.valueBinding.event, state: state.name };
   }
 
@@ -309,7 +344,7 @@ export class JsxRenderer {
       if (steps.length === 0 && bound !== null) {
         const p = params[0] ?? 'value';
         this.ctx.usesAny = true;
-        attrs.push({ name: event.name, value: [`{(${p}: any) => ${setterName(bound)}(${p})}`] });
+        attrs.push({ name: event.name, value: [`{(${p}: any) => ${stateSetter(this.ctx, bound)}(${p})}`] });
         continue;
       }
       attrs.push({ name: event.name, value: [this.namedHandler(node, def, event, params, steps, bound, scope)] });
@@ -347,7 +382,7 @@ export class JsxRenderer {
     const hs: HandlerScope = { ctx, local };
 
     const body = new CodeWriter();
-    if (bound !== null) body.line(`${setterName(bound)}(${params[0] ?? 'undefined'});`);
+    if (bound !== null) body.line(`${stateSetter(ctx, bound)}(${params[0] ?? 'undefined'});`);
     emitSteps(body, steps, hs);
 
     const declParams = [
@@ -403,6 +438,22 @@ export class JsxRenderer {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Whether a prop is hidden by its `visibleWhen` predicate given the node's props. The inspector
+ * hides such props because they belong to another variant of a discriminated union (e.g. Table
+ * `pageCount` without `paginated`, TableHeader `disabled` without sorting), where TypeScript
+ * rejects them, so codegen omits them too. Predicates see expression props as `{ $expr }` objects.
+ */
+function isHiddenProp(def: ComponentDef, node: UINode, name: string): boolean {
+  const propDef = def.props.find((p) => p.name === name);
+  if (!propDef?.visibleWhen) return false;
+  try {
+    return !propDef.visibleWhen(node.props as Record<string, unknown>);
+  } catch {
+    return false;
+  }
+}
+
 function wrapBraces(lines: string[]): string[] {
   if (lines.length === 1) return [`{${lines[0]}}`];
   return [`{${lines[0]}`, ...lines.slice(1, -1), `${lines[lines.length - 1]}}`];
@@ -451,11 +502,59 @@ function handlerBaseName(node: UINode, def: ComponentDef): string {
   return 'Component';
 }
 
-/** Whether a value whose static type is `t` fits the prop's TypeScript type. */
-function propAccepts(propDef: PropDef, t: 'string' | 'number' | 'boolean' | 'nullable'): boolean {
-  const type = propDef.type;
+/** Statically known type of generated code: a typed primitive state or an interpolated string. */
+type StaticType = 'string' | 'number' | 'boolean' | 'nullable';
+
+/**
+ * What a prop (or a position inside a literal prop value) accepts: a registry PropType, or
+ *  - 'scalar'  : string | number | boolean (Select / MultiSelect option values)
+ *  - 'loose'   : anything (JSON props; unknown keys) — never cast
+ *  - 'unknown' : a raw prop the registry does not describe — cast every known primitive type
+ */
+type ValueType = PropType | { kind: 'scalar' } | { kind: 'loose' } | { kind: 'unknown' };
+
+const LOOSE: ValueType = { kind: 'loose' };
+const STRING: ValueType = { kind: 'string' };
+const NUMBER: ValueType = { kind: 'number' };
+const BOOLEAN: ValueType = { kind: 'boolean' };
+
+/** Type of the elements of an array literal in a position of type `t`. */
+function elementType(t: ValueType): ValueType {
+  // Restricted string lists (e.g. ChartColor[]) hold enum items; others hold plain strings.
+  if (t.kind === 'stringList') return t.options ? { kind: 'enum', options: t.options } : STRING;
+  // An `options` array holds option objects; fieldType() resolves their keys.
+  if (t.kind === 'options') return t;
+  return LOOSE;
+}
+
+/** Type of the property `key` of an object literal in a position of type `t`. */
+function fieldType(t: ValueType, key: string): ValueType {
+  switch (t.kind) {
+    case 'object':
+      return t.fields.find((f) => f.name === key)?.type ?? LOOSE;
+    case 'options':
+      // HubSpot option types: { label: string; value: ...; description?: string } plus the
+      // ToggleGroup-only flags, whose option `value` is a string (Select / MultiSelect: scalar).
+      if (key === 'label' || key === 'description') return STRING;
+      if (key === 'initialIsChecked' || key === 'readOnly') return BOOLEAN;
+      if (key === 'value') return t.optionFields?.includes('initialIsChecked') ? STRING : { kind: 'scalar' };
+      return LOOSE;
+    case 'date':
+      return key === 'year' || key === 'month' || key === 'date' ? NUMBER : LOOSE;
+    case 'time':
+      return key === 'hours' || key === 'minutes' ? NUMBER : LOOSE;
+    default:
+      return LOOSE;
+  }
+}
+
+/** Whether a value whose static type is `t` fits the target type. */
+function typeAccepts(type: ValueType, t: StaticType): boolean {
+  if (type.kind === 'loose') return true;
   if (t === 'nullable') return false;
   switch (type.kind) {
+    case 'scalar':
+      return true;
     case 'string':
     case 'url':
     case 'href':

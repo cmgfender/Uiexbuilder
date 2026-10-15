@@ -8,7 +8,7 @@ import { getComponent } from '../registry';
 import type { ActionStep, FetchAction, RunFunctionAction } from '../model/types';
 import { isExpr } from '../model/types';
 import type { GenContext, NameAllocator } from './context';
-import { noteUserCode, setterName, UI_EXTENSIONS } from './context';
+import { importValue, noteUserCode, stateSetter, UI_EXTENSIONS } from './context';
 import {
   asOperand,
   CodeWriter,
@@ -124,12 +124,13 @@ function emitStep(w: CodeWriter, step: ActionStep, hs: HandlerScope): void {
         return;
       }
       const value = normalizeExpression(asString(step.value)) === '' ? 'undefined' : userExpr(ctx, step.value);
-      w.line(`${setterName(state.name)}(${asOperand(value)});`);
+      w.line(`${stateSetter(ctx, state.name)}(${asOperand(value)});`);
       return;
     }
     case 'addAlert': {
       const entries: Array<[string, JsNode]> = [['type', jsCode(quoteString(asString(step.alertType) || 'info'))]];
-      if (asString(step.title).trim() !== '') entries.push(['title', jsCode(templateText(ctx, step.title))]);
+      // Like the designer runtime: an empty title is omitted, anything else is passed through.
+      if (asString(step.title) !== '') entries.push(['title', jsCode(templateText(ctx, step.title))]);
       entries.push(['message', jsCode(templateText(ctx, step.message))]);
       writeCall(w, '', `${useActions(hs)}.addAlert`, [jsObject(entries)]);
       return;
@@ -178,9 +179,9 @@ function emitStep(w: CodeWriter, step: ActionStep, hs: HandlerScope): void {
       emitRunFunction(w, step, hs);
       return;
     case 'log': {
-      ctx.imports.add(UI_EXTENSIONS, 'logger');
+      const logger = importValue(ctx, UI_EXTENSIONS, 'logger');
       const level = ['info', 'warn', 'error', 'debug'].includes(step.level) ? step.level : 'info';
-      w.line(`logger.${level}(${asOperand(templateText(ctx, step.message))});`);
+      w.line(`${logger}.${level}(${asOperand(templateText(ctx, step.message))});`);
       return;
     }
     case 'if': {
@@ -229,7 +230,7 @@ function overlayIdCode(hs: HandlerScope, nodeId: string): string | null {
  */
 function emitFetch(w: CodeWriter, step: FetchAction, hs: HandlerScope): void {
   const { ctx } = hs;
-  ctx.imports.add(UI_EXTENSIONS, 'hubspot');
+  const hubspot = importValue(ctx, UI_EXTENSIONS, 'hubspot');
   let url = templateText(ctx, step.url);
   let body = normalizeExpression(asString(step.body)) !== '' ? userExpr(ctx, step.body!) : null;
   // The request is built inside the `try` block that declares `response`; if the request refers
@@ -250,7 +251,7 @@ function emitFetch(w: CodeWriter, step: FetchAction, hs: HandlerScope): void {
   if (body !== null) options.push(['body', jsCode(asOperand(body))]);
   const usesResponse = responseUsed(step.resultState, step.onSuccess, hs);
   w.block('try {', () => {
-    writeCall(w, `const ${res} = await `, 'hubspot.fetch', [jsCode(asOperand(url)), jsObject(options)]);
+    writeCall(w, `const ${res} = await `, `${hubspot}.fetch`, [jsCode(asOperand(url)), jsObject(options)]);
     w.block(`if (!${res}.ok) {`, () => {
       w.line(`throw new Error(\`Request failed with status \${${res}.status}\`);`);
     });
@@ -281,7 +282,7 @@ function emitRunFunction(w: CodeWriter, step: RunFunctionAction, hs: HandlerScop
     w.line('// Run function: the app function no longer exists.');
     return;
   }
-  ctx.imports.add(UI_EXTENSIONS, 'hubspot');
+  const hubspot = importValue(ctx, UI_EXTENSIONS, 'hubspot');
   let params = normalizeExpression(asString(step.parameters)) !== '' ? userExpr(ctx, step.parameters!) : null;
   if (params !== null && scanCode(params).identifiers.has('response')) {
     const name = hs.local.allocate('parameters');
@@ -297,7 +298,7 @@ function emitRunFunction(w: CodeWriter, step: RunFunctionAction, hs: HandlerScop
   const usesResponse = responseUsed(step.resultState, step.onSuccess, hs);
   w.block('try {', () => {
     const args = [jsCode(quoteString(fn.uid)), ...(options.length ? [jsObject(options)] : [])];
-    writeCall(w, usesResponse ? 'const response = await ' : 'await ', 'hubspot.serverless', args);
+    writeCall(w, usesResponse ? 'const response = await ' : 'await ', `${hubspot}.serverless`, args);
     emitResultAndSuccess(w, step.resultState, step.onSuccess, hs);
   }, catchClause(step.onError, hs));
   w.indent(() => emitErrorSteps(w, step.onError, hs));
@@ -312,7 +313,7 @@ function responseUsed(resultState: string | undefined, onSuccess: ActionStep[] |
 
 function emitResultAndSuccess(w: CodeWriter, resultState: string | undefined, onSuccess: ActionStep[] | undefined, hs: HandlerScope): void {
   const state = resultState ? hs.ctx.states.get(resultState) : undefined;
-  if (state) w.line(`${setterName(state.name)}(response);`);
+  if (state) w.line(`${stateSetter(hs.ctx, state.name)}(response);`);
   emitSteps(w, onSuccess ?? [], hs);
 }
 
@@ -321,8 +322,8 @@ function emitErrorSteps(w: CodeWriter, onError: ActionStep[] | undefined, hs: Ha
     emitSteps(w, onError, hs);
     return;
   }
-  hs.ctx.imports.add(UI_EXTENSIONS, 'logger');
-  w.line('logger.error(error instanceof Error ? error.message : String(error));');
+  const logger = importValue(hs.ctx, UI_EXTENSIONS, 'logger');
+  w.line(`${logger}.error(error instanceof Error ? error.message : String(error));`);
 }
 
 /**
@@ -334,8 +335,10 @@ function emitCustom(w: CodeWriter, rawCode: string, hs: HandlerScope): void {
   const lines = dedentStatements(code);
   if (lines.every((l) => l.trim() === '')) return;
   const ids = noteUserCode(hs.ctx, code);
-  if (ids.has('logger')) hs.ctx.imports.add(UI_EXTENSIONS, 'logger');
-  if (ids.has('hubspot')) hs.ctx.imports.add(UI_EXTENSIONS, 'hubspot');
+  // Custom code refers to `logger` / `hubspot` by name; a document name that shadows them wins.
+  for (const name of ['logger', 'hubspot']) {
+    if (ids.has(name) && !hs.ctx.shadowed.has(name)) importValue(hs.ctx, UI_EXTENSIONS, name);
+  }
   if (ids.has('return')) {
     w.block('await (async () => {', () => w.lines(lines), '})();');
     return;

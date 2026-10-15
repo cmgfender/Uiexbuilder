@@ -21,7 +21,16 @@ import type {
   FunctionSource,
 } from '../model/types';
 import type { DataSourcePlan, GenContext } from './context';
-import { BASE_RESERVED, capitalize, NameAllocator, setterName, UI_EXTENSIONS, UI_EXTENSIONS_CRM } from './context';
+import {
+  BASE_RESERVED,
+  capitalize,
+  declaredStateNames,
+  importValue,
+  NameAllocator,
+  setterName,
+  UI_EXTENSIONS,
+  UI_EXTENSIONS_CRM,
+} from './context';
 import {
   asOperand,
   CodeWriter,
@@ -56,11 +65,14 @@ export function dataSourceSetterNames(source: DataSource): string[] {
  * registers them in the context. Must run before handlers are generated (runDataSource steps).
  */
 export function planDataSources(ctx: GenContext): void {
-  const seen = new Set<string>();
+  const declared = declaredStateNames(ctx.states.values());
   const kinds = new Set<DataSource['kind']>(['crmProperties', 'associations', 'crmSearch', 'fetch', 'function']);
   for (const source of Array.isArray(ctx.ext.dataSources) ? ctx.ext.dataSources : []) {
-    if (!source || !kinds.has(source.kind) || !isIdentifierName(source.name) || seen.has(source.name)) continue;
-    seen.add(source.name);
+    if (!source || !kinds.has(source.kind) || !isIdentifierName(source.name)) continue;
+    // A source whose names are already declared (state, another source) would not compile.
+    const declares = [...dataSourceExposedNames(source), ...dataSourceSetterNames(source)];
+    if (declares.some((n) => declared.has(n))) continue;
+    declares.forEach((n) => declared.add(n));
     const exposes = dataSourceExposedNames(source);
     exposes.forEach((n) => ctx.componentScope.add(n));
     let plan: DataSourcePlan;
@@ -93,20 +105,20 @@ function scopeDeps(ctx: GenContext, codes: string[]): string[] {
 }
 
 function emitCrmProperties(w: CodeWriter, ctx: GenContext, s: CrmPropertiesSource, plan: DataSourcePlan): void {
-  ctx.imports.add(UI_EXTENSIONS_CRM, 'useCrmProperties');
-  writeCall(w, `const ${plan.queryVar} = `, 'useCrmProperties', [stringArray(s.properties), ...formatOptions(s.formatted)]);
+  const hook = importValue(ctx, UI_EXTENSIONS_CRM, 'useCrmProperties');
+  writeCall(w, `const ${plan.queryVar} = `, hook, [stringArray(s.properties), ...formatOptions(s.formatted)]);
   writeExposures(w, ctx, s, plan, 'Record<string, any>', 'properties');
 }
 
 function emitAssociations(w: CodeWriter, ctx: GenContext, s: AssociationsSource, plan: DataSourcePlan): void {
-  ctx.imports.add(UI_EXTENSIONS_CRM, 'useAssociations');
+  const hook = importValue(ctx, UI_EXTENSIONS_CRM, 'useAssociations');
   const entries: Array<[string, JsNode]> = [
     ['toObjectType', jsCode(quoteString(asString(s.toObjectType)))],
     ['properties', stringArray(s.properties)],
   ];
   if (Number.isFinite(s.pageLength)) entries.push(['pageLength', jsCode(printNumber(s.pageLength))]);
   const config = jsObject(entries);
-  writeCall(w, `const ${plan.queryVar} = `, 'useAssociations', [config, ...formatOptions(s.formatted)]);
+  writeCall(w, `const ${plan.queryVar} = `, hook, [config, ...formatOptions(s.formatted)]);
   writeExposures(w, ctx, s, plan, 'any[]', 'results');
 }
 
@@ -139,7 +151,7 @@ function searchFilter(ctx: GenContext, f: CrmSearchSource['filters'][number]): J
 }
 
 function emitCrmSearch(w: CodeWriter, ctx: GenContext, s: CrmSearchSource, plan: DataSourcePlan): void {
-  ctx.imports.add(UI_EXTENSIONS, 'useCrmSearch');
+  const hook = importValue(ctx, UI_EXTENSIONS, 'useCrmSearch');
   const filters = Array.isArray(s.filters) ? s.filters.filter((f) => f && typeof f === 'object') : [];
   const sorts = Array.isArray(s.sorts) ? s.sorts.filter((x) => x && typeof x === 'object') : [];
   const entries: Array<[string, JsNode]> = [['objectType', jsCode(quoteString(asString(s.objectType)))]];
@@ -162,7 +174,7 @@ function emitCrmSearch(w: CodeWriter, ctx: GenContext, s: CrmSearchSource, plan:
     ]);
   }
   if (Number.isFinite(s.pageLength)) entries.push(['pageLength', jsCode(printNumber(s.pageLength))]);
-  writeCall(w, `const ${plan.queryVar} = `, 'useCrmSearch', [jsObject(entries), ...formatOptions(s.formatted)]);
+  writeCall(w, `const ${plan.queryVar} = `, hook, [jsObject(entries), ...formatOptions(s.formatted)]);
   writeExposures(w, ctx, s, plan, 'any[]', 'results');
 }
 
@@ -182,11 +194,11 @@ function writeExposures(w: CodeWriter, ctx: GenContext, s: DataSource, plan: Dat
 
 /** useState triple of a loader-backed source. */
 function emitLoaderState(w: CodeWriter, ctx: GenContext, s: FetchSource | FunctionSource): void {
-  ctx.imports.add('react', 'useState');
+  const useState = importValue(ctx, 'react', 'useState');
   ctx.usesAny = true;
-  w.line(`const [${s.name}, ${setterName(s.name)}] = useState<any>(null);`);
-  w.line(`const [${s.name}Loading, ${setterName(`${s.name}Loading`)}] = useState<boolean>(${s.runOnMount === true});`);
-  w.line(`const [${s.name}Error, ${setterName(`${s.name}Error`)}] = useState<string | null>(null);`);
+  w.line(`const [${s.name}, ${setterName(s.name)}] = ${useState}<any>(null);`);
+  w.line(`const [${s.name}Loading, ${setterName(`${s.name}Loading`)}] = ${useState}<boolean>(${s.runOnMount === true});`);
+  w.line(`const [${s.name}Error, ${setterName(`${s.name}Error`)}] = ${useState}<string | null>(null);`);
 }
 
 /**
@@ -209,7 +221,7 @@ function loaderLocals(ctx: GenContext, codes: string[]): NameAllocator {
 function emitLoaderRequest(w: CodeWriter, ctx: GenContext, s: FetchSource | FunctionSource): string[] {
   const codes: string[] = [];
   if (s.kind === 'fetch') {
-    ctx.imports.add(UI_EXTENSIONS, 'hubspot');
+    const hubspot = importValue(ctx, UI_EXTENSIONS, 'hubspot');
     const url = templateText(ctx, s.url);
     codes.push(url);
     const options: Array<[string, JsNode]> = [['method', jsCode(quoteString(asString(s.method) || 'GET'))]];
@@ -219,7 +231,7 @@ function emitLoaderRequest(w: CodeWriter, ctx: GenContext, s: FetchSource | Func
       options.push(['body', jsCode(asOperand(body))]);
     }
     const res = loaderLocals(ctx, codes).allocate('response');
-    writeCall(w, `const ${res} = await `, 'hubspot.fetch', [jsCode(asOperand(url)), jsObject(options)]);
+    writeCall(w, `const ${res} = await `, `${hubspot}.fetch`, [jsCode(asOperand(url)), jsObject(options)]);
     w.block(`if (!${res}.ok) {`, () => {
       w.line(`throw new Error(\`Request failed with status \${${res}.status}\`);`);
     });
@@ -231,7 +243,7 @@ function emitLoaderRequest(w: CodeWriter, ctx: GenContext, s: FetchSource | Func
     w.line(`throw new Error(${quoteString(`The app function of data source "${s.name}" no longer exists.`)});`);
     return codes;
   }
-  ctx.imports.add(UI_EXTENSIONS, 'hubspot');
+  const hubspot = importValue(ctx, UI_EXTENSIONS, 'hubspot');
   const options: Array<[string, JsNode]> = [];
   if (normalizeExpression(asString(s.parameters)) !== '') {
     const params = userExpr(ctx, s.parameters!);
@@ -243,15 +255,15 @@ function emitLoaderRequest(w: CodeWriter, ctx: GenContext, s: FetchSource | Func
   }
   const result = loaderLocals(ctx, codes).allocate('result');
   const args = [jsCode(quoteString(fn.uid)), ...(options.length ? [jsObject(options)] : [])];
-  writeCall(w, `const ${result} = await `, 'hubspot.serverless', args);
+  writeCall(w, `const ${result} = await `, `${hubspot}.serverless`, args);
   w.line(`${setterName(s.name)}(${result});`);
   return codes;
 }
 
 function emitLoader(w: CodeWriter, ctx: GenContext, s: FetchSource | FunctionSource, plan: DataSourcePlan): void {
-  ctx.imports.add('react', 'useCallback');
+  const useCallback = importValue(ctx, 'react', 'useCallback');
   let codes: string[] = [];
-  w.line(`const ${plan.loaderName} = useCallback(async () => {`);
+  w.line(`const ${plan.loaderName} = ${useCallback}(async () => {`);
   w.indent(() => {
     w.line(`${setterName(`${s.name}Loading`)}(true);`);
     w.line(`${setterName(`${s.name}Error`)}(null);`);
@@ -335,9 +347,9 @@ export function emitDataSources(w: CodeWriter, ctx: GenContext): boolean {
   }
   const onMount = loaderPlans.filter((p) => (p.source as FetchSource | FunctionSource).runOnMount === true);
   if (onMount.length) {
-    ctx.imports.add('react', 'useEffect');
+    const useEffect = importValue(ctx, 'react', 'useEffect');
     gap();
-    w.block('useEffect(() => {', () => {
+    w.block(`${useEffect}(() => {`, () => {
       for (const p of onMount) w.line(`void ${p.rerunCall};`);
       w.line('// Load once on mount; refresh actions call the loaders again.');
       w.line('// eslint-disable-next-line react-hooks/exhaustive-deps');

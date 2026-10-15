@@ -1466,7 +1466,8 @@ function chartProps(noun: 'bars' | 'lines', sample: JsonValue): PropDef[] {
           {
             name: 'colorList',
             label: 'Color order',
-            type: { kind: 'stringList', placeholder: 'e.g. aqua' },
+            // Typed ChartColor[]: only the named chart colors are valid items.
+            type: { kind: 'stringList', placeholder: 'e.g. aqua', options: CHART_COLOR_NAMES.map((value) => ({ value })) },
             description: `The order in which chart colors are assigned to your data. Allowed: ${COLOR_NAMES_TEXT}.`,
           },
         ],

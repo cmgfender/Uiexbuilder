@@ -199,6 +199,24 @@ describe('props', () => {
     expect(jsx).toContain('<Flex />');
   });
 
+  it('omits props (and bindings) hidden by visibleWhen, which belong to another union variant', () => {
+    const jsx = jsxOf(gen(
+      [
+        { type: 'Table', props: { paginated: false, pageCount: 3, bordered: true }, binding: { state: 'page' }, children: [] },
+        { type: 'Table', props: { paginated: { $expr: 'many' }, pageCount: 3 }, binding: { state: 'page' }, children: [] },
+        { type: 'TableHeader', props: { sortDirection: 'never', disabled: true }, text: 'A' },
+        { type: 'TableHeader', props: { sortDirection: 'none', disabled: true }, text: 'B' },
+      ],
+      { state: [st('page', 'number', 1), st('many', 'boolean', true)] },
+    ));
+    // Not paginated: neither pageCount nor the bound page / onPageChange are emitted.
+    expect(jsx).toContain('<Table bordered paginated={false}>{null}</Table>');
+    // Paginated through an expression: everything stays.
+    expect(jsx).toMatch(/<Table\s+paginated=\{many\}\s+pageCount=\{3\}\s+page=\{page\}\s+onPageChange=/);
+    expect(jsx).toContain('<TableHeader sortDirection="never">A</TableHeader>');
+    expect(jsx).toMatch(/<TableHeader\s+sortDirection="none"\s+disabled\s+onSortChange=\{\(\) => \{\}\}\s*>\s*B\s*<\/TableHeader>/);
+  });
+
   it('breaks long attribute lists one per line', () => {
     const jsx = jsxOf(gen([
       { type: 'Input', props: { label: 'A very long label for this input', name: 'longName', placeholder: 'Type here please' } },
@@ -467,6 +485,104 @@ describe('data sources', () => {
     expect(src).toContain("const result = await hubspot.serverless('get_quote');\n      setQuote(result);");
     expect(src).toContain('  useEffect(() => {\n    void loadItems();\n');
     expect(src).not.toContain('void loadQuote()');
+  });
+});
+
+describe('lint-friendly output', () => {
+  it('escapes quotes in JSX text (react/no-unescaped-entities)', () => {
+    const jsx = jsxOf(gen([
+      { type: 'Text', text: "Don't stop" },
+      { type: 'Text', text: 'Say "hi"' },
+      { type: 'Text', text: "It's {{ name }}" },
+    ], { state: [st('name', 'string', '')] }));
+    expect(jsx).toContain('<Text>{"Don\'t stop"}</Text>');
+    expect(jsx).toContain('<Text>{\'Say "hi"\'}</Text>');
+    expect(jsx).toContain("<Text>{`It's ${toText(name)}`}</Text>");
+  });
+
+  it('only destructures setters that are called', () => {
+    const src = gen([
+      { type: 'Text', text: '{{ title }} {{ count }} {{ draft }} {{ custom }}' },
+      { type: 'Button', text: 'Add', events: { onClick: [step({ type: 'setState', state: 'count', value: 'count + 1' })] } },
+      { type: 'Input', props: { label: 'Draft', name: 'draft' }, binding: { state: 'draft' } },
+      { type: 'Button', text: 'Reset', events: { onClick: [step({ type: 'custom', code: "setCustom('');" })] } },
+    ], { state: [st('title', 'string', 'Hello'), st('count', 'number', 0), st('draft', 'string', ''), st('custom', 'string', 'x')] });
+    expect(src).toContain("const [title] = useState<string>('Hello');");
+    expect(src).toContain('const [count, setCount] = useState<number>(0);');
+    expect(src).toContain("const [draft, setDraft] = useState<string>('');");
+    expect(src).toContain("const [custom, setCustom] = useState<string>('x');");
+  });
+
+  it('passes alert titles through unless empty, like the designer runtime', () => {
+    const src = gen([
+      {
+        type: 'Button',
+        text: 'Go',
+        events: {
+          onClick: [
+            step({ type: 'addAlert', alertType: 'info', title: '', message: 'a' }),
+            step({ type: 'addAlert', alertType: 'info', title: 'T', message: 'b' }),
+          ],
+        },
+      },
+    ]);
+    expect(src).toContain("actions.addAlert({ type: 'info', message: 'a' });");
+    expect(src).toContain("actions.addAlert({ type: 'info', title: 'T', message: 'b' });");
+  });
+});
+
+describe('typed values in nested literals', () => {
+  it('casts typed state that cannot fit a described field, and nothing else', () => {
+    const jsx = jsxOf(gen([
+      { type: 'Text', props: { format: { fontWeight: '{{ weight }}', italic: '{{ flag }}' } }, text: 'x' },
+      {
+        type: 'Select',
+        props: { label: 'L', name: 'n', options: [{ label: '{{ count }}', value: '{{ count }}' }, { label: '{{ weight }}', value: 'b' }] },
+      },
+    ], { state: [st('weight', 'string', 'bold'), st('flag', 'boolean', true), st('count', 'number', 1)] }));
+    expect(jsx).toContain('format={{ fontWeight: weight as any, italic: flag }}');
+    expect(jsx).toContain('{ label: count as any, value: count },');
+    expect(jsx).toContain("{ label: weight, value: 'b' },");
+  });
+});
+
+describe('name collisions', () => {
+  it('aliases imports and helpers shadowed by document names', () => {
+    const src = gen([
+      { type: 'Text', text: 'Hi {{ Text }} {{ toText }}' },
+      { type: 'Button', text: 'Log', events: { onClick: [step({ type: 'log', level: 'info', message: 'x' })] } },
+    ], { state: [st('Text', 'string', 'a'), st('toText', 'string', 'b'), st('logger', 'string', 'c')] });
+    expect(src).toContain('  Text as TextComponent,');
+    expect(src).toContain('  logger as loggerApi,');
+    expect(src).toContain('const toText2 = (value: unknown): string =>');
+    expect(src).not.toContain('const toText =');
+    expect(jsxOf(src)).toContain('<TextComponent>Hi {toText2(Text)} {toText2(toText)}</TextComponent>');
+    expect(src).toContain("loggerApi.info('x');");
+  });
+
+  it('aliases compound component namespaces and React hooks', () => {
+    const src = gen([
+      { type: 'Dropdown', repeat: { items: 'menus', itemName: 'Dropdown', indexName: 'i' }, children: [{ type: 'Dropdown.ButtonItem', text: 'One' }] },
+    ], {
+      state: [st('menus', 'array', [])],
+      dataSources: [{ id: 'd1', kind: 'fetch', name: 'useEffect', url: 'https://a.example.com', method: 'GET', runOnMount: true }],
+    });
+    expect(src).toContain("import { useCallback, useEffect as useEffectHook, useState } from 'react';");
+    expect(src).toContain('Dropdown as DropdownComponent,');
+    expect(src).toContain('<DropdownComponent.ButtonItem>One</DropdownComponent.ButtonItem>');
+    expect(src).toContain('  useEffectHook(() => {');
+  });
+
+  it('drops document entries that would redeclare a name', () => {
+    const src = gen([{ type: 'Text', text: '{{ count }} {{ contact }} {{ context.user.id }}' }], {
+      state: [st('count', 'number', 0), st('count', 'string', 'dup'), st('setCount', 'number', 1), st('context', 'string', 'x'), st('contact', 'string', '')],
+      dataSources: [{ id: 'd1', kind: 'crmProperties', name: 'contact', properties: ['email'] }],
+    });
+    expect(src.match(/const \[count/g)).toHaveLength(1);
+    expect(src).not.toContain('setSetCount');
+    expect(src).not.toContain("useState<string>('x')");
+    expect(src).not.toContain('useCrmProperties');
+    expect(src).toContain('const TestCard = ({ context }: ExtensionProps) => {');
   });
 });
 
