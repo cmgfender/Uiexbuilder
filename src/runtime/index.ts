@@ -68,6 +68,7 @@ export {
 } from './expr';
 export type {
   DataSourceState,
+  LiveDataAdapter,
   DropPlaceholderProps,
   IframeModalState,
   NodeRendererProps,

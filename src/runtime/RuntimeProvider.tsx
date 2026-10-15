@@ -43,7 +43,7 @@ import {
   stateSignature,
   type DataSourceStatus,
 } from './scope';
-import type { IframeModalState, RuntimeAlert, RuntimeLogEntry } from './types';
+import type { IframeModalState, LiveDataAdapter, RuntimeAlert, RuntimeLogEntry } from './types';
 import './runtime.css';
 
 /** Oldest log entries are dropped beyond this many. */
@@ -59,6 +59,8 @@ export interface RuntimeProviderProps {
   mode: 'design' | 'preview';
   /** Changing this value resets the runtime (state, data, overlays, alerts) to initial values. */
   resetKey?: string | number;
+  /** Real HubSpot data (see LiveDataAdapter in ./types). Null/undefined = mock data. */
+  live?: LiveDataAdapter | null;
   children?: ReactNode;
 }
 

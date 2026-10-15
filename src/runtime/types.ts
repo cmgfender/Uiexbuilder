@@ -121,3 +121,44 @@ export interface DropPlaceholderProps {
   label?: string;
   children?: ReactNode;
 }
+
+/**
+ * Live HubSpot data for the designer preview (provided by src/connect when the user has signed in
+ * with HubSpot and picked a sample record). When `RuntimeProviderProps.live` is set, the runtime
+ * resolves CRM data sources and the record context from the portal instead of mock data:
+ *  - crmProperties  -> getRecordProperties(record.objectTypeId, record.objectId, properties, formatted)
+ *  - associations   -> getAssociations(record..., toObjectType, properties, pageLength, formatted)
+ *  - crmSearch      -> search(objectType, request)
+ *  - context        -> portal / user / crm come from `context` (other fields keep their mock values)
+ *  - fetch actions & fetch data sources -> proxyFetch (when provided), avoiding browser CORS limits
+ * fetch/function data sources without a live equivalent keep using mock data. Requests are real and
+ * asynchronous, so the preview shows genuine loading and error states. Errors surface as
+ * `<name>Error` values and console log entries — they never crash the editor.
+ */
+export interface LiveDataAdapter {
+  /** Stable key; when it changes the runtime refetches all live data (e.g. another record picked). */
+  key: string;
+  context: {
+    portal: { id: number; timezone?: string };
+    user?: { id?: number; email: string; firstName?: string; lastName?: string };
+    /** The sample record. Absent on settings / app home extensions. */
+    crm?: { objectId: number; objectTypeId: string };
+  };
+  getRecordProperties: (
+    objectTypeId: string,
+    objectId: number,
+    properties: string[],
+    formatted: boolean,
+  ) => Promise<Record<string, string | null>>;
+  getAssociations: (
+    objectTypeId: string,
+    objectId: number,
+    request: { toObjectType: string; properties: string[]; pageLength: number; formatted: boolean },
+  ) => Promise<import('../connect/types').AssociationResultDTO[]>;
+  search: (
+    objectType: string,
+    request: import('../connect/types').CrmSearchRequestDTO,
+  ) => Promise<import('../connect/types').CrmSearchResponseDTO>;
+  /** Server-side fetch for preview `hubspot.fetch` calls (optional). */
+  proxyFetch?: (request: import('../connect/types').ProxyFetchRequest) => Promise<import('../connect/types').ProxyFetchResponse>;
+}
