@@ -438,6 +438,21 @@
   background: var(--ub-warning-soft);
   color: var(--ub-warning);
 }
+.ub-cn-chip--mock {
+  color: var(--ub-text-2);
+}
+.ub-cn-live--compact .ub-cn-chip {
+  max-width: 200px;
+}
+.ub-cn-picker__switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--ub-border);
+}
 
 /* ---------- Record picker ---------- */
 .ub-cn-picker {
@@ -640,6 +655,13 @@
   }
   .ub-cn-btn--chip {
     padding-right: 4px;
+  }
+}
+/* The canvas toolbar is a size container: when the live-data controls take its room, drop the
+   breadcrumb hint ("Click a component to select it…") instead of showing a clipped fragment. */
+@container (max-width: 1100px) {
+  .ub-cv-toolbar:has(.ub-cn-live) .ub-cv-crumbs__hint {
+    display: none;
   }
 }
 @container (max-width: 720px) {

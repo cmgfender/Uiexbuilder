@@ -2,6 +2,7 @@
  * Store-level operations used by the Data panel and dialogs. Every mutation goes through store
  * actions (`commit` for multi-field changes so they form a single undo step).
  */
+import { describeError, getConnectorClient, type CrmRecordSummary } from '../connect';
 import { asOneUndoStep } from '../model/history';
 import { smartInsertTarget } from '../dnd/dragState';
 import { selectActiveExtension, useEditor } from '../model/store';
@@ -11,7 +12,8 @@ import { getComponent } from '../registry';
 import { mockDataForSource, mockFunctionResult, objectTypeName, sampleValue } from '../runtime/mockData';
 import { createDataSource } from './dataSourceMeta';
 import { renameReferences } from './findUsages';
-import { generateUiForSource } from './generators';
+import { generateUiForSource, type GenerateLabels } from './generators';
+import { PORTAL_LABELS } from './portal';
 
 function activeExt(): Extension {
   return selectActiveExtension(useEditor.getState());
@@ -69,13 +71,15 @@ export function addDataSourceOfKind(kind: DataSourceKind): DataSource {
 /**
  * Inserts the generated "show this data" block at the smart insert position (into / after the
  * selection, else at the end of the card). Returns the new node id or null when nothing accepts it.
+ * Labels (list labels, table headers) come from the connected HubSpot account when its
+ * properties are loaded, else from the built-in catalog.
  */
-export function insertGeneratedUi(dataSourceId: string): NodeId | null {
+export function insertGeneratedUi(dataSourceId: string, labels: GenerateLabels = PORTAL_LABELS): NodeId | null {
   const store = useEditor.getState();
   const ext = selectActiveExtension(store);
   const ds = ext.dataSources.find((d) => d.id === dataSourceId);
   if (!ds) return null;
-  const tpl = generateUiForSource(ds, ext.kind === 'card' ? ext.objectTypes : []);
+  const tpl = generateUiForSource(ds, ext.kind === 'card' ? ext.objectTypes : [], labels);
   const target = smartInsertTarget(ext, store.selectedNodeId, tpl.type);
   if (!target) return null;
   return store.insertNode(tpl, target, { select: true });
@@ -176,4 +180,51 @@ export function sampleMockForSource(ext: Extension, ds: DataSource): JsonValue {
   if (generated !== null && generated !== undefined) return JSON.parse(JSON.stringify(generated)) as JsonValue;
   if (ds.kind === 'function') return mockFunctionResult(ext, ds.functionId) as JsonValue;
   return { id: 1, name: 'Sample item', status: 'active', updatedAt: '2026-10-01T12:00:00.000Z' };
+}
+
+/** Record properties the mock should hold: its current keys plus every crmProperties property. */
+export function mockRecordPropertyNames(ext: Extension): string[] {
+  const out: string[] = [];
+  const add = (p: unknown) => {
+    if (typeof p === 'string' && /^[A-Za-z0-9_]+$/.test(p) && !out.includes(p)) out.push(p);
+  };
+  for (const k of Object.keys(ext.mock?.properties ?? {})) add(k);
+  for (const ds of ext.dataSources) if (ds.kind === 'crmProperties') for (const p of ds.properties ?? []) add(p);
+  return out;
+}
+
+export type CopyRecordResult = { ok: true; count: number } | { ok: false; message: string };
+
+/**
+ * Reads a real record through the HubSpot connector and copies its values into the extension's
+ * mock record (and the mock context's record id / type) as ONE undo step. With no names the
+ * account's default properties are copied.
+ */
+export async function copyRecordIntoMock(
+  extensionId: string,
+  record: Pick<CrmRecordSummary, 'id' | 'objectType' | 'objectTypeId'>,
+  names: string[],
+): Promise<CopyRecordResult> {
+  let properties: Record<string, string | null>;
+  try {
+    const fetched = await getConnectorClient().getRecord(record.objectTypeId || record.objectType, record.id, names.length ? { properties: names } : {});
+    properties = fetched && typeof fetched === 'object' && fetched.properties && typeof fetched.properties === 'object' ? fetched.properties : {};
+  } catch (err) {
+    return { ok: false, message: describeError(err).message };
+  }
+  const keys = (names.length ? names : Object.keys(properties)).filter((k) => /^[A-Za-z0-9_]+$/.test(k));
+  const id = Number(record.id);
+  useEditor.getState().commit((draft) => {
+    const e = draft.extensions.find((x) => x.id === extensionId);
+    if (!e) return;
+    for (const k of keys) {
+      const v = Object.prototype.hasOwnProperty.call(properties, k) ? properties[k] : null;
+      e.mock.properties[k] = v === null || v === undefined ? '' : String(v);
+    }
+    if (e.kind === 'card') {
+      if (Number.isSafeInteger(id) && id > 0) e.mock.context.crm.objectId = id;
+      if (record.objectTypeId) e.mock.context.crm.objectTypeId = record.objectTypeId;
+    }
+  });
+  return { ok: true, count: keys.length };
 }

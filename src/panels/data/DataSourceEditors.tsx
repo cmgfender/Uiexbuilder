@@ -1,5 +1,5 @@
 /** Kind-specific editors for data sources (CRM properties, associations, search, fetch, function). */
-import { useId, useMemo } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { ArrowDown, ArrowUp, ExternalLink, Plus, SquarePen, X } from 'lucide-react';
 import { staticOrigin } from '../../codegen/requirements';
 import { ExpressionInput, TemplateInput } from '../../inspector/controls';
@@ -15,52 +15,24 @@ import type {
   FunctionSource,
   HttpMethod,
 } from '../../model/types';
-import { CRM_OBJECT_TYPES } from '../../registry/constants';
 import { useDialogs } from '../../shell/dialogs';
-import { Button, Field, IconButton, NumberField, Select, Switch, TextInput } from '../../ui';
-import { ChipInput, SuggestInput, type Suggestion } from '../common';
-import { objectTypeKey, propertiesFor, propertyNameWarning, propertySuggestions } from '../crmProperties';
+import { Button, Field, IconButton, NumberField, Select, Switch } from '../../ui';
+import { objectTypeLabel, propertiesFor } from '../crmProperties';
+import { ObjectTypeSelect } from '../ObjectTypeSelect';
+import { isDateProperty, propertyOptions, usePortalProperties, type PortalProperties, type PortalProperty } from '../portal';
+import { PropertyPicker } from '../PropertyPicker';
 
-const CUSTOM = '__custom__';
-
-function toSuggestions(objectTypes: Array<string | undefined>): Suggestion[] {
-  return propertySuggestions(objectTypes).map((p) => ({ value: p.name, detail: p.label }));
-}
-
-function propertyName(value: string): string | null {
-  return /^[A-Za-z0-9_]+$/.test(value) ? null : 'Use the internal property name (letters, numbers and _)';
-}
+export { ObjectTypeSelect } from '../ObjectTypeSelect';
 
 function update(ds: DataSource, patch: Partial<DataSource>) {
   useEditor.getState().updateDataSource(ds.id, patch);
 }
 
-// ---------------------------------------------------------------------------
-// Object type select (standard types by id + custom)
-// ---------------------------------------------------------------------------
-
-export function ObjectTypeSelect({ value, onChange, label }: { value: string; onChange: (value: string) => void; label: string }) {
-  const known = CRM_OBJECT_TYPES.find((t) => t.typeId === value || t.value === objectTypeKey(value));
-  const selectValue = known ? known.typeId : CUSTOM;
-  const customId = useId();
-  return (
-    <div className="ub-pn-stack">
-      <Select
-        aria-label={label}
-        value={selectValue}
-        options={[
-          ...CRM_OBJECT_TYPES.map((t) => ({ value: t.typeId, label: `${t.label} (${t.typeId})` })),
-          { value: CUSTOM, label: 'Custom object…' },
-        ]}
-        onChange={(v) => onChange(v === CUSTOM ? (known ? '' : value) : v)}
-      />
-      {selectValue === CUSTOM && (
-        <Field htmlFor={customId} hint="Custom object type id (e.g. 2-1234567) or fully qualified name (p_my_object).">
-          <TextInput id={customId} code value={value} placeholder="2-1234567" onChange={onChange} />
-        </Field>
-      )}
-    </div>
-  );
+/** Field hint saying where property suggestions come from. */
+function propertiesHint(catalog: PortalProperties, fallback: string): string {
+  const types = catalog.objectTypes.map((t) => objectTypeLabel(t).toLowerCase()).join(', ');
+  if (catalog.fromPortal) return `Your HubSpot ${types} properties. Search by label or internal name.`;
+  return fallback;
 }
 
 function FormattedSwitch({ ds }: { ds: CrmPropertiesSource | AssociationsSource | CrmSearchSource }) {
@@ -93,25 +65,26 @@ function PageLength({ ds }: { ds: AssociationsSource | CrmSearchSource }) {
 
 export function CrmPropertiesEditor({ ext, ds }: { ext: Extension; ds: CrmPropertiesSource }) {
   const objectTypes = ext.kind === 'card' ? ext.objectTypes : [];
-  const suggestions = useMemo(() => toSuggestions(objectTypes.length ? objectTypes : ['contacts']), [objectTypes]);
+  const types = useMemo(() => (objectTypes.length ? objectTypes : ['contacts']), [objectTypes]);
+  const catalog = usePortalProperties(types);
   return (
     <>
       <Field
         label="Properties"
-        hint={
+        hint={propertiesHint(
+          catalog,
           objectTypes.length
             ? `Suggestions for ${objectTypes.join(', ')} records. Type any internal property name.`
-            : 'Type internal property names, e.g. firstname.'
-        }
+            : 'Type internal property names, e.g. firstname.',
+        )}
       >
-        <ChipInput
+        <PropertyPicker
+          multiple
           aria-label="Properties"
-          values={ds.properties}
-          suggestions={suggestions}
+          objectTypes={types}
+          catalog={catalog}
+          value={ds.properties}
           placeholder="Add a property…"
-          validate={propertyName}
-          warn={(v) => propertyNameWarning(v, objectTypes)}
-          describe={(v) => suggestions.find((s) => s.value === v)?.detail}
           onChange={(properties) => update(ds, { properties })}
         />
       </Field>
@@ -125,7 +98,8 @@ export function CrmPropertiesEditor({ ext, ds }: { ext: Extension; ds: CrmProper
 // ---------------------------------------------------------------------------
 
 export function AssociationsEditor({ ds }: { ds: AssociationsSource }) {
-  const suggestions = useMemo(() => toSuggestions([ds.toObjectType]), [ds.toObjectType]);
+  const types = useMemo(() => [ds.toObjectType], [ds.toObjectType]);
+  const catalog = usePortalProperties(types);
   return (
     <>
       <Field label="Associated object type">
@@ -135,15 +109,14 @@ export function AssociationsEditor({ ds }: { ds: AssociationsSource }) {
           onChange={(toObjectType) => update(ds, { toObjectType })}
         />
       </Field>
-      <Field label="Properties" hint="Properties to load for each associated record.">
-        <ChipInput
+      <Field label="Properties" hint={propertiesHint(catalog, 'Properties to load for each associated record.')}>
+        <PropertyPicker
+          multiple
           aria-label="Properties"
-          values={ds.properties}
-          suggestions={suggestions}
+          objectTypes={types}
+          catalog={catalog}
+          value={ds.properties}
           placeholder="Add a property…"
-          validate={propertyName}
-          warn={(v) => propertyNameWarning(v, [ds.toObjectType])}
-          describe={(v) => suggestions.find((s) => s.value === v)?.detail}
           onChange={(properties) => update(ds, { properties })}
         />
       </Field>
@@ -173,6 +146,14 @@ export const SEARCH_OPERATORS: Array<{ value: string; label: string }> = [
   { value: 'NOT_CONTAINS_TOKEN', label: 'does not contain word' },
 ];
 
+/** Operator labels that read naturally for dates. */
+const DATE_OPERATOR_LABELS: Record<string, string> = {
+  LT: 'is before',
+  LTE: 'is on or before',
+  GT: 'is after',
+  GTE: 'is on or after',
+};
+
 function valuePlaceholder(operator: string): string {
   if (operator === 'BETWEEN') return 'low, high';
   if (operator === 'IN' || operator === 'NOT_IN') return 'a, b, c';
@@ -180,27 +161,145 @@ function valuePlaceholder(operator: string): string {
   return 'Value or {{ expression }}';
 }
 
+const LIST_OPS = new Set(['IN', 'NOT_IN']);
+const TEXT_OPS = new Set(['CONTAINS_TOKEN', 'NOT_CONTAINS_TOKEN']);
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function splitList(value: string): string[] {
+  return value
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+type SearchFilter = CrmSearchSource['filters'][number];
+
+/**
+ * The value of one search filter: the property's choices (a select, or checkboxes for "is any of")
+ * for dropdown properties, date pickers for date properties, else text with {{ expressions }}.
+ * "Type a value" switches to free text (e.g. an expression) at any time.
+ */
+export function FilterValueInput({
+  ext,
+  filter,
+  index,
+  property,
+  onChange,
+}: {
+  ext: Extension;
+  filter: SearchFilter;
+  index: number;
+  property: PortalProperty | undefined;
+  onChange: (value: string) => void;
+}) {
+  const [typed, setTyped] = useState(false);
+  const value = typeof filter.value === 'string' ? filter.value : String((filter.value as unknown) ?? '');
+  const op = filter.operator;
+  const label = `Filter ${index + 1} value`;
+  const options = propertyOptions(property);
+  const isExpression = value.includes('{{');
+  const listOp = LIST_OPS.has(op);
+  const selected = listOp ? splitList(value) : [];
+  const canChoose = options.length > 0 && !TEXT_OPS.has(op) && (!listOp || selected.every((v) => options.some((o) => o.value === v)));
+  const dateParts = op === 'BETWEEN' ? splitList(value) : value.trim() ? [value.trim()] : [];
+  const canDate =
+    isDateProperty(property) && !listOp && !TEXT_OPS.has(op) && dateParts.every((d) => DATE_RE.test(d.slice(0, 10)) && d.length <= 10);
+  const mode: 'choice' | 'date' | 'text' = typed || isExpression ? 'text' : canChoose ? 'choice' : canDate ? 'date' : 'text';
+  const switchable = (options.length > 0 && !TEXT_OPS.has(op)) || (isDateProperty(property) && !listOp && !TEXT_OPS.has(op));
+
+  let editor;
+  if (mode === 'choice' && listOp) {
+    editor = (
+      <div className="ub-pp-checks" role="group" aria-label={label}>
+        {options.map((o) => {
+          const on = selected.includes(o.value);
+          return (
+            <label key={o.value} className="ub-pp-check">
+              <input
+                type="checkbox"
+                checked={on}
+                onChange={() => {
+                  const next = on ? selected.filter((v) => v !== o.value) : options.map((x) => x.value).filter((v) => v === o.value || selected.includes(v));
+                  onChange(next.join(', '));
+                }}
+              />
+              <span>{o.label}</span>
+            </label>
+          );
+        })}
+      </div>
+    );
+  } else if (mode === 'choice') {
+    const inList = options.some((o) => o.value === value);
+    editor = (
+      <Select
+        aria-label={label}
+        value={value}
+        placeholder="Choose a value…"
+        options={[
+          ...options.map((o) => ({ value: o.value, label: o.label || o.value })),
+          ...(value && !inList ? [{ value, label: `${value} (not one of this property’s options)` }] : []),
+        ]}
+        onChange={onChange}
+      />
+    );
+  } else if (mode === 'date' && op === 'BETWEEN') {
+    const [low = '', high = ''] = dateParts;
+    editor = (
+      <div className="ub-pn-grid2" role="group" aria-label={label}>
+        <input type="date" className="ub-input" aria-label={`${label} from`} value={low} onChange={(e) => onChange(`${e.target.value}, ${high}`)} />
+        <input type="date" className="ub-input" aria-label={`${label} to`} value={high} onChange={(e) => onChange(`${low}, ${e.target.value}`)} />
+      </div>
+    );
+  } else if (mode === 'date') {
+    editor = <input type="date" className="ub-input" aria-label={label} value={dateParts[0] ?? ''} onChange={(e) => onChange(e.target.value)} />;
+  } else {
+    editor = <TemplateInput ext={ext} value={value} placeholder={valuePlaceholder(op)} aria-label={label} onChange={onChange} />;
+  }
+
+  return (
+    <div className="ub-pn-stack ub-pn-stack--tight">
+      {editor}
+      {switchable && (
+        <button
+          type="button"
+          className="ub-pn-link ub-pp-switch"
+          onClick={() => {
+            if (mode === 'text') {
+              setTyped(false);
+              if (isExpression) onChange('');
+            } else setTyped(true);
+          }}
+        >
+          {mode === 'text' ? (options.length > 0 ? 'Choose from the property’s options' : 'Pick a date') : 'Type a value or {{ expression }}'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function CrmSearchEditor({ ext, ds }: { ext: Extension; ds: CrmSearchSource }) {
-  const suggestions = useMemo(() => toSuggestions([ds.objectType]), [ds.objectType]);
+  const types = useMemo(() => [ds.objectType], [ds.objectType]);
+  const catalog = usePortalProperties(types);
   const filters = ds.filters ?? [];
   const sorts = ds.sorts ?? [];
   const setFilters = (next: CrmSearchSource['filters']) => update(ds, { filters: next });
   const setSorts = (next: CrmSearchSource['sorts']) => update(ds, { sorts: next });
-  const firstProperty = propertiesFor(ds.objectType)[0]?.name ?? 'hs_object_id';
+  const firstProperty =
+    propertiesFor(ds.objectType)[0]?.name ?? catalog.properties.find((p) => !p.hidden && !p.readOnly)?.name ?? 'hs_object_id';
   return (
     <>
       <Field label="Object type">
         <ObjectTypeSelect label="Object type" value={ds.objectType} onChange={(objectType) => update(ds, { objectType })} />
       </Field>
-      <Field label="Properties" hint="Properties to load for each result.">
-        <ChipInput
+      <Field label="Properties" hint={propertiesHint(catalog, 'Properties to load for each result.')}>
+        <PropertyPicker
+          multiple
           aria-label="Properties"
-          values={ds.properties}
-          suggestions={suggestions}
+          objectTypes={types}
+          catalog={catalog}
+          value={ds.properties}
           placeholder="Add a property…"
-          validate={propertyName}
-          warn={(v) => propertyNameWarning(v, [ds.objectType])}
-          describe={(v) => suggestions.find((s) => s.value === v)?.detail}
           onChange={(properties) => update(ds, { properties })}
         />
       </Field>
@@ -220,17 +319,24 @@ export function CrmSearchEditor({ ext, ds }: { ext: Extension; ds: CrmSearchSour
       {filters.length === 0 && <div className="ub-pn-muted">No filters — every record matches.</div>}
       {filters.map((f, i) => {
         const noValue = f.operator === 'HAS_PROPERTY' || f.operator === 'NOT_HAS_PROPERTY';
-        const set = (patch: Partial<CrmSearchSource['filters'][number]>) =>
-          setFilters(filters.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+        const property = catalog.byName.get(f.propertyName);
+        const dates = isDateProperty(property);
+        const set = (patch: Partial<SearchFilter>) => setFilters(filters.map((x, j) => (j === i ? { ...x, ...patch } : x)));
         return (
           <div key={i} className="ub-pn-filter" role="group" aria-label={`Filter ${i + 1}`}>
             <div className="ub-pn-filter__row">
-              <SuggestInput
+              <PropertyPicker
                 aria-label={`Filter ${i + 1} property`}
+                objectTypes={types}
+                catalog={catalog}
                 value={f.propertyName}
-                suggestions={suggestions}
                 placeholder="property"
-                onChange={(propertyName) => set({ propertyName })}
+                onChange={(propertyName) => {
+                  // Another property: a value picked from the old one's options rarely fits.
+                  const old = catalog.byName.get(f.propertyName);
+                  const keep = !old || !propertyOptions(old).length || f.value.includes('{{');
+                  set({ propertyName, ...(keep ? {} : { value: '' }) });
+                }}
               />
               <IconButton label={`Remove filter ${i + 1}`} size="sm" onClick={() => setFilters(filters.filter((_, j) => j !== i))}>
                 <X size={13} aria-hidden />
@@ -239,18 +345,10 @@ export function CrmSearchEditor({ ext, ds }: { ext: Extension; ds: CrmSearchSour
             <Select
               aria-label={`Filter ${i + 1} operator`}
               value={f.operator}
-              options={SEARCH_OPERATORS}
+              options={SEARCH_OPERATORS.map((o) => (dates && DATE_OPERATOR_LABELS[o.value] ? { ...o, label: DATE_OPERATOR_LABELS[o.value] } : o))}
               onChange={(operator) => set({ operator, ...(operator === 'HAS_PROPERTY' || operator === 'NOT_HAS_PROPERTY' ? { value: '' } : {}) })}
             />
-            {!noValue && (
-              <TemplateInput
-                ext={ext}
-                value={f.value}
-                placeholder={valuePlaceholder(f.operator)}
-                aria-label={`Filter ${i + 1} value`}
-                onChange={(value) => set({ value })}
-              />
-            )}
+            {!noValue && <FilterValueInput ext={ext} filter={f} index={i} property={property} onChange={(value) => set({ value })} />}
           </div>
         );
       })}
@@ -269,10 +367,11 @@ export function CrmSearchEditor({ ext, ds }: { ext: Extension; ds: CrmSearchSour
       </div>
       {sorts.map((s, i) => (
         <div key={i} className="ub-pn-filter__row" role="group" aria-label={`Sort ${i + 1}`}>
-          <SuggestInput
+          <PropertyPicker
             aria-label={`Sort ${i + 1} property`}
+            objectTypes={types}
+            catalog={catalog}
             value={s.propertyName}
-            suggestions={suggestions}
             placeholder="property"
             onChange={(propertyName) => setSorts(sorts.map((x, j) => (j === i ? { ...x, propertyName } : x)))}
           />
@@ -390,7 +489,6 @@ export function FetchEditor({ ext, ds }: { ext: Extension; ds: FetchSource }) {
 export function FunctionEditor({ ext, ds }: { ext: Extension; ds: FunctionSource }) {
   const functions = useEditor((s) => s.project.functions);
   const fnId = useId();
-  const suggestions = useMemo(() => toSuggestions(ext.kind === 'card' ? ext.objectTypes : []), [ext.kind, ext.objectTypes]);
   const exists = functions.some((f) => f.id === ds.functionId);
   return (
     <>
@@ -439,12 +537,12 @@ export function FunctionEditor({ ext, ds }: { ext: Extension; ds: FunctionSource
       </Field>
       {ext.kind === 'card' && (
         <Field label="Record properties to send" hint="Sent as context.propertiesToSend.">
-          <ChipInput
+          <PropertyPicker
+            multiple
             aria-label="Record properties to send"
-            values={ds.propertiesToSend ?? []}
-            suggestions={suggestions}
+            objectTypes={ext.objectTypes}
+            value={ds.propertiesToSend ?? []}
             placeholder="Add a property…"
-            validate={propertyName}
             onChange={(propertiesToSend) => update(ds, { propertiesToSend })}
           />
         </Field>

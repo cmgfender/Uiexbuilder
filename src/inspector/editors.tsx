@@ -2,16 +2,26 @@
  * Literal value editors, one per PropType kind. Each editor receives the stored literal (or
  * undefined when unset) and reports the next literal (undefined = unset / remove the prop).
  */
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import { RotateCcw, WandSparkles } from 'lucide-react';
 import { resolveCreateTemplate } from '../model/store';
 import type { Extension, JsonValue, NodeId } from '../model/types';
+import { getComponent } from '../registry';
 import type { EnumOption, PropDef } from '../registry/types';
 import { Button, cx, IconButton, NumberField, Segmented, Select, Switch, TextArea } from '../ui';
 import { ChipsInput } from './ChipsInput';
 import { TemplateInput } from './controls';
+import { crmPropertyField, isCrmObjectTypeIdProp, isPipelineStepsProp } from './crmFields';
 import { IconPicker } from './IconPicker';
 import { OptionsEditor } from './OptionsEditor';
+import {
+  AddStatisticPanel,
+  CrmObjectTypeEditor,
+  CrmPropertyListEditor,
+  CrmPropertyNameEditor,
+  isStatisticsProp,
+  PipelineStagesButton,
+} from './PortalFields';
 import {
   dateToInput,
   formatDefault,
@@ -62,6 +72,9 @@ export function editorLayout(def: PropDef): 'inline' | 'block' {
 
 export function LiteralEditor(props: LiteralEditorProps) {
   const { def, value } = props;
+  // CRM components get portal-aware pickers for property names and object types.
+  const nodeType = props.nodeId ? props.ext.nodes[props.nodeId]?.type : undefined;
+  const component = nodeType ? getComponent(nodeType) : undefined;
   // A stored value with an unexpected shape is shown as raw JSON instead of being lost.
   if (
     value !== undefined &&
@@ -72,8 +85,30 @@ export function LiteralEditor(props: LiteralEditorProps) {
     return <JsonEditor {...props} mismatch />;
   }
   switch (def.type.kind) {
-    case 'string':
+    case 'string': {
+      const text = typeof value === 'string' ? value : '';
+      if (!text.includes('{{')) {
+        if (isCrmObjectTypeIdProp(component, def)) {
+          return <CrmObjectTypeEditor id={props.id} def={def} value={text} onChange={props.onChange} required={props.required} />;
+        }
+        const field = crmPropertyField(component, def);
+        if (field?.mode === 'single') {
+          return (
+            <CrmPropertyNameEditor
+              id={props.id}
+              def={def}
+              value={text}
+              onChange={props.onChange}
+              ext={props.ext}
+              nodeId={props.nodeId}
+              field={field}
+              required={props.required}
+            />
+          );
+        }
+      }
       return <StringEditor {...props} />;
+    }
     case 'number':
       return <NumberEditor {...props} />;
     case 'boolean':
@@ -95,15 +130,35 @@ export function LiteralEditor(props: LiteralEditorProps) {
         />
       );
     case 'options':
-      return <OptionsEditor id={props.id} value={value} onChange={props.onChange} optionFields={def.type.optionFields} />;
-    case 'stringList':
-      return <StringListEditor {...props} />;
+      return (
+        <OptionsEditor
+          id={props.id}
+          value={value}
+          onChange={props.onChange}
+          optionFields={def.type.optionFields}
+          objectTypes={props.ext.kind === 'card' ? props.ext.objectTypes : []}
+        />
+      );
+    case 'stringList': {
+      const field = crmPropertyField(component, def);
+      if (field?.mode === 'multiple') {
+        return <CrmPropertyListEditor id={props.id} def={def} value={value} onChange={props.onChange} ext={props.ext} nodeId={props.nodeId} field={field} />;
+      }
+      return <StringListEditor {...props} pipelineSteps={isPipelineStepsProp(component, def)} />;
+    }
     case 'date':
       return <DateEditor {...props} />;
     case 'time':
       return <TimeEditor {...props} />;
     case 'json':
-      return <JsonEditor {...props} />;
+      return (
+        <JsonEditor
+          {...props}
+          extra={
+            isStatisticsProp(nodeType, def) ? <AddStatisticPanel ext={props.ext} nodeId={props.nodeId} value={value} onChange={props.onChange} /> : undefined
+          }
+        />
+      );
     case 'object':
       return <ObjectEditor {...props} />;
     default:
@@ -295,11 +350,11 @@ function UrlEditor({ id, def, value, onChange, ext, nodeId, required }: LiteralE
   );
 }
 
-function StringListEditor({ id, def, value, onChange }: LiteralEditorProps) {
+function StringListEditor({ id, def, value, onChange, pipelineSteps }: LiteralEditorProps & { pipelineSteps?: boolean }) {
   const t = def.type.kind === 'stringList' ? def.type : { kind: 'stringList' as const };
   const list = Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
   const options = 'options' in t && t.options ? t.options.map((o) => ({ value: String(o.value), label: optionLabel(o) })) : undefined;
-  return (
+  const chips = (
     <ChipsInput
       id={id}
       value={list}
@@ -308,6 +363,13 @@ function StringListEditor({ id, def, value, onChange }: LiteralEditorProps) {
       aria-label={def.label}
       onChange={(next) => onChange(next.length ? next : undefined)}
     />
+  );
+  if (!pipelineSteps) return chips;
+  return (
+    <div className="ub-insp-stack">
+      {chips}
+      <PipelineStagesButton onApply={(labels) => onChange(labels.length ? labels : undefined)} />
+    </div>
   );
 }
 
@@ -338,7 +400,7 @@ function TimeEditor({ id, def, value, onChange }: LiteralEditorProps) {
 }
 
 /** JSON text editor with live validation. Invalid text is kept locally and not stored. */
-export function JsonEditor({ id, def, value, onChange, mismatch }: LiteralEditorProps & { mismatch?: boolean }) {
+export function JsonEditor({ id, def, value, onChange, mismatch, extra }: LiteralEditorProps & { mismatch?: boolean; extra?: ReactNode }) {
   const template = def.type.kind === 'json' ? def.type.template : undefined;
   const hint = def.type.kind === 'json' ? def.type.hint : undefined;
   const pretty = (v: JsonValue | undefined) => (v === undefined ? '' : prettyJson(v));
@@ -409,6 +471,7 @@ export function JsonEditor({ id, def, value, onChange, mismatch }: LiteralEditor
           </Button>
         </div>
       )}
+      {extra}
     </div>
   );
 }

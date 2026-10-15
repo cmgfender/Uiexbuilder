@@ -11,6 +11,8 @@
  *    generated code would. Inside fetch / run function, a failure (request, body/parameters
  *    expression or an onSuccess step) runs the onError steps instead (try { ... } catch (error)).
  *  - Errors are logged to the runtime console and never escape into the editor.
+ *  - With live HubSpot data (ActionHost.getLive), fetch requests go through the connector's
+ *    proxy (no browser CORS limits) and actions.fetchCrmObjectProperties reads the sample record.
  */
 import type {
   ActionStep,
@@ -22,9 +24,11 @@ import type {
   Project,
   RunFunctionAction,
 } from '../model/types';
+import type { ProxyFetchRequest, ProxyFetchResponse } from '../connect/types';
 import { evaluate, interpolate, runStatements, type Scope } from './expr';
+import { elapsedMs, isAbortLike, liveErrorInfo, now } from './liveErrors';
 import { mockFunctionResult, mockRecordProperties } from './mockData';
-import type { IframeModalState, RuntimeLogEntry } from './types';
+import type { IframeModalState, LiveDataAdapter, RuntimeLogEntry } from './types';
 
 /** Simulated latencies and limits (mutable so tests can shorten them). */
 export const RUNTIME_TIMING = {
@@ -36,6 +40,8 @@ export const RUNTIME_TIMING = {
   alertDismissMs: 6000,
   /** Default timeout for real fetch requests made from the preview. */
   fetchTimeoutMs: 8000,
+  /** Live data: a source whose request changed re-runs once its inputs settle for this long. */
+  liveDebounceMs: 250,
 };
 
 /** What the action runner needs from the runtime host (RuntimeProvider implements it). */
@@ -51,6 +57,8 @@ export interface ActionHost {
   runDataSource(dataSourceId: string): Promise<void>;
   /** False once the runtime was reset or unmounted: in-flight handlers stop silently. */
   isActive(): boolean;
+  /** Live HubSpot data of the preview (null / absent = mock data). */
+  getLive?(): LiveDataAdapter | null;
 }
 
 const ALERT_TYPES: AlertType[] = ['info', 'warning', 'success', 'danger', 'tip'];
@@ -207,6 +215,105 @@ async function readJsonResponse(res: Response): Promise<unknown> {
   return body;
 }
 
+const PROXY_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] as const;
+
+/**
+ * The connector request for a preview hubspot.fetch call. Bodies are JSON (a JSON string body is
+ * sent as the value it encodes), GET requests carry none.
+ */
+export function previewRequestToProxy(url: string, options: PreviewFetchOptions = {}): ProxyFetchRequest {
+  const upper = (options.method ?? 'GET').toUpperCase();
+  const method = (PROXY_METHODS as readonly string[]).includes(upper) ? (upper as ProxyFetchRequest['method']) : 'GET';
+  const request: ProxyFetchRequest = { url, method, timeoutMs: options.timeout ?? RUNTIME_TIMING.fetchTimeoutMs };
+  if (options.headers && Object.keys(options.headers).length) request.headers = { ...options.headers };
+  if (method !== 'GET' && options.body !== undefined && options.body !== null) {
+    let body = options.body;
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch {
+        // Not JSON: sent as a JSON string.
+      }
+    }
+    request.body = body;
+  }
+  return request;
+}
+
+/**
+ * Parses a proxied response like the preview parses a direct one (empty body -> null): a non-2xx
+ * status or a body that is not JSON throws a PreviewFetchError.
+ */
+export function readProxyJson(res: ProxyFetchResponse): unknown {
+  const text = typeof res.body === 'string' ? res.body : '';
+  let body: unknown = null;
+  let parsed = true;
+  if (text.trim()) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      parsed = false;
+      body = text;
+    }
+  }
+  if (!res.ok) {
+    const err = new PreviewFetchError(`Request failed with status ${res.status}`, 'status', res.status);
+    (err as PreviewFetchError & { body?: unknown }).body = body;
+    throw err;
+  }
+  if (!parsed) {
+    throw new PreviewFetchError(
+      res.truncated ? 'Response is too large to preview (it was cut off, so it is not valid JSON)' : 'Response is not valid JSON',
+      'parse',
+      res.status,
+    );
+  }
+  return body;
+}
+
+/** A fetch Response stand-in for a proxied response (what custom code's hubspot.fetch resolves to). */
+export function proxyResponseLike(url: string, res: ProxyFetchResponse): Response {
+  const text = typeof res.body === 'string' ? res.body : '';
+  const headerMap = new Map(Object.entries(res.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
+  const headers = {
+    get: (name: string) => headerMap.get(String(name).toLowerCase()) ?? null,
+    has: (name: string) => headerMap.has(String(name).toLowerCase()),
+    forEach: (cb: (value: string, key: string) => void) => headerMap.forEach((v, k) => cb(v, k)),
+  };
+  const like = {
+    ok: res.ok,
+    status: res.status,
+    statusText: '',
+    url,
+    redirected: false,
+    type: 'basic',
+    headers,
+    bodyUsed: false,
+    text: async () => text,
+    json: async () => JSON.parse(text) as unknown,
+    clone: () => proxyResponseLike(url, res),
+  };
+  return like as unknown as Response;
+}
+
+/** The connector's fetch proxy when the preview uses live HubSpot data. */
+function proxyOf(host: ActionHost): LiveDataAdapter['proxyFetch'] | undefined {
+  const live = host.getLive?.();
+  return live && typeof live.proxyFetch === 'function' ? live.proxyFetch : undefined;
+}
+
+/** Logs a proxied request that failed (connector errors keep their code). */
+function logProxyFailure(host: ActionHost, method: string, url: string, e: unknown): void {
+  if (isAbortLike(e)) return;
+  const info = liveErrorInfo(e);
+  const body = e instanceof PreviewFetchError ? (e as { body?: unknown }).body : undefined;
+  host.log(
+    'error',
+    `Live: ${method} ${url} failed — ${info.message}${info.code ? ` (${info.code})` : ''}`,
+    body !== undefined ? body : info.detail,
+  );
+}
+
 /** Explains why a request from the designer failed and how HubSpot differs. */
 function logFetchFailure(host: ActionHost, url: string, e: unknown): void {
   if (e instanceof PreviewFetchError && e.reason === 'network') {
@@ -293,6 +400,33 @@ function openIframe(
   host.openIframeModal(modal, onClose);
 }
 
+/**
+ * The sample record's real properties (live data with a sample record and a property list), or
+ * null to use the mock values. Failures are logged and reject like HubSpot's action would.
+ */
+async function liveRecordProperties(host: ActionHost, list: string[] | '*'): Promise<Record<string, string | null> | null> {
+  const live = host.getLive?.();
+  const crm = live?.context.crm;
+  if (!live || !crm || list === '*' || list.length === 0) return null;
+  const started = now();
+  try {
+    const values = await live.getRecordProperties(crm.objectTypeId, crm.objectId, list, false);
+    const out: Record<string, string | null> = {};
+    for (const p of list) {
+      const v = values?.[p];
+      out[p] = v === undefined || v === null ? null : String(v);
+    }
+    host.log('info', `Live: GET record properties (${list.length}) — ${elapsedMs(started)} ms`);
+    return out;
+  } catch (e) {
+    if (!isAbortLike(e)) {
+      const info = liveErrorInfo(e);
+      host.log('error', `Live: GET record properties failed — ${info.message}${info.code ? ` (${info.code})` : ''}`, info.detail);
+    }
+    throw e;
+  }
+}
+
 /** The `actions`, `hubspot` and `logger` objects available to custom code. */
 export function createCustomCodeGlobals(host: ActionHost): { actions: Record<string, unknown>; hubspot: Record<string, unknown>; logger: Record<string, unknown> } {
   const fmt = (args: unknown[]) => args.map((a) => (typeof a === 'string' ? a : safeJson(a))).join(' ');
@@ -321,6 +455,11 @@ export function createCustomCodeGlobals(host: ActionHost): { actions: Record<str
     copyTextToClipboard: (text: unknown) => copyText(host, String(text ?? '')),
     fetchCrmObjectProperties: async (properties: unknown) => {
       const list = properties === '*' ? '*' : Array.isArray(properties) ? properties.map(String) : [];
+      const real = await liveRecordProperties(host, list);
+      if (real) {
+        host.log('action', 'actions.fetchCrmObjectProperties (live)', real);
+        return real;
+      }
       const result = mockRecordProperties(host.getExtension(), list);
       host.log('action', 'actions.fetchCrmObjectProperties (mock)', result);
       return result;
@@ -328,6 +467,15 @@ export function createCustomCodeGlobals(host: ActionHost): { actions: Record<str
     onCrmPropertiesUpdate: (properties: unknown, callback: unknown) => {
       if (typeof callback !== 'function') return;
       const list = properties === '*' ? '*' : Array.isArray(properties) ? properties.map(String) : [];
+      const live = host.getLive?.();
+      if (live?.context.crm && list !== '*' && list.length) {
+        void liveRecordProperties(host, list)
+          .then((real) => {
+            if (real && host.isActive()) (callback as (props: Record<string, string | null>) => void)(real);
+          })
+          .catch(() => {});
+        return;
+      }
       (callback as (props: Record<string, string | null>) => void)(mockRecordProperties(host.getExtension(), list));
     },
     navigateToPage: (...args: unknown[]) => host.log('action', `actions.navigateToPage(${fmt(args)}) (simulated)`),
@@ -335,7 +483,20 @@ export function createCustomCodeGlobals(host: ActionHost): { actions: Record<str
   const hubspot = {
     fetch: async (url: unknown, options: PreviewFetchOptions = {}) => {
       const u = String(url);
-      host.log('action', `hubspot.fetch ${(options.method ?? 'GET').toUpperCase()} ${u}`, options.body);
+      const method = (options.method ?? 'GET').toUpperCase();
+      host.log('action', `hubspot.fetch ${method} ${u}`, options.body);
+      const proxy = proxyOf(host);
+      if (proxy) {
+        const started = now();
+        try {
+          const res = await proxy(previewRequestToProxy(u, options ?? {}));
+          host.log('info', `Live: ${method} ${u} → ${res.status} — ${elapsedMs(started)} ms`);
+          return proxyResponseLike(u, res);
+        } catch (e) {
+          logProxyFailure(host, method, u, e);
+          throw e;
+        }
+      }
       try {
         const res = await previewFetch(u, options);
         host.log('info', `hubspot.fetch ${u} → ${res.status}`);
@@ -380,16 +541,35 @@ async function runFetchStep(step: FetchAction, scope: Scope, host: ActionHost): 
     }
     const timeout = typeof step.timeout === 'number' && step.timeout > 0 ? step.timeout : undefined;
     host.log('action', `hubspot.fetch ${method} ${url}`, body);
-    let res: Response;
-    try {
-      res = await previewFetch(url, { method, body, headers, ...(timeout ? { timeout } : {}) });
-      response = await readJsonResponse(res);
-    } catch (e) {
-      logFetchFailure(host, url, e);
-      throw new StepFailure(errorMessage(e), e);
+    const options: PreviewFetchOptions = { method, body, headers, ...(timeout ? { timeout } : {}) };
+    const proxy = proxyOf(host);
+    if (proxy) {
+      // Live data: the connector makes the request server-side (like HubSpot's own proxy).
+      const started = now();
+      let status: number;
+      try {
+        const res = await proxy(previewRequestToProxy(url, options));
+        status = res.status;
+        response = readProxyJson(res);
+      } catch (e) {
+        if (!host.isActive()) return;
+        logProxyFailure(host, method, url, e);
+        throw new StepFailure(errorMessage(e), e);
+      }
+      if (!host.isActive()) return;
+      host.log('info', `Live: ${method} ${url} → ${status} — ${elapsedMs(started)} ms`, response);
+    } else {
+      let res: Response;
+      try {
+        res = await previewFetch(url, options);
+        response = await readJsonResponse(res);
+      } catch (e) {
+        logFetchFailure(host, url, e);
+        throw new StepFailure(errorMessage(e), e);
+      }
+      if (!host.isActive()) return;
+      host.log('info', `Response from ${url} (${res.status})`, response);
     }
-    if (!host.isActive()) return;
-    host.log('info', `Response from ${url} (${res.status})`, response);
     if (step.resultState) setStateChecked(host, step.resultState, response);
     await executeSteps(step.onSuccess ?? [], { ...scope, response }, host);
   } catch (e) {

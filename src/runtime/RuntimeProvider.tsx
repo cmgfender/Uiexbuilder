@@ -12,12 +12,23 @@
  *  - State variable definitions change: variables whose definition is unchanged keep their value,
  *    others start from their initial value.
  *  - Switching to design mode closes overlays, alerts, the iframe modal and tooltips.
+ *
+ * Live HubSpot data (`live`, see LiveDataAdapter in ./types and ./live.ts): CRM sources (and fetch
+ * sources when the connector proxies hubspot.fetch) load from the portal in both modes, with
+ * HubSpot's async semantics — loading with the first-render values (`{}` / `[]`), then the real
+ * data or an error (`<name>Error` + a console entry). A source's first load waits for the sources
+ * its request reads; afterwards a CRM source re-runs when its request changes (debounced by
+ * RUNTIME_TIMING.liveDebounceMs), like a hook whose inputs changed. A reset, entering preview or a
+ * new `live.key` (another record / portal) loads everything again; responses of an older load, a
+ * superseded request or an unmounted runtime are ignored. App functions keep their mock results.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { codeTrustVersion, subscribeCodeTrust } from '../model/trust';
 import { getComponent } from '../registry';
 import type { ActionStep, AlertType, DataSource, NodeId, Project, Extension, StateVar } from '../model/types';
 import { executeActions, RUNTIME_TIMING, type ActionHost } from './actions';
+import { isLiveSource, liveDataKey, liveGates, planLiveRequest, type LiveRequestFailure, type LiveRequestPlan } from './live';
+import { elapsedMs, isAbortLike, liveErrorInfo, now } from './liveErrors';
 import {
   ControlsContext,
   RenderContext,
@@ -30,9 +41,10 @@ import {
 } from './context';
 import { resolvePropValue, type Scope } from './expr';
 import { interpolate } from './expr';
-import { mockDataForSource } from './mockData';
+import { isDeferredSource, mockDataForSource } from './mockData';
 import {
   buildScopeWithDiagnostics,
+  initialDataValue,
   initialLoadStatus,
   initialStateValues,
   loadsOnOpen,
@@ -70,6 +82,48 @@ interface StateStore {
   values: Record<string, unknown>;
 }
 
+/** Runtime value of a data source that loads live (see LiveDataAdapter). */
+interface LiveEntry {
+  kind: DataSource['kind'];
+  data: unknown;
+  loading: boolean;
+  error: string | null;
+  /** Has finished loading at least once in this live session. */
+  loaded: boolean;
+}
+
+/** Live data of one session (`epoch` changes on reset, entering preview and a new live key). */
+interface LiveStore {
+  epoch: number;
+  entries: Record<string, LiveEntry>;
+}
+
+/** Bookkeeping of the live requests of the current session (not rendered). */
+interface LiveRequests {
+  /** Kind + request signature of each source's latest request. */
+  ran: Map<string, { kind: DataSource['kind']; sig: string }>;
+  /** Signature a debounced re-run is waiting to load. */
+  pending: Map<string, string>;
+  timers: Map<string, ReturnType<typeof setTimeout>>;
+  /** Generation of each source's latest request: older responses are ignored. */
+  gens: Map<string, number>;
+  seq: number;
+}
+
+/** A live source before its first load: loading with HubSpot's first-render value (or idle until run). */
+function initialLiveEntry(ds: DataSource): LiveEntry {
+  return isDeferredSource(ds)
+    ? { kind: ds.kind, data: null, loading: false, error: null, loaded: false }
+    : { kind: ds.kind, data: initialDataValue(ds), loading: true, error: null, loaded: false };
+}
+
+function initialLiveEntries(ext: Extension, live: LiveDataAdapter | null): Record<string, LiveEntry> {
+  const out: Record<string, LiveEntry> = {};
+  if (!live) return out;
+  for (const ds of ext.dataSources ?? []) if (isLiveSource(ds, live)) out[ds.id] = initialLiveEntry(ds);
+  return out;
+}
+
 const DATA_SOURCE_LABEL: Record<string, string> = {
   crmProperties: 'useCrmProperties',
   associations: 'useAssociations',
@@ -99,7 +153,7 @@ function loadDepths(ext: Extension): Map<string, number> {
   return depths;
 }
 
-export function RuntimeProvider({ project, extension, mode, resetKey = 0, children }: RuntimeProviderProps) {
+export function RuntimeProvider({ project, extension, mode, resetKey = 0, live = null, children }: RuntimeProviderProps) {
   // Latest props for callbacks that outlive a render (async handlers, timers, overlay unmounts).
   const projectRef = useRef(project);
   projectRef.current = project;
@@ -107,6 +161,9 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
   extRef.current = extension;
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  const liveRef = useRef<LiveDataAdapter | null>(live);
+  liveRef.current = live;
+  const liveKey = liveDataKey(live);
   const mountedRef = useRef(false);
   /** Bumped on every reset: async work started in an older session is discarded. */
   const sessionRef = useRef(0);
@@ -132,18 +189,31 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
   const [logs, setLogs] = useState<RuntimeLogEntry[]>([]);
   const [hostCount, setHostCount] = useState(0);
-  const [applied, setApplied] = useState({ resetToken, mode });
+  const [applied, setApplied] = useState({ resetToken, mode, liveKey, liveEpoch: 0 });
+  const [liveState, setLiveStore] = useState<LiveStore>(() => ({ epoch: 0, entries: initialLiveEntries(extension, live) }));
 
   // Derived resets are applied while rendering (React re-renders immediately), so a stale frame
   // with old values is never committed.
   const isReset = applied.resetToken !== resetToken;
+  const liveChanged = applied.liveKey !== liveKey;
+  // Data loads again on a reset, when a preview session starts and when live data changes
+  // (connected / disconnected, another sample record or portal).
+  const dataReset = isReset || (applied.mode !== mode && mode === 'preview') || liveChanged;
   let store = stateStore;
-  if (isReset || (applied.mode !== mode && mode === 'preview')) {
+  if (dataReset) {
     // A preview session opens like the card on HubSpot: data that loads on open starts loading.
     setDsStatus(mode === 'preview' ? initialLoadStatus(extension) : {});
   } else if (applied.mode !== mode) {
     setDsStatus({});
   }
+  const liveEpoch = dataReset ? applied.liveEpoch + 1 : applied.liveEpoch;
+  let liveStore = liveState;
+  if (liveStore.epoch !== liveEpoch) {
+    liveStore = { epoch: liveEpoch, entries: initialLiveEntries(extension, live) };
+    setLiveStore(liveStore);
+  }
+  const liveEpochRef = useRef(liveEpoch);
+  liveEpochRef.current = liveEpoch;
   if (isReset) {
     store = { sig, vars: extension.state ?? [], values: initialStateValues(extension.state ?? []) };
     setStateStore(store);
@@ -151,14 +221,14 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
     store = { sig, vars: extension.state ?? [], values: reconcileStateValues(stateStore.vars, extension.state ?? [], stateStore.values) };
     setStateStore(store);
   }
-  if (isReset || applied.mode !== mode) {
-    if (isReset || mode === 'design') {
+  if (isReset || applied.mode !== mode || liveChanged) {
+    if (isReset || (applied.mode !== mode && mode === 'design')) {
       setOverlays([]);
       setAlerts([]);
       setIframeModal(null);
       setTooltip(null);
     }
-    setApplied({ resetToken, mode });
+    setApplied({ resetToken, mode, liveKey, liveEpoch });
   }
   const stateValues = store.values;
 
@@ -210,10 +280,89 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
   const clearLogs = useCallback(() => setLogs([]), []);
 
   // ---------------------------------------------------------------- data sources
-  const dataSources = useMemo(
-    () => resolveDataSources(extension, dsStatus),
+  const liveEntries = liveStore.entries;
+  const dataSources = useMemo(() => {
+    const out = resolveDataSources(extension, dsStatus);
+    if (!live) return out;
+    // Live sources expose what the portal returned (mock simulations do not apply to them).
+    for (const ds of extension.dataSources ?? []) {
+      if (!isLiveSource(ds, live)) continue;
+      const entry = liveEntries[ds.id]?.kind === ds.kind ? liveEntries[ds.id] : initialLiveEntry(ds);
+      out[ds.id] = { data: entry.data, loading: entry.loading, error: entry.error };
+    }
+    return out;
     // resolveDataSources reads only these parts of the extension.
-    [extension.dataSources, extension.mock, extension.objectTypes, dsStatus],
+  }, [extension.dataSources, extension.mock, extension.objectTypes, dsStatus, live, liveEntries]);
+  const dataSourcesRef = useRef(dataSources);
+  dataSourcesRef.current = dataSources;
+
+  // ---------------------------------------------------------------- live data
+  const liveRequests = useRef<LiveRequests>({ ran: new Map(), pending: new Map(), timers: new Map(), gens: new Map(), seq: 0 });
+
+  const updateLiveEntry = useCallback((epoch: number, id: string, update: (prev: LiveEntry | undefined) => LiveEntry) => {
+    setLiveStore((prev) => (prev.epoch !== epoch ? prev : { ...prev, entries: { ...prev.entries, [id]: update(prev.entries[id]) } }));
+  }, []);
+
+  /**
+   * Runs a live source's request now (the plan is built from the current scope unless given).
+   * Resolves once the response is applied — or ignored because a newer request, another live
+   * session or an unmount superseded it.
+   */
+  const startLive = useCallback(
+    (dsId: string, given?: LiveRequestPlan | LiveRequestFailure): Promise<void> => {
+      const adapter = liveRef.current;
+      const ds = extRef.current.dataSources?.find((d) => d.id === dsId);
+      if (!adapter || !ds || !isLiveSource(ds, adapter)) return Promise.resolve();
+      const requests = liveRequests.current;
+      const timer = requests.timers.get(dsId);
+      if (timer) clearTimeout(timer);
+      requests.timers.delete(dsId);
+      requests.pending.delete(dsId);
+      const plan = given ?? planLiveRequest(ds, scopeRef.current, adapter, extRef.current.kind);
+      requests.ran.set(dsId, { kind: ds.kind, sig: plan.sig });
+      const gen = ++requests.seq;
+      requests.gens.set(dsId, gen);
+      const epoch = liveEpochRef.current;
+      const isCurrent = () => mountedRef.current && liveEpochRef.current === epoch && requests.gens.get(dsId) === gen;
+
+      if (!plan.ok) {
+        updateLiveEntry(epoch, dsId, () => ({ kind: ds.kind, data: initialDataValue(ds), loading: false, error: plan.message, loaded: true }));
+        log(
+          plan.code === 'no_sample_record' || plan.code === 'no_record_context' ? 'warn' : 'error',
+          `Live: ${plan.label} failed for ${ds.name} — ${plan.message} (${plan.code})`,
+          { code: plan.code },
+        );
+        return Promise.resolve();
+      }
+      // Loading again keeps the data of an earlier load (like a hook refetching).
+      updateLiveEntry(epoch, dsId, (prev) => {
+        const same = prev?.kind === ds.kind && prev.loaded && prev.error === null;
+        return { kind: ds.kind, data: same ? prev.data : initialDataValue(ds), loading: true, error: null, loaded: prev?.kind === ds.kind && prev.loaded };
+      });
+      const started = now();
+      return Promise.resolve()
+        .then(() => plan.perform(adapter))
+        .then(
+          (result) => {
+            if (!isCurrent()) return;
+            const latest = extRef.current.dataSources?.find((d) => d.id === dsId);
+            if (!latest) return;
+            updateLiveEntry(epoch, dsId, () => ({ kind: ds.kind, data: result.data, loading: false, error: null, loaded: true }));
+            if (!plan.local) log('info', `Live: ${plan.label}${result.summary} for ${latest.name} — ${elapsedMs(started)} ms`, result.data);
+          },
+          (e: unknown) => {
+            if (!isCurrent()) return;
+            if (isAbortLike(e)) {
+              updateLiveEntry(epoch, dsId, (prev) => ({ ...(prev ?? initialLiveEntry(ds)), loading: false }));
+              return;
+            }
+            const info = liveErrorInfo(e);
+            updateLiveEntry(epoch, dsId, () => ({ kind: ds.kind, data: initialDataValue(ds), loading: false, error: info.message, loaded: true }));
+            log('error', `Live: ${plan.label} failed for ${ds.name} — ${info.message}${info.code ? ` (${info.code})` : ''}`, info.detail);
+          },
+        );
+    },
+    [log, updateLiveEntry],
   );
 
   const runDataSource = useCallback(
@@ -224,6 +373,12 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
         log('warn', `Data source "${idOrName}" does not exist`);
         return;
       }
+      if (liveRef.current && isLiveSource(ds, liveRef.current)) {
+        // Live: the request runs again right away (like query.refetch() / the loader).
+        log('action', `Refetching ${ds.name} (${DATA_SOURCE_LABEL[ds.kind] ?? ds.kind})`);
+        await startLive(ds.id);
+        return;
+      }
       const session = sessionRef.current;
       setDsStatus((prev) => ({ ...prev, [ds.id]: { loading: true, error: null, loaded: prev[ds.id]?.loaded ?? false } }));
       log('action', `Refetching ${ds.name} (${DATA_SOURCE_LABEL[ds.kind] ?? ds.kind})`);
@@ -232,7 +387,7 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
       setDsStatus((prev) => ({ ...prev, [ds.id]: { loading: false, error: null, loaded: true } }));
       logLoaded(extRef.current, ds);
     },
-    [log],
+    [log, startLive],
   );
 
   /** Console entry for a finished (mock) load, explaining simulated states and missing mocks. */
@@ -271,6 +426,8 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
     for (const ds of ext.dataSources ?? []) {
       const depth = depths.get(ds.id);
       if (depth === undefined || ext.mock?.simulate?.[ds.id] === 'loading') continue;
+      // Live sources load from HubSpot (see the live data effects below).
+      if (isLiveSource(ds, liveRef.current)) continue;
       timers.push(
         setTimeout(() => {
           if (!mountedRef.current) return;
@@ -289,15 +446,17 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
       );
     }
     return () => timers.forEach(clearTimeout);
-    // Runs once per preview session (reset / mode change); later edits do not restart loads.
+    // Runs once per preview session (reset / mode change / live data change); later edits do not
+    // restart loads.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resetToken, mode]);
+  }, [resetToken, mode, liveKey]);
 
   // ---------------------------------------------------------------- base scope
   // Trusting an imported project (model/trust.ts) lets its code run: rebuild the scope.
   const trustVersion = useSyncExternalStore(subscribeCodeTrust, codeTrustVersion, codeTrustVersion);
+  const liveContext = live?.context;
   const { scope, diagnostics } = useMemo(
-    () => buildScopeWithDiagnostics({ project, extension, stateValues, setters, dataSources }),
+    () => buildScopeWithDiagnostics({ project, extension, stateValues, setters, dataSources, liveContext: liveContext ?? null }),
     // buildScopeWithDiagnostics reads only these parts of the project / extension.
     [
       project.app.name,
@@ -313,10 +472,79 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
       setters,
       dataSources,
       trustVersion,
+      liveContext,
     ],
   );
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
+
+  // Live requests of an older session are forgotten (their responses are ignored); pending
+  // re-runs are cancelled on a new session and on unmount.
+  useEffect(() => {
+    const requests = liveRequests.current;
+    return () => {
+      for (const t of requests.timers.values()) clearTimeout(t);
+      requests.timers.clear();
+      requests.pending.clear();
+      requests.ran.clear();
+      requests.gens.clear();
+    };
+  }, [liveEpoch]);
+
+  // Live loads: each source's first load once the sources its request reads have loaded; then a
+  // CRM source re-runs (debounced) whenever its request changes — like a hook whose inputs
+  // changed. Fetch sources load once on open (or when run), like the generated loader.
+  const gates = useMemo(() => liveGates(extension), [extension.dataSources, extension.computed]);
+  useEffect(() => {
+    const adapter = liveRef.current;
+    if (!adapter) return;
+    const requests = liveRequests.current;
+    const states = dataSourcesRef.current;
+    const present = new Set<string>();
+    for (const ds of extRef.current.dataSources ?? []) {
+      if (!isLiveSource(ds, adapter)) continue;
+      present.add(ds.id);
+      const ran = requests.ran.get(ds.id);
+      if (!ran || ran.kind !== ds.kind) {
+        if (isDeferredSource(ds)) continue; // runs when asked (refetch action)
+        if ((gates.get(ds.id) ?? []).some((dep) => states[dep.id]?.loading)) continue;
+        void startLive(ds.id);
+        continue;
+      }
+      if (ds.kind === 'fetch') continue;
+      const plan = planLiveRequest(ds, scopeRef.current, adapter, extRef.current.kind);
+      if (plan.sig === ran.sig) {
+        const timer = requests.timers.get(ds.id);
+        if (timer) clearTimeout(timer);
+        requests.timers.delete(ds.id);
+        requests.pending.delete(ds.id);
+        continue;
+      }
+      if (requests.pending.get(ds.id) === plan.sig) continue;
+      const old = requests.timers.get(ds.id);
+      if (old) clearTimeout(old);
+      requests.pending.set(ds.id, plan.sig);
+      const id = ds.id;
+      requests.timers.set(
+        id,
+        setTimeout(() => {
+          requests.timers.delete(id);
+          requests.pending.delete(id);
+          const latestAdapter = liveRef.current;
+          const latest = extRef.current.dataSources?.find((d) => d.id === id);
+          if (!mountedRef.current || !latestAdapter || !latest || !isLiveSource(latest, latestAdapter)) return;
+          const next = planLiveRequest(latest, scopeRef.current, latestAdapter, extRef.current.kind);
+          if (next.sig !== requests.ran.get(id)?.sig) void startLive(id, next);
+        }, RUNTIME_TIMING.liveDebounceMs),
+      );
+    }
+    for (const [id, timer] of requests.timers) {
+      if (present.has(id)) continue;
+      clearTimeout(timer);
+      requests.timers.delete(id);
+      requests.pending.delete(id);
+    }
+  }, [liveEpoch, live, scope, dataSources, gates, startLive]);
 
   // ---------------------------------------------------------------- alerts
   const alertTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
@@ -418,6 +646,7 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
       closeOverlay,
       runDataSource,
       isActive: () => mountedRef.current && sessionRef.current === session,
+      getLive: () => liveRef.current,
     };
   }, [setStateValue, addAlert, log, openIframeModal, closeOverlay, runDataSource]);
 

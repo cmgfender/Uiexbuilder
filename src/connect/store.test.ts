@@ -96,6 +96,7 @@ describe('init(): is a connector here?', () => {
     await useConnection.getState().init();
     expect(useConnection.getState().status).toBe('error');
     expect(useConnection.getState().error).toBeTruthy();
+    expect(useConnection.getState().errorSource).toBe('startup');
     fail = false;
     await useConnection.getState().init();
     expect(useConnection.getState().status).toBe('disconnected');
@@ -179,6 +180,7 @@ describe('connect(): the HubSpot sign-in window', () => {
     const s = useConnection.getState();
     expect(s.status).toBe('disconnected');
     expect(s.errorCode).toBe('access_denied');
+    expect(s.errorSource).toBe('sign-in');
     expect(s.error).toMatch(/Nothing was shared/);
   });
 
@@ -288,6 +290,7 @@ describe('disconnect, switching accounts and staying in sync', () => {
     await useConnection.getState().disconnect();
     expect(useConnection.getState().status).toBe('connected');
     expect(useConnection.getState().error).toMatch(/Couldn't disconnect/);
+    expect(useConnection.getState().errorSource).toBe('sign-out');
   });
 
   it('switchPortal() signs out, then sends the open window to the sign-in page', async () => {
@@ -299,7 +302,7 @@ describe('disconnect, switching accounts and staying in sync', () => {
     });
     await useConnection.getState().init();
     const popup = fakePopup();
-    const open = vi.fn(() => popup as unknown as Window);
+    const open = vi.fn((_url: string, _name: string, _features: string) => popup as unknown as Window);
     connectEnv.open = open;
     const done = useConnection.getState().switchPortal();
     // Opened synchronously (blank) so the browser allows it.

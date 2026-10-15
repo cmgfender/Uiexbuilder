@@ -5,6 +5,7 @@
  *    (limited to the card's object types), a keyboard-accessible search list, the picked record with
  *    "Open in HubSpot" and Clear, and plain-language problems (e.g. a missing permission).
  *  - Settings / app home: a "Live data · <account>" badge (no record needed).
+ *  - Preview mode: the switch moves into the chip's popover so the preview banner keeps its room.
  */
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { ChevronDown, Database, ExternalLink, FlaskConical, LoaderCircle, RefreshCw, Search, TriangleAlert, X } from 'lucide-react';
@@ -45,76 +46,46 @@ function LiveDataControls() {
   const ext = useActiveExtensionSummary();
   const loaded = useLiveData((s) => s.projectId === ext.projectId);
   const mode = useLiveData((s) => s.mode);
+  // In preview the toolbar belongs to the preview banner (Reset / Exit): one compact chip whose
+  // popover holds the Mock | Live switch.
+  const compact = useEditor((s) => s.mode === 'preview');
   if (!loaded) return null;
   return (
-    <div className="ub-cn-live">
-      <Segmented<LiveMode>
-        aria-label="Preview data"
-        value={mode}
-        onChange={(m) => useLiveData.getState().setMode(m)}
-        options={[
-          {
-            value: 'mock',
-            label: (
-              <>
-                <FlaskConical size={12} aria-hidden /> Mock<span className="ub-cn-live__suffix"> data</span>
-              </>
-            ),
-            title: 'Preview with the sample values from Data › Mock data',
-          },
-          {
-            value: 'live',
-            label: (
-              <>
-                <Database size={12} aria-hidden /> Live<span className="ub-cn-live__suffix"> data</span>
-              </>
-            ),
-            title: 'Preview with real records from your HubSpot account (read-only)',
-          },
-        ]}
-      />
-      {mode === 'live' && (ext.kind === 'card' ? <SampleRecordChip ext={ext} /> : <AccountBadge />)}
+    <div className={cx('ub-cn-live', compact && 'ub-cn-live--compact')}>
+      {!compact && <ModeSwitch mode={mode} />}
+      {(compact || mode === 'live') && <DataChip ext={ext} mode={mode} compact={compact} />}
       <span className="ub-cn-live__divider" aria-hidden />
     </div>
   );
 }
 
-function AccountBadge() {
-  const info = useConnection((s) => s.info);
-  const error = useLiveData((s) => s.error);
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLButtonElement>(null);
-  if (!info.connected) return null;
-  const name = info.hubDomain || `account ${info.portalId}`;
+function ModeSwitch({ mode }: { mode: LiveMode }) {
   return (
-    <>
-      <button
-        ref={ref}
-        type="button"
-        className={cx('ub-cn-chip', error && 'ub-cn-chip--warn')}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-label={`Live data from ${name}${error ? ` — problem: ${error.title}` : ''}. Details`}
-        title="This page has no record: the preview uses your HubSpot account and user"
-        onClick={() => setOpen((o) => !o)}
-      >
-        {error ? <TriangleAlert size={13} aria-hidden /> : <span className="ub-cn-live-dot" aria-hidden />}
-        <span className="ub-cn-chip__text">
-          Live data · <strong>{name}</strong>
-        </span>
-      </button>
-      {open && (
-        <Popover anchor={ref.current} label="Live data" align="end" width={320} onClose={() => setOpen(false)}>
-          <div className="ub-cn-picker">
-            <div className="ub-cn-picker__head">
-              <strong>Live data</strong>
-              <span>Settings pages and app home have no CRM record. The preview uses your real account and user, and CRM searches return real records. Nothing in HubSpot is changed.</span>
-            </div>
-            {error && <LiveErrorNote error={error} onRetry={() => useLiveData.getState().clearError()} />}
-          </div>
-        </Popover>
-      )}
-    </>
+    <Segmented<LiveMode>
+      aria-label="Preview data"
+      value={mode}
+      onChange={(m) => useLiveData.getState().setMode(m)}
+      options={[
+        {
+          value: 'mock',
+          label: (
+            <>
+              <FlaskConical size={12} aria-hidden /> Mock<span className="ub-cn-live__suffix"> data</span>
+            </>
+          ),
+          title: 'Preview with the sample values from Data › Mock data',
+        },
+        {
+          value: 'live',
+          label: (
+            <>
+              <Database size={12} aria-hidden /> Live<span className="ub-cn-live__suffix"> data</span>
+            </>
+          ),
+          title: 'Preview with real records from your HubSpot account (read-only)',
+        },
+      ]}
+    />
   );
 }
 
@@ -145,51 +116,147 @@ function displayLabel(record: CrmRecordSummary): string {
   return record.label || `Record ${record.id}`;
 }
 
-function SampleRecordChip({ ext }: { ext: { id: string; kind: string; objectTypes: string[] } }) {
-  const record = useSampleRecord({ id: ext.id, kind: 'card', objectTypes: ext.objectTypes });
+interface ExtSummary {
+  id: string;
+  kind: string;
+  objectTypes: string[];
+}
+
+/**
+ * The toolbar chip and its popover:
+ *  live + CRM card       "Live data · Ada Lovelace" / "Pick a sample record" → record picker
+ *  live + settings/home  "Live data · acme.com" → what live data means without a record
+ *  mock (preview only)   "Mock data" → explanation; the popover has the Mock | Live switch
+ */
+function DataChip({ ext, mode, compact }: { ext: ExtSummary; mode: LiveMode; compact: boolean }) {
+  const isCard = ext.kind === 'card';
+  const record = useSampleRecord({ id: ext.id, kind: isCard ? 'card' : ext.kind === 'home' ? 'home' : 'settings', objectTypes: ext.objectTypes });
+  const info = useConnection((s) => s.info);
   const error = useLiveData((s) => s.error);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLButtonElement>(null);
-  useRecordLabel(ext.id, record);
+  const live = mode === 'live';
+  useRecordLabel(ext.id, live && isCard ? record : null);
+  if (!info.connected) return null;
+  const account = info.hubDomain || `account ${info.portalId}`;
+  const problem = live && error ? ` — problem: ${error.title}` : '';
+  const searchId = `${ext.id}-record-search`;
 
-  const label = record
-    ? `Live data: ${displayLabel(record)}${error ? ` — problem: ${error.title}` : ''}. Change the sample record`
-    : 'Pick a sample record to preview with real data';
+  let icon;
+  let text;
+  let label: string;
+  let title: string;
+  let popoverLabel: string;
+  if (!live) {
+    icon = <FlaskConical size={13} aria-hidden />;
+    text = 'Mock data';
+    label = 'Preview data: mock data. Change';
+    title = 'The preview uses mock data — click to use real HubSpot data';
+    popoverLabel = 'Preview data';
+  } else if (isCard) {
+    icon = error ? <TriangleAlert size={13} aria-hidden /> : record ? <span className="ub-cn-live-dot" aria-hidden /> : <Search size={13} aria-hidden />;
+    text = record ? (
+      <>
+        Live data · <strong>{displayLabel(record)}</strong>
+      </>
+    ) : (
+      'Pick a sample record'
+    );
+    label = record ? `Live data: ${displayLabel(record)}${problem}. Change the sample record` : 'Pick a sample record to preview with real data';
+    title = record ? `Previewing with ${displayLabel(record)} — click to change` : 'Pick a sample record to preview with real data';
+    popoverLabel = 'Sample record';
+  } else {
+    icon = error ? <TriangleAlert size={13} aria-hidden /> : <span className="ub-cn-live-dot" aria-hidden />;
+    text = (
+      <>
+        Live data · <strong>{account}</strong>
+      </>
+    );
+    label = `Live data from ${account}${problem}. Details`;
+    title = 'This page has no record: the preview uses your HubSpot account and user';
+    popoverLabel = 'Live data';
+  }
+
   return (
     <>
       <button
         ref={ref}
         type="button"
-        className={cx('ub-cn-chip', !record && 'ub-cn-chip--empty', error && 'ub-cn-chip--warn')}
+        className={cx('ub-cn-chip', !live && 'ub-cn-chip--mock', live && isCard && !record && 'ub-cn-chip--empty', live && error && 'ub-cn-chip--warn')}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={label}
-        title={record ? `Previewing with ${displayLabel(record)} — click to change` : 'Pick a sample record to preview with real data'}
+        title={title}
         onClick={() => setOpen((o) => !o)}
-        data-testid="uiex-sample-record"
+        data-testid={live && isCard ? 'uiex-sample-record' : 'uiex-preview-data'}
       >
-        {error ? <TriangleAlert size={13} aria-hidden /> : record ? <span className="ub-cn-live-dot" aria-hidden /> : <Search size={13} aria-hidden />}
-        <span className="ub-cn-chip__text">
-          {record ? (
-            <>
-              Live data · <strong>{displayLabel(record)}</strong>
-            </>
-          ) : (
-            'Pick a sample record'
-          )}
-        </span>
+        {icon}
+        <span className="ub-cn-chip__text">{text}</span>
         <ChevronDown size={12} aria-hidden />
       </button>
       {open && (
-        <Popover anchor={ref.current} label="Sample record" align="end" width={360} onClose={() => setOpen(false)} initialFocus={() => document.getElementById(`${ext.id}-record-search`)}>
-          <SampleRecordPanel ext={ext} record={record} onPicked={() => setOpen(false)} />
+        <Popover
+          anchor={ref.current}
+          label={popoverLabel}
+          align="end"
+          width={isCard && live ? 360 : 320}
+          onClose={() => setOpen(false)}
+          initialFocus={() => (live && isCard ? document.getElementById(searchId) : null)}
+        >
+          {compact && (
+            <div className="ub-cn-picker__switch">
+              <span className="ub-cn-picker__label">Preview with</span>
+              <ModeSwitch mode={mode} />
+            </div>
+          )}
+          {!live ? (
+            <MockNote />
+          ) : isCard ? (
+            <SampleRecordPanel ext={ext} record={record} searchId={searchId} onPicked={() => setOpen(false)} />
+          ) : (
+            <AccountNote />
+          )}
         </Popover>
       )}
     </>
   );
 }
 
-function SampleRecordPanel({ ext, record, onPicked }: { ext: { id: string; objectTypes: string[] }; record: CrmRecordSummary | null; onPicked: () => void }) {
+function MockNote() {
+  return (
+    <div className="ub-cn-picker">
+      <div className="ub-cn-picker__head">
+        <strong>Mock data</strong>
+        <span>The preview uses the sample values from Data › Mock data. Choose Live data to preview with real records from your HubSpot account (read-only).</span>
+      </div>
+    </div>
+  );
+}
+
+function AccountNote() {
+  const error = useLiveData((s) => s.error);
+  return (
+    <div className="ub-cn-picker">
+      <div className="ub-cn-picker__head">
+        <strong>Live data</strong>
+        <span>Settings pages and app home have no CRM record. The preview uses your real account and user, and CRM searches return real records. Nothing in HubSpot is changed.</span>
+      </div>
+      {error && <LiveErrorNote error={error} onRetry={() => useLiveData.getState().clearError()} />}
+    </div>
+  );
+}
+
+function SampleRecordPanel({
+  ext,
+  record,
+  searchId,
+  onPicked,
+}: {
+  ext: { id: string; objectTypes: string[] };
+  record: CrmRecordSummary | null;
+  searchId: string;
+  onPicked: () => void;
+}) {
   const { objectTypes: known } = useObjectTypes();
   const info = useConnection((s) => s.info);
   const error = useLiveData((s) => s.error);
@@ -255,7 +322,7 @@ function SampleRecordPanel({ ext, record, onPicked }: { ext: { id: string; objec
         </div>
       )}
 
-      <RecordSearch key={activeType} inputId={`${ext.id}-record-search`} objectType={activeType} known={known} selectedId={record?.id ?? null} onPick={pick} />
+      <RecordSearch key={activeType} inputId={searchId} objectType={activeType} known={known} selectedId={record?.id ?? null} onPick={pick} />
     </div>
   );
 }

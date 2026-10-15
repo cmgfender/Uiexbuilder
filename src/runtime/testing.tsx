@@ -10,7 +10,7 @@ import { useRuntime } from './context';
 import { ExtensionRenderer } from './NodeRenderer';
 import { PreviewHost } from './PreviewHost';
 import { RuntimeProvider } from './RuntimeProvider';
-import type { RuntimeApi } from './types';
+import type { LiveDataAdapter, RuntimeApi } from './types';
 
 export interface TestDocOptions {
   state?: Array<Omit<StateVar, 'id'> & { id?: string }>;
@@ -42,6 +42,8 @@ export interface RenderOptions {
   resetKey?: number;
   /** Extra elements rendered inside the provider. */
   extra?: ReactNode;
+  /** Live HubSpot data adapter (null = mock data). */
+  live?: LiveDataAdapter | null;
 }
 
 /** Renders an extension inside a RuntimeProvider and exposes the live RuntimeApi. */
@@ -51,8 +53,8 @@ export function renderDoc(project: Project, ext: Extension, opts: RenderOptions 
     ref.api = useRuntime();
     return null;
   }
-  const ui = (p: Project, e: Extension, mode: 'design' | 'preview', resetKey: number, withHost: boolean) => (
-    <RuntimeProvider project={p} extension={e} mode={mode} resetKey={resetKey}>
+  const ui = (p: Project, e: Extension, mode: 'design' | 'preview', resetKey: number, withHost: boolean, live: LiveDataAdapter | null) => (
+    <RuntimeProvider project={p} extension={e} mode={mode} resetKey={resetKey} live={live}>
       <div className={`hsp-root ${mode === 'preview' ? 'hsp-live' : 'hsp-design'}`}>
         <div className="card-frame" style={{ position: 'relative' }}>
           <ExtensionRenderer />
@@ -69,8 +71,9 @@ export function renderDoc(project: Project, ext: Extension, opts: RenderOptions 
     mode: opts.mode ?? 'preview',
     resetKey: opts.resetKey ?? 0,
     withHost: opts.withHost ?? true,
+    live: opts.live ?? null,
   };
-  const result = render(ui(state.project, state.ext, state.mode, state.resetKey, state.withHost));
+  const result = render(ui(state.project, state.ext, state.mode, state.resetKey, state.withHost, state.live));
   return {
     ...result,
     get api(): RuntimeApi {
@@ -79,7 +82,7 @@ export function renderDoc(project: Project, ext: Extension, opts: RenderOptions 
     },
     update(next: Partial<typeof state>) {
       Object.assign(state, next);
-      result.rerender(ui(state.project, state.ext, state.mode, state.resetKey, state.withHost));
+      result.rerender(ui(state.project, state.ext, state.mode, state.resetKey, state.withHost, state.live));
     },
     /** All rendered elements of a node (repeat copies included). */
     nodes(nodeId: string): HTMLElement[] {

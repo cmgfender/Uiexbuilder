@@ -66,6 +66,20 @@ export {
   type EvalResult,
   type Scope,
 } from './expr';
+export {
+  buildSearchRequest,
+  isLiveSource,
+  liveDataKey,
+  planLiveRequest,
+  LiveRequestError,
+  NO_RECORD_CONTEXT_MESSAGE,
+  NO_SAMPLE_RECORD_MESSAGE,
+  type LiveRequestFailure,
+  type LiveRequestPlan,
+  type LiveResult,
+} from './live';
+export { liveErrorInfo, type LiveErrorInfo } from './liveErrors';
+export { previewRequestToProxy, proxyResponseLike, readProxyJson } from './actions';
 export type {
   DataSourceState,
   LiveDataAdapter,

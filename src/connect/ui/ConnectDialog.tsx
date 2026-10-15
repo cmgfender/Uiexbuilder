@@ -42,8 +42,37 @@ export function ConnectDialog({ open, mode, onClose, onContinue }: ConnectDialog
   const health = useConnection((s) => s.health);
   const error = useConnection((s) => s.error);
   const errorCode = useConnection((s) => s.errorCode);
+  const errorSource = useConnection((s) => s.errorSource);
   const [showScopes, setShowScopes] = useState(false);
   const idBase = useId();
+
+  if (mode === 'result' && errorSource === 'sign-out') {
+    return (
+      <Dialog
+        open={open}
+        onClose={onClose}
+        title="Couldn't disconnect HubSpot"
+        footer={
+          <>
+            <Button onClick={onClose}>Close</Button>
+            <Button variant="primary" onClick={onContinue}>
+              Try again
+            </Button>
+          </>
+        }
+      >
+        <div className="ub-cn-dialog">
+          <p className="ub-cn-dialog__result" role="alert">
+            <CircleAlert size={16} aria-hidden className="ub-cn-dialog__result-icon" />
+            <span>{error ?? 'Something went wrong while disconnecting. Please try again.'}</span>
+          </p>
+          <p className="ub-cn-dialog__muted">
+            You're still connected. You can also remove the builder's access in HubSpot under Settings › Integrations › Connected apps.
+          </p>
+        </div>
+      </Dialog>
+    );
+  }
 
   if (mode === 'result') {
     const d = describeAuthResult(errorCode ?? 'unknown_error', error ?? undefined);

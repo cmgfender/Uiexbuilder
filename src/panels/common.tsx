@@ -159,7 +159,7 @@ function filterSuggestions(suggestions: Suggestion[], query: string, exclude: Se
 }
 
 /** Position of a floating list under its anchor (viewport coordinates), kept in sync on scroll/resize. */
-function useAnchorRect(anchor: RefObject<HTMLElement>, active: boolean): { left: number; top: number; width: number; flip: boolean } | null {
+export function useAnchorRect(anchor: RefObject<HTMLElement>, active: boolean): { left: number; top: number; width: number; flip: boolean } | null {
   const [rect, setRect] = useState<{ left: number; top: number; width: number; flip: boolean } | null>(null);
   useLayoutEffect(() => {
     if (!active) {

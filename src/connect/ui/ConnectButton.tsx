@@ -32,13 +32,16 @@ export function ConnectButton() {
   const health = useConnection((s) => s.health);
   const error = useConnection((s) => s.error);
   const errorCode = useConnection((s) => s.errorCode);
+  const errorSource = useConnection((s) => s.errorSource);
   const [dialog, setDialog] = useState<ConnectDialogMode | null>(null);
   const [panel, setPanel] = useState<'account' | 'info' | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
 
-  // A sign-in that did not work out (popup or full-page): explain it and offer to try again.
+  // A sign-in (popup or full-page) or sign-out that did not work out: explain it and offer to try
+  // again. Startup problems show on the button itself.
   useEffect(() => {
-    if (error && errorCode && (status === 'disconnected' || status === 'connected') && panel !== 'account') setDialog('result');
+    if (!error || !errorCode || (errorSource !== 'sign-in' && errorSource !== 'sign-out')) return;
+    if ((status === 'disconnected' || status === 'connected') && panel !== 'account') setDialog('result');
     // Only when a new problem is reported (status / panel are read at that moment).
   }, [error]);
 
@@ -82,10 +85,12 @@ export function ConnectButton() {
     useConnection.getState().clearError();
   };
   const continueToHubSpot = () => {
+    const retrySignOut = dialog === 'result' && useConnection.getState().errorSource === 'sign-out';
     markConnectExplained();
     setDialog(null);
     useConnection.getState().clearError();
-    connectNow();
+    if (retrySignOut) void useConnection.getState().disconnect();
+    else connectNow();
   };
 
   const expired = status === 'disconnected' && !info.connected && (info.reason === 'expired' || info.reason === 'revoked');

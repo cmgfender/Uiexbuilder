@@ -8,6 +8,7 @@ import { useEditor } from '../model/store';
 import { ROOT_TYPE, type CardLocation, type Extension, type Project } from '../model/types';
 import { CRM_OBJECT_TYPES } from '../registry/constants';
 import { useDialogs } from '../shell/dialogs';
+import { findObjectTypeOption, usePortalObjectTypes, type ObjectTypeOption } from '../panels/portal';
 import { extensionFileNameError, projectUidError } from '../panels/utils';
 import { showLeftTab } from '../shell/shellStore';
 import { Badge, Button, Select, TextArea, TextInput } from '../ui';
@@ -88,7 +89,12 @@ function ObjectTypesEditor({ ext }: { ext: Extension }) {
   const updateExtension = useEditor((s) => s.updateExtension);
   const [custom, setCustom] = useState('');
   const types = ext.objectTypes;
-  const labelOf = (v: string) => CRM_OBJECT_TYPES.find((t) => t.value === v)?.label ?? v;
+  // Standard objects + the connected account's custom objects (by name, e.g. p_projects).
+  const portal = usePortalObjectTypes();
+  const portalCustom = portal.options.filter((o) => o.custom);
+  const labelOf = (v: string) =>
+    CRM_OBJECT_TYPES.find((t) => t.value === v)?.label ?? findObjectTypeOption(portalCustom, v)?.label ?? v;
+  const isAdded = (o: ObjectTypeOption) => types.some((t) => t === o.name || t === o.id);
   const set = (next: string[]) => updateExtension(ext.id, { objectTypes: next });
   const customError =
     custom && !CUSTOM_OBJECT_RE.test(custom)
@@ -132,6 +138,15 @@ function ObjectTypesEditor({ ext }: { ext: Extension }) {
         options={CRM_OBJECT_TYPES.filter((t) => !types.includes(t.value)).map((t) => ({ value: t.value, label: t.label }))}
         onChange={(v) => v && set([...types, v])}
       />
+      {portalCustom.length > 0 && (
+        <Select
+          value=""
+          aria-label="Add one of your custom objects"
+          placeholder={`Add one of your custom objects (${portalCustom.length})…`}
+          options={portalCustom.filter((o) => !isAdded(o)).map((o) => ({ value: o.name, label: `${o.label} (${o.name})` }))}
+          onChange={(v) => v && set([...types, v])}
+        />
+      )}
       <div className="ub-insp-inline">
         <TextInput
           code

@@ -20,7 +20,7 @@ import { codeExecutionAllowed } from '../model/trust';
 import { evaluate, type Scope } from './expr';
 import { guardLoops } from './loopGuard';
 import { isDeferredSource, mockDataForSource } from './mockData';
-import type { DataSourceState } from './types';
+import type { DataSourceState, LiveDataAdapter } from './types';
 
 /** `count` -> `setCount` (the setter name generated for a state variable). */
 export function setterName(stateName: string): string {
@@ -31,17 +31,39 @@ export function setterName(stateName: string): string {
  * The HubSpot `context` object simulated for an extension (mock context + location + app info).
  * Only app cards get `crm` (the record): HubSpot's SettingsContext / AppHomeContext have none, so
  * `context.crm.objectId` fails in the preview of a settings or home page exactly as it would there.
+ *
+ * With live HubSpot data (`live`, see LiveDataAdapter.context) the portal, the signed-in user and
+ * the sample record come from HubSpot: `{{ context.user.email }}` shows the real user. User names
+ * and ids are used when the connection provides them; the locale and other fields stay mock.
  */
-export function buildContext(project: Project, ext: Extension): Record<string, unknown> {
+export function buildContext(project: Project, ext: Extension, live?: LiveDataAdapter['context'] | null): Record<string, unknown> {
   const mock = ext.mock?.context ?? defaultMockData().context;
-  const user = mock.user ?? defaultMockData().context.user;
-  const { crm, ...rest } = mock;
+  const mockUser = mock.user ?? defaultMockData().context.user;
+  const { crm: mockCrm, ...rest } = mock;
+  let user: Record<string, unknown> = { ...mockUser };
+  let portal: Record<string, unknown> = { ...mock.portal };
+  let crm: Record<string, unknown> = { ...mockCrm };
+  if (live) {
+    const liveUser = live.user;
+    if (liveUser && typeof liveUser.email === 'string') {
+      user = { ...user, email: liveUser.email };
+      if (typeof liveUser.id === 'number') user.id = liveUser.id;
+      if (typeof liveUser.firstName === 'string') user.firstName = liveUser.firstName;
+      if (typeof liveUser.lastName === 'string') user.lastName = liveUser.lastName;
+    }
+    if (live.portal && typeof live.portal.id === 'number') {
+      portal = { ...portal, id: live.portal.id };
+      if (typeof live.portal.timezone === 'string' && live.portal.timezone) portal.timezone = live.portal.timezone;
+    }
+    if (live.crm) crm = { objectId: live.crm.objectId, objectTypeId: live.crm.objectTypeId };
+  }
+  const email = typeof user.email === 'string' ? user.email : '';
   return {
     ...rest,
     // HubSpot's UserContext also carries these lists; the mock values take precedence.
-    user: { emails: user.email ? [user.email] : [], teams: [], roles: [], permissions: [], ...user },
-    portal: { ...mock.portal },
-    ...(ext.kind === 'card' ? { crm: { ...crm } } : {}),
+    user: { emails: email ? [email] : [], teams: [], roles: [], permissions: [], ...user },
+    portal,
+    ...(ext.kind === 'card' ? { crm } : {}),
     location: extensionLocation(ext),
     extension: { appId: 1, appName: project.app.name, cardTitle: ext.name },
   };
@@ -220,6 +242,8 @@ export interface BaseScopeInput {
   setters: Record<string, (value: unknown) => void>;
   /** Data source states keyed by data source id. */
   dataSources: Record<string, DataSourceState>;
+  /** Live HubSpot context (portal, user, sample record) overriding the mock context. */
+  liveContext?: LiveDataAdapter['context'] | null;
 }
 
 /** Problems found while building the scope (reported in the console, shown in the Data panel). */
@@ -282,7 +306,7 @@ export function applyComputedValues(
  * Builds the base expression scope (see module comment) plus helper functions (module level, so
  * every other name shadows them) and computed values (after everything else, in order).
  */
-export function buildScopeWithDiagnostics({ project, extension, stateValues, setters, dataSources }: BaseScopeInput): ScopeWithDiagnostics {
+export function buildScopeWithDiagnostics({ project, extension, stateValues, setters, dataSources, liveContext }: BaseScopeInput): ScopeWithDiagnostics {
   const scope: Scope = {};
   // Helper code runs once per source text — only when the project's code is trusted, and with
   // its loops guarded so a runaway loop throws instead of freezing the tab.
@@ -292,7 +316,7 @@ export function buildScopeWithDiagnostics({ project, extension, stateValues, set
   for (const name of helpers.names) {
     if (name in helpers.values) scope[name] = helpers.values[name];
   }
-  scope.context = buildContext(project, extension);
+  scope.context = buildContext(project, extension, liveContext);
   for (const ds of extension.dataSources ?? []) {
     const st = dataSources[ds.id];
     scope[ds.name] = st ? st.data : null;

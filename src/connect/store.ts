@@ -27,6 +27,8 @@ import { describeAuthResult, describeError } from './describe';
  * 'connected'
  * 'error'
  */
+export type ConnectionErrorSource = 'sign-in' | 'sign-out' | 'startup';
+
 export type ConnectionStatus = 'checking' | 'unavailable' | 'not-configured' | 'disconnected' | 'connecting' | 'connected' | 'error';
 
 export interface ConnectionState {
@@ -43,6 +45,8 @@ export interface ConnectionState {
   // ---- additive (beyond the original contract)
   /** Machine code of `error` ('access_denied', 'popup_closed', 'timeout', 'network_error' …). */
   errorCode: string | null;
+  /** What failed: a sign-in attempt, signing out, or the startup check. */
+  errorSource: ConnectionErrorSource | null;
   /** Epoch ms of the last sign-in completed in this tab (popup or redirect); null before. */
   connectedAt: number | null;
   /** Re-check /api/me now (e.g. after an expired-session error). */
@@ -247,7 +251,7 @@ function applyInfo(info: ConnectionInfo): void {
 function settle(outcome: Outcome, previous: { status: ConnectionStatus; info: ConnectionInfo }): void {
   if (outcome.kind === 'connected' && outcome.info.connected) {
     applyInfo(outcome.info);
-    useConnection.setState({ error: null, errorCode: null, connectedAt: connectEnv.now() });
+    useConnection.setState({ error: null, errorCode: null, errorSource: null, connectedAt: connectEnv.now() });
     return;
   }
   if (outcome.kind === 'cancelled') {
@@ -256,12 +260,12 @@ function settle(outcome: Outcome, previous: { status: ConnectionStatus; info: Co
   }
   if (outcome.kind === 'failed') {
     if (outcome.code === 'not_configured') {
-      useConnection.setState({ status: 'not-configured', error: null, errorCode: null });
+      useConnection.setState({ status: 'not-configured', error: null, errorCode: null, errorSource: null });
       return;
     }
     const d = describeAuthResult(outcome.code, outcome.message);
     const status: ConnectionStatus = previous.info.connected && previous.status === 'connected' ? 'connected' : 'disconnected';
-    useConnection.setState({ status, info: status === 'connected' ? previous.info : previous.info.connected ? SIGNED_OUT : previous.info, error: d.message, errorCode: outcome.code });
+    useConnection.setState({ status, info: status === 'connected' ? previous.info : previous.info.connected ? SIGNED_OUT : previous.info, error: d.message, errorCode: outcome.code, errorSource: 'sign-in' });
   }
 }
 
@@ -393,7 +397,7 @@ function startSignIn(beforeAuth?: () => Promise<void>): Promise<void> {
   } catch {
     /* treat as open */
   }
-  useConnection.setState({ status: 'connecting', error: null, errorCode: null });
+  useConnection.setState({ status: 'connecting', error: null, errorCode: null, errorSource: null });
 
   if (blocked || !popup) {
     // Popup blocked: continue in this tab and come back here afterwards (autosave flushes on unload).
@@ -429,7 +433,11 @@ function startSignIn(beforeAuth?: () => Promise<void>): Promise<void> {
     if (prepError) {
       // Signing out of the current account failed: nothing changed.
       settle({ kind: 'cancelled' }, previous);
-      useConnection.setState({ error: `Couldn't switch accounts: ${describeError(prepError).message}`, errorCode: isConnectorError(prepError) ? prepError.code : 'unknown_error' });
+      useConnection.setState({
+        error: `Couldn't switch accounts: ${describeError(prepError).message}`,
+        errorCode: isConnectorError(prepError) ? prepError.code : 'unknown_error',
+        errorSource: 'sign-in',
+      });
       return;
     }
     settle(outcome, beforeAuth ? { status: 'disconnected', info: useConnection.getState().info } : previous);
@@ -458,7 +466,7 @@ function installFocusWatcher(): void {
 }
 
 async function runInit(): Promise<void> {
-  useConnection.setState({ status: 'checking', error: null, errorCode: null });
+  useConnection.setState({ status: 'checking', error: null, errorCode: null, errorSource: null });
   const redirectResult = consumeRedirectResult();
   const c = client();
   let health: ConnectorHealth;
@@ -474,7 +482,7 @@ async function runInit(): Promise<void> {
       useConnection.setState({ status: 'unavailable', health: null });
     } else {
       const d = describeError(err);
-      useConnection.setState({ status: 'error', health: null, error: d.message, errorCode: isConnectorError(err) ? err.code : 'unknown_error' });
+      useConnection.setState({ status: 'error', health: null, error: d.message, errorCode: isConnectorError(err) ? err.code : 'unknown_error', errorSource: 'startup' });
     }
     return;
   }
@@ -493,7 +501,7 @@ async function runInit(): Promise<void> {
       info = { connected: false, reason: 'expired' };
     } else {
       const d = describeError(err);
-      useConnection.setState({ status: 'error', error: d.message, errorCode: isConnectorError(err) ? err.code : 'unknown_error' });
+      useConnection.setState({ status: 'error', error: d.message, errorCode: isConnectorError(err) ? err.code : 'unknown_error', errorSource: 'startup' });
       return;
     }
   }
@@ -514,6 +522,7 @@ export const useConnection = create<ConnectionState>()((_set, get) => ({
   info: SIGNED_OUT,
   error: null,
   errorCode: null,
+  errorSource: null,
   connectedAt: null,
 
   init: () => {
@@ -557,12 +566,12 @@ export const useConnection = create<ConnectionState>()((_set, get) => ({
     } catch (err) {
       if (!(isConnectorError(err) && err.code === 'not_connected') && !isAbortError(err)) {
         const d = describeError(err);
-        useConnection.setState({ error: `Couldn't disconnect: ${d.message}`, errorCode: isConnectorError(err) ? err.code : 'unknown_error' });
+        useConnection.setState({ error: `Couldn't disconnect: ${d.message}`, errorCode: isConnectorError(err) ? err.code : 'unknown_error', errorSource: 'sign-out' });
         return;
       }
     }
     c.setCacheScope(null);
-    useConnection.setState({ status: 'disconnected', info: SIGNED_OUT, error: null, errorCode: null });
+    useConnection.setState({ status: 'disconnected', info: SIGNED_OUT, error: null, errorCode: null, errorSource: null });
   },
 
   refresh: async () => {
@@ -592,7 +601,7 @@ export const useConnection = create<ConnectionState>()((_set, get) => ({
     }
   },
 
-  clearError: () => useConnection.setState({ error: null, errorCode: null }),
+  clearError: () => useConnection.setState({ error: null, errorCode: null, errorSource: null }),
 }));
 
 /** Test helper: forget the startup check, the sign-in flow and the focus watcher. */
@@ -603,7 +612,7 @@ export function resetConnectionForTests(): void {
   focusWatcher?.();
   focusWatcher = null;
   lastMeCheck = 0;
-  useConnection.setState({ status: 'checking', health: null, info: SIGNED_OUT, error: null, errorCode: null, connectedAt: null });
+  useConnection.setState({ status: 'checking', health: null, info: SIGNED_OUT, error: null, errorCode: null, errorSource: null, connectedAt: null });
 }
 
 /** The connected account, or null. */

@@ -1,11 +1,15 @@
 /**
  * Editor for option lists ({ label, value, ...optionFields }[]) used by Select, MultiSelect,
- * ToggleGroup...: add / remove / reorder rows, plus a "Paste lines" bulk editor.
+ * ToggleGroup...: add / remove / reorder rows, a "Paste lines" bulk editor and, while a HubSpot
+ * account is connected, "Import from HubSpot property…" (a dropdown property's choices, as one
+ * undo step).
  */
 import { useState } from 'react';
-import { ArrowDown, ArrowUp, ClipboardPaste, Plus, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, ClipboardPaste, Download, Plus, Trash2 } from 'lucide-react';
 import type { JsonValue } from '../model/types';
+import { useIsConnected } from '../panels/portal';
 import { Button, IconButton, Switch, TextArea } from '../ui';
+import { ImportOptionsPanel } from './PortalFields';
 import { moveItem, optionsToLines, optionValueFromLabel, parseOptionLines, type OptionItem } from './propValue';
 
 export type OptionField = 'description' | 'initialIsChecked' | 'readOnly';
@@ -16,6 +20,8 @@ export interface OptionsEditorProps {
   onChange: (value: JsonValue | undefined) => void;
   /** Extra per-option keys the HubSpot option type accepts (undefined: description only). */
   optionFields?: OptionField[];
+  /** Object types offered first by "Import from HubSpot property…" (e.g. the card's). */
+  objectTypes?: string[];
 }
 
 function toItems(value: JsonValue | undefined): OptionItem[] {
@@ -38,10 +44,12 @@ function clean(items: OptionItem[]): JsonValue {
   });
 }
 
-export function OptionsEditor({ id, value, onChange, optionFields }: OptionsEditorProps) {
+export function OptionsEditor({ id, value, onChange, optionFields, objectTypes = [] }: OptionsEditorProps) {
   const items = toItems(value);
   const fields: OptionField[] = optionFields ?? ['description'];
   const [bulk, setBulk] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const connected = useIsConnected();
 
   const emit = (next: OptionItem[]) => onChange(next.length ? clean(next) : []);
   const update = (i: number, patch: Partial<OptionItem>) => {
@@ -178,7 +186,31 @@ export function OptionsEditor({ id, value, onChange, optionFields }: OptionsEdit
         >
           Paste lines
         </Button>
+        {connected && !importing && (
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<Download size={13} aria-hidden />}
+            onClick={() => setImporting(true)}
+            title="Use the choices of a dropdown property in your HubSpot account"
+          >
+            Import from HubSpot property…
+          </Button>
+        )}
       </div>
+      {connected && importing && (
+        <ImportOptionsPanel
+          objectTypes={objectTypes}
+          withDescriptions={fields.includes('description')}
+          currentCount={items.length}
+          onCancel={() => setImporting(false)}
+          onApply={(options) => {
+            // One change (one undo step): the property's choices replace the list.
+            emit(options.map((o) => ({ ...o })));
+            setImporting(false);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -1,13 +1,14 @@
 /** Mock data used by the designer preview: record properties, context, data source and function results. */
 import { useId, useState } from 'react';
-import { FlaskConical, Plus, RotateCcw, WandSparkles, X } from 'lucide-react';
+import { CloudDownload, FlaskConical, Plus, RotateCcw, WandSparkles, X } from 'lucide-react';
 import { useEditor } from '../../model/store';
 import type { DataSourceSimulation, Extension } from '../../model/types';
-import { CRM_OBJECT_TYPES } from '../../registry/constants';
-import { Badge, Button, Field, IconButton, NumberField, Section, Segmented, Select, TextInput } from '../../ui';
-import { CommitInput, JsonEditor } from '../common';
-import { addMissingMockProperties, missingMockProperties, sampleMockForSource } from '../actions';
+import { Badge, Button, Field, IconButton, NumberField, Section, Segmented, TextInput, useToast } from '../../ui';
+import { Callout, CommitInput, JsonEditor } from '../common';
+import { addMissingMockProperties, copyRecordIntoMock, missingMockProperties, mockRecordPropertyNames, sampleMockForSource } from '../actions';
 import { kindInfo } from '../dataSourceMeta';
+import { ObjectTypeSelect } from '../ObjectTypeSelect';
+import { useSampleRecordForMock } from '../portal';
 
 export function MockSection({ ext }: { ext: Extension }) {
   return (
@@ -55,6 +56,7 @@ function RecordProperties({ ext }: { ext: Extension }) {
 
   return (
     <div className="ub-pn-block">
+      <UseRealRecord ext={ext} />
       <div className="ub-pn-subhead">
         <span>Current record properties</span>
         {missing.length > 0 && (
@@ -145,6 +147,66 @@ function RecordProperties({ ext }: { ext: Extension }) {
   );
 }
 
+/**
+ * "Use a real record as mock data": copies the sample record's property values (the record the
+ * preview shows with real data) into the mock record, so the card keeps realistic values offline.
+ * Shown only while a HubSpot account is connected.
+ */
+function UseRealRecord({ ext }: { ext: Extension }) {
+  const { connected, record, available } = useSampleRecordForMock(ext);
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!connected || !available) return null;
+  const names = mockRecordPropertyNames(ext);
+  const recordName = record ? record.label || `record ${record.id}` : '';
+  const run = async () => {
+    if (!record) return;
+    setBusy(true);
+    setError(null);
+    const result = await copyRecordIntoMock(ext.id, record, names);
+    setBusy(false);
+    if (result.ok) {
+      toast(`Copied ${result.count} propert${result.count === 1 ? 'y' : 'ies'} from ${recordName} into the mock data`);
+    } else {
+      setError(result.message);
+    }
+  };
+  return (
+    <div className="ub-pn-stack ub-pn-stack--tight ub-pp-realrecord">
+      <div className="ub-pn-row">
+        <Button
+          size="sm"
+          icon={<CloudDownload size={13} aria-hidden />}
+          disabled={!record || busy}
+          title={
+            record
+              ? `Replace the mock values with ${recordName}’s real values${names.length ? ` (${names.join(', ')})` : ''}`
+              : 'Pick a sample record first'
+          }
+          onClick={() => void run()}
+        >
+          {busy ? 'Copying…' : 'Use a real record as mock data'}
+        </Button>
+      </div>
+      <span className="ub-field__hint">
+        {record ? (
+          <>
+            Copies the values of <strong>{recordName}</strong> from HubSpot. You can undo it.
+          </>
+        ) : (
+          'Pick a sample record in the preview toolbar first, then copy its values here.'
+        )}
+      </span>
+      {error && (
+        <Callout tone="danger" role="alert">
+          {error}
+        </Callout>
+      )}
+    </div>
+  );
+}
+
 function ContextEditor({ ext }: { ext: Extension }) {
   const ids = {
     first: useId(),
@@ -158,7 +220,6 @@ function ContextEditor({ ext }: { ext: Extension }) {
   };
   const ctx = ext.mock.context;
   const updateMock = useEditor.getState().updateMock;
-  const typeKnown = CRM_OBJECT_TYPES.some((t) => t.typeId === ctx.crm.objectTypeId);
   return (
     <div className="ub-pn-block">
       <div className="ub-pn-subhead">
@@ -198,13 +259,10 @@ function ContextEditor({ ext }: { ext: Extension }) {
               />
             </Field>
             <Field label="Record type" htmlFor={ids.typeId}>
-              <Select
+              <ObjectTypeSelect
                 id={ids.typeId}
+                label="Record type"
                 value={ctx.crm.objectTypeId}
-                options={[
-                  ...CRM_OBJECT_TYPES.map((t) => ({ value: t.typeId, label: `${t.label} (${t.typeId})` })),
-                  ...(typeKnown ? [] : [{ value: ctx.crm.objectTypeId, label: ctx.crm.objectTypeId || 'Custom' }]),
-                ]}
                 onChange={(v) => updateMock((m) => void (m.context.crm.objectTypeId = v))}
               />
             </Field>

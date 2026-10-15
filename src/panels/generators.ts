@@ -18,6 +18,24 @@ import { newId } from '../model/ids';
 import type { DataSource, NodeTemplate } from '../model/types';
 import { humanizeProperty, objectTypeLabel, propertyLabel } from './crmProperties';
 
+/**
+ * Optional label lookups (e.g. the connected HubSpot account's property and object labels).
+ * Returning undefined falls back to the built-in labels.
+ */
+export interface GenerateLabels {
+  propertyLabel?: (name: string, objectTypes: string[]) => string | undefined;
+  /** Plural label of an object type, e.g. "Projects" for a custom object. */
+  objectTypeLabel?: (objectType: string) => string | undefined;
+}
+
+function labelOfProperty(name: string, objectTypes: string[], labels?: GenerateLabels): string {
+  return labels?.propertyLabel?.(name, objectTypes) || propertyLabel(name, objectTypes);
+}
+
+function labelOfType(objectType: string, labels?: GenerateLabels): string {
+  return labels?.objectTypeLabel?.(objectType) || objectTypeLabel(objectType);
+}
+
 const IDENT_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 /** `obj.prop` or `obj['prop']` for property names that are not identifiers. */
@@ -69,12 +87,16 @@ function errorState(ds: DataSource, title: string, retry: boolean): NodeTemplate
   return retry ? [alert, refreshButton(ds, 'Try again', failedCondition(ds))] : [alert];
 }
 
-export function crmPropertiesBlock(ds: Extract<DataSource, { kind: 'crmProperties' }>, objectTypes: string[] = []): NodeTemplate {
+export function crmPropertiesBlock(
+  ds: Extract<DataSource, { kind: 'crmProperties' }>,
+  objectTypes: string[] = [],
+  labels?: GenerateLabels,
+): NodeTemplate {
   const props = (ds.properties ?? []).filter(Boolean);
   const items: NodeTemplate[] = props.length
     ? props.map((prop) => ({
         type: 'DescriptionListItem',
-        props: { label: propertyLabel(prop, objectTypes) },
+        props: { label: labelOfProperty(prop, objectTypes, labels) },
         children: [text(`{{ ${accessPath(ds.name, prop)} }}`)],
       }))
     : [{ type: 'DescriptionListItem', props: { label: 'Properties' }, children: [text(`{{ JSON.stringify(${ds.name}) }}`)] }];
@@ -90,14 +112,14 @@ export function crmPropertiesBlock(ds: Extract<DataSource, { kind: 'crmPropertie
   };
 }
 
-export function resultsTableBlock(ds: Extract<DataSource, { kind: 'associations' | 'crmSearch' }>): NodeTemplate {
+export function resultsTableBlock(ds: Extract<DataSource, { kind: 'associations' | 'crmSearch' }>, labels?: GenerateLabels): NodeTemplate {
   const name = ds.name;
   const objectType = ds.kind === 'associations' ? ds.toObjectType : ds.objectType;
-  const typeLabel = objectTypeLabel(objectType);
+  const typeLabel = labelOfType(objectType, labels);
   const idField = ds.kind === 'associations' ? 'toObjectId' : 'objectId';
   const props = (ds.properties ?? []).filter(Boolean);
   const columns: Array<{ label: string; value: string }> = props.length
-    ? props.map((prop) => ({ label: propertyLabel(prop, [objectType]), value: `{{ ${accessPath('item.properties', prop)} }}` }))
+    ? props.map((prop) => ({ label: labelOfProperty(prop, [objectType], labels), value: `{{ ${accessPath('item.properties', prop)} }}` }))
     : [{ label: 'Record ID', value: `{{ item.${idField} }}` }];
   const lower = typeLabel.toLowerCase();
   const nothing = ds.kind === 'associations' ? `No associated ${lower}` : `No ${lower} found`;
@@ -162,14 +184,14 @@ export function resultBlock(ds: Extract<DataSource, { kind: 'fetch' | 'function'
   };
 }
 
-/** A ready-made block that displays the data source. */
-export function generateUiForSource(ds: DataSource, objectTypes: string[] = []): NodeTemplate {
+/** A ready-made block that displays the data source (labels: e.g. the connected account's). */
+export function generateUiForSource(ds: DataSource, objectTypes: string[] = [], labels?: GenerateLabels): NodeTemplate {
   switch (ds.kind) {
     case 'crmProperties':
-      return crmPropertiesBlock(ds, objectTypes);
+      return crmPropertiesBlock(ds, objectTypes, labels);
     case 'associations':
     case 'crmSearch':
-      return resultsTableBlock(ds);
+      return resultsTableBlock(ds, labels);
     case 'fetch':
     case 'function':
       return resultBlock(ds);
