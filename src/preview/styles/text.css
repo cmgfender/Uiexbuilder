@@ -1,0 +1,13 @@
+.hsp-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.hsp-text.hsp-inline {
+  display: inline;
+}
+.hsp-text.hsp-truncate {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

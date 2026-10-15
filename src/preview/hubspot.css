@@ -1,0 +1,135 @@
+/*
+ * HubSpot-like design tokens and base styles for designer previews.
+ * Every preview component uses the `hsp-` class prefix and these tokens so cards look like they
+ * would inside HubSpot (Canvas design system approximation). Group-specific styles live in
+ * src/preview/styles/<group>.css and are imported by the group's registry module.
+ */
+.hsp-root {
+  --hsp-font: 'Lexend Deca', 'Avenir Next', Helvetica, Arial, sans-serif;
+  --hsp-text: #33475b;
+  --hsp-text-muted: #516f90;
+  --hsp-text-light: #7c98b6;
+  --hsp-border: #cbd6e2;
+  --hsp-border-light: #dfe3eb;
+  --hsp-bg: #ffffff;
+  --hsp-bg-light: #f5f8fa;
+  --hsp-bg-medium: #eaf0f6;
+  --hsp-primary: #ff7a59;
+  --hsp-primary-hover: #ff8f73;
+  --hsp-primary-active: #e66e50;
+  --hsp-secondary-border: #ff7a59;
+  --hsp-link: #0091ae;
+  --hsp-link-hover: #007a8c;
+  --hsp-success: #00bda5;
+  --hsp-success-bg: #e5f8f6;
+  --hsp-warning: #f5c26b;
+  --hsp-warning-bg: #fef8f0;
+  --hsp-danger: #f2545b;
+  --hsp-danger-bg: #fde8e9;
+  --hsp-info: #00a4bd;
+  --hsp-info-bg: #e5f5f8;
+  --hsp-tip-bg: #f6effd;
+  --hsp-tip: #7c4dbd;
+  --hsp-radius: 3px;
+  --hsp-radius-lg: 8px;
+  --hsp-space-flush: 0px;
+  --hsp-space-xs: 4px;
+  --hsp-space-sm: 8px;
+  --hsp-space-md: 16px;
+  --hsp-space-lg: 24px;
+  --hsp-space-xl: 32px;
+  --hsp-shadow: 0 1px 5px rgba(45, 62, 80, 0.12);
+  --hsp-shadow-lg: 0 8px 24px rgba(45, 62, 80, 0.2);
+
+  font-family: var(--hsp-font);
+  font-size: 14px;
+  line-height: 24px;
+  color: var(--hsp-text);
+  -webkit-font-smoothing: antialiased;
+  text-align: left;
+}
+
+.hsp-root *,
+.hsp-root *::before,
+.hsp-root *::after {
+  box-sizing: border-box;
+}
+
+/* Design mode: inputs are inert so clicks select instead of focusing. */
+.hsp-design input,
+.hsp-design textarea,
+.hsp-design select,
+.hsp-design button,
+.hsp-design a {
+  pointer-events: none;
+}
+
+/* Generic helpers shared across groups. */
+.hsp-muted {
+  color: var(--hsp-text-muted);
+}
+.hsp-microcopy {
+  font-size: 12px;
+  line-height: 18px;
+}
+.hsp-placeholder-media {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--hsp-bg-light);
+  border: 1px dashed var(--hsp-border);
+  color: var(--hsp-text-light);
+  font-size: 12px;
+  border-radius: var(--hsp-radius);
+}
+
+/* Form field chrome shared by all inputs (label, description, validation). */
+.hsp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+.hsp-field-label {
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--hsp-text);
+}
+.hsp-field-required {
+  color: var(--hsp-danger);
+  margin-left: 2px;
+}
+.hsp-field-description {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--hsp-text-muted);
+}
+.hsp-field-error {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--hsp-danger);
+}
+.hsp-control {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  font: inherit;
+  color: var(--hsp-text);
+  background: var(--hsp-bg-light);
+  border: 1px solid var(--hsp-border);
+  border-radius: var(--hsp-radius);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.hsp-control:focus {
+  border-color: var(--hsp-info);
+  box-shadow: 0 0 4px 1px rgba(0, 208, 228, 0.3), 0 0 0 1px var(--hsp-info);
+  background: var(--hsp-bg);
+}
+.hsp-control.hsp-invalid {
+  border-color: var(--hsp-danger);
+}
+.hsp-control[readonly] {
+  background: var(--hsp-bg-medium);
+}
