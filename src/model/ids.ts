@@ -45,6 +45,22 @@ export function toPascalCase(text: string, fallback = 'Extension'): string {
   return pascal.replace(/^_/, 'X');
 }
 
+/** Longest uid HubSpot accepts in hsmeta files. */
+export const UID_MAX_LENGTH = 64;
+const UID_CHARS_RE = /^[A-Za-z0-9_.-]+$/;
+
+/**
+ * Why a HubSpot uid (app, extension or function hsmeta `uid`) is invalid, or null when it is fine.
+ * HubSpot allows letters, digits, `_`, `-` and `.`, up to 64 characters. The returned text
+ * completes a sentence such as “uid “x” …”.
+ */
+export function uidProblem(uid: string): string | null {
+  if (!uid.trim()) return 'is required';
+  if (!UID_CHARS_RE.test(uid)) return 'may only contain letters, digits, _, - and . (no spaces)';
+  if (uid.length > UID_MAX_LENGTH) return `must be ${UID_MAX_LENGTH} characters or fewer`;
+  return null;
+}
+
 /** Converts text into a HubSpot uid: lowercase letters, digits, underscores. */
 export function toUid(text: string, fallback = 'extension'): string {
   const uid = text

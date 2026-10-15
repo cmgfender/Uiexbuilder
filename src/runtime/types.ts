@@ -34,6 +34,7 @@
 import type { ReactNode } from 'react';
 import type { ActionStep, AlertType, Extension, LogLevel, NodeId, Project } from '../model/types';
 import type { Scope } from './expr';
+import type { ScopeDiagnostics } from './scope';
 
 export interface RuntimeAlert {
   id: string;
@@ -68,8 +69,13 @@ export interface RuntimeApi {
   mode: 'design' | 'preview';
   project: Project;
   extension: Extension;
-  /** Base scope: state values, setters (set<Name>), data sources (+Loading/+Error), context. */
+  /**
+   * Base scope: helper functions, state values, setters (set<Name>), data sources
+   * (+Loading/+Error), context and computed values.
+   */
   scope: Scope;
+  /** Helper code / computed value errors of the current scope (optional for API compatibility). */
+  diagnostics?: ScopeDiagnostics;
   /** Current state values keyed by state variable name. */
   stateValues: Record<string, unknown>;
   /** Sets a state variable by name (unknown names are ignored). A function value is an updater. */

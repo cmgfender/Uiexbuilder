@@ -612,3 +612,101 @@ export function createKitchenSinkProject(): Project {
   });
   return project;
 }
+
+// ---------------------------------------------------------------------------
+// Power project: computed values + helper code
+// ---------------------------------------------------------------------------
+
+/** Helper code mixing untyped JavaScript and TypeScript (and a name that clashes with `toText`). */
+export const POWER_HELPERS = `// Untyped JavaScript helpers get \`any\` parameters in the export.
+function formatMoney(value, currency = 'USD') {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(Number(value) || 0);
+}
+
+const sumBy = (list, key) => list.reduce((total, row) => total + Number(row[key] ?? 0), 0);
+
+export const TAX_RATE = 0.2;
+
+function pluralize(n: number, word: string): string {
+  return \`\${n} \${word}\${n === 1 ? '' : 's'}\`;
+}
+
+const byName = ({ name: a }, { name: b }) => String(a).localeCompare(String(b));
+
+/** Clashes with the generated toText helper (which is renamed). */
+function toText(value) {
+  return value === undefined ? '?' : String(value);
+}
+
+function logTotal(total: number): void {
+  logger.info(\`total \${total}\`);
+}
+`;
+
+/** A card using computed values (in order, multi-line, calling helpers and setters) and helpers. */
+export function createPowerProject(): Project {
+  stepCounter = 0;
+  const project = createProject('Power Test App');
+  const card = createExtension({
+    name: 'Power Card',
+    content: [
+      {
+        type: 'Flex',
+        props: { direction: 'column', gap: 'small' },
+        children: [
+          { type: 'Heading', text: '{{ greeting }}' },
+          { type: 'Text', text: '{{ label }}: {{ formatMoney(totalWithTax) }} (raw {{ toText(total) }})' },
+          { type: 'Text', text: 'Big order', condition: 'isBig' },
+          { type: 'Tag', props: { variant: { $expr: "isBig ? 'success' : 'default'" } }, text: '{{ pluralize(count, "unit") }}' },
+          {
+            type: 'Text',
+            repeat: { items: 'sorted', itemName: 'row', indexName: 'i' },
+            text: '{{ i + 1 }}. {{ row.name }} — {{ formatMoney(row.amount) }}',
+          },
+          { type: 'Input', props: { label: 'Filter', name: 'query' }, binding: { state: 'query' } },
+          {
+            type: 'Button',
+            text: 'Add one',
+            events: {
+              onClick: [
+                s({ type: 'custom', code: 'increment();\nlogTotal(total);' }),
+                s({ type: 'addAlert', alertType: 'info', title: 'Total', message: '{{ formatMoney(totalWithTax) }}' }),
+              ],
+            },
+          },
+          { type: 'Text', text: 'Quote: {{ quote?.price ?? "n/a" }} for {{ contact.firstname }}' },
+        ],
+      },
+    ],
+  });
+  card.state = [
+    state('count', 'number', 2),
+    state('query', 'string', ''),
+    state('items', 'array', [
+      { name: 'Widget', amount: 10 },
+      { name: 'Gadget', amount: 25.5 },
+    ]),
+  ];
+  card.dataSources = [
+    { id: 'ds_contact', kind: 'crmProperties', name: 'contact', properties: ['firstname', 'amount'] },
+    { id: 'ds_quote', kind: 'fetch', name: 'quote', url: 'https://api.example.com/quote', method: 'GET', runOnMount: true },
+  ];
+  card.helpers = POWER_HELPERS;
+  card.computed = [
+    { id: 'c_total', name: 'total', expr: "sumBy(items, 'amount')" },
+    { id: 'c_tax', name: 'totalWithTax', expr: 'total * (1 + TAX_RATE)', description: 'Total including tax' },
+    { id: 'c_label', name: 'label', expr: "pluralize(items.length, 'item')" },
+    { id: 'c_greeting', name: 'greeting', expr: "`Hi ${contact.firstname ?? 'there'}`" },
+    {
+      id: 'c_filtered',
+      name: 'sorted',
+      expr: "items\n  .filter((row) => row.name.toLowerCase().includes(query.toLowerCase()))\n  .sort(byName)",
+    },
+    { id: 'c_big', name: 'isBig', expr: 'count > 3 && total > 10' },
+    { id: 'c_inc', name: 'increment', expr: '() => setCount(count + 1)' },
+    { id: 'c_bad', name: 'count', expr: '1' },
+    { id: 'c_empty', name: 'unused', expr: '' },
+  ];
+  project.extensions = [card];
+  return project;
+}

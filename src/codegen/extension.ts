@@ -4,26 +4,35 @@
  * Output shape (matches HubSpot's 2026.03 templates):
  *   imports
  *   module helpers (toText / asArray, only when used)
+ *   user helper code (Extension.helpers; untyped parameters annotated `any`)
  *   interface ExtensionProps { context; actions }
  *   hubspot.extend<'<location>'>(({ context, actions }) => <Component ... />);
  *   const Component = ({ context, actions }: ExtensionProps) => {
- *     state, data sources, handlers
+ *     state, data sources, computed values (`const x: any = expr;`, in order), handlers
  *     return (<>...</>);
  *   };
+ *
+ * Computed values are declared after every data source, so data source options cannot use them
+ * (validation reports it); they can use state, data, context, helpers and earlier computed values.
  */
 import { ALL_COMPONENTS, getComponent } from '../registry';
 import { TO_TEXT_HELPER_SOURCE } from '../model/template';
 import { toPascalCase } from '../model/ids';
-import type { Extension, JsonValue, Project, StateVar } from '../model/types';
+import { buildParentIndex } from '../model/tree';
+import type { Extension, JsonValue, NodeId, Project, StateVar } from '../model/types';
 import { isExpr } from '../model/types';
+import { COMPUTED_FORBIDDEN_NAMES } from '../power/computed';
+import { prepareHelpersForTypeScript } from '../power/helpers';
 import { collectStepCode } from './actions';
 import type { GenContext } from './context';
-import { createContext, importValue, setterName, UI_EXTENSIONS, type HelperName } from './context';
+import { createContext, declaredStateNames, importValue, setterName, UI_EXTENSIONS, type HelperName } from './context';
 import { dataSourceExposedNames, dataSourceSetterNames, emitDataSources, planDataSources } from './dataSources';
 import { JsxRenderer } from './jsx';
-import { asString } from './templates';
+import { asString, userExpr } from './templates';
 import {
+  asOperand,
   CodeWriter,
+  INDENT,
   indentLines,
   isIdentifierName,
   jsArray,
@@ -78,6 +87,9 @@ export function collectExtensionCode(ext: Extension): string[] {
       (Array.isArray(ds.filters) ? ds.filters : []).forEach((f) => template(asString(f?.value)));
     }
   }
+  for (const c of Array.isArray(ext.computed) ? ext.computed : []) {
+    if (c && typeof c === 'object') out.push(asString(c.expr));
+  }
   return out;
 }
 
@@ -101,6 +113,13 @@ function reserveUserNames(ctx: GenContext): void {
     if (!ds || !isIdentifierName(ds.name)) continue;
     [...dataSourceExposedNames(ds), ...dataSourceSetterNames(ds)].forEach(declare);
   }
+  for (const c of Array.isArray(ext.computed) ? ext.computed : []) {
+    if (c && typeof c.name === 'string' && isIdentifierName(c.name)) declare(c.name);
+  }
+  // Helper declarations live at module level: imports / generated helpers with the same names are
+  // aliased like shadowed names, and nothing generated may reuse a name the helper code mentions.
+  ctx.userHelpers.names.forEach(declare);
+  scanCode(ctx.userHelpers.code).identifiers.forEach((id) => names.reserve(id));
   for (const node of Object.values(ext.nodes)) {
     if (node.repeat) {
       declare(node.repeat.itemName);
@@ -163,6 +182,50 @@ function emitState(w: CodeWriter, ctx: GenContext): boolean {
   return true;
 }
 
+/**
+ * Chooses the computed values to declare: valid identifiers that do not redeclare a component
+ * parameter, state variable (or setter), data source name or an earlier computed value. Must run
+ * after planDataSources.
+ */
+function planComputed(ctx: GenContext): void {
+  const declared = declaredStateNames(ctx.states.values());
+  for (const plan of ctx.dataSources.values()) {
+    [...dataSourceExposedNames(plan.source), ...dataSourceSetterNames(plan.source)].forEach((n) => declared.add(n));
+  }
+  for (const c of Array.isArray(ctx.ext.computed) ? ctx.ext.computed : []) {
+    if (!c || typeof c.name !== 'string' || !isIdentifierName(c.name)) continue;
+    if (COMPUTED_FORBIDDEN_NAMES.has(c.name) || declared.has(c.name)) continue;
+    declared.add(c.name);
+    ctx.computed.push(c);
+  }
+}
+
+/**
+ * `const <name>: any = <expr>;` per computed value, in order. Typed `any` so any well-formed
+ * expression type-checks and the value can feed any prop, handler or later computed value.
+ */
+function emitComputed(w: CodeWriter, ctx: GenContext): boolean {
+  if (ctx.computed.length === 0) return false;
+  ctx.usesAny = true;
+  for (const c of ctx.computed) {
+    if (typeof c.description === 'string' && c.description.trim()) w.line(`// ${c.description.replace(/\s+/g, ' ').trim()}`);
+    const code = asOperand(userExpr(ctx, asString(c.expr)));
+    const head = `const ${c.name}: any = `;
+    if (!code.includes('\n') || scanCode(code).hasMultilineLiteral) {
+      // Multi-line string literals must be emitted verbatim (re-indenting would change them).
+      w.line(`${head}${code};`);
+      continue;
+    }
+    const [first, ...rest] = code.split('\n');
+    const indents = rest.filter((l) => l.trim() !== '').map((l) => /^[ \t]*/.exec(l)?.[0].length ?? 0);
+    const common = indents.length ? Math.min(...indents) : 0;
+    const lines = [`${head}${first.trimEnd()}`, ...rest.map((l) => (l.trim() === '' ? '' : INDENT + l.slice(common).trimEnd()))];
+    lines[lines.length - 1] += ';';
+    w.lines(lines);
+  }
+  return true;
+}
+
 /** PascalCase component identifier for the extension (its file name when valid). */
 export function componentName(ext: Extension): string {
   const base = /^[A-Z][A-Za-z0-9_]*$/.test(ext.fileName) ? ext.fileName : toPascalCase(ext.fileName || ext.name, 'Extension');
@@ -171,12 +234,21 @@ export function componentName(ext: Extension): string {
   return taken.has(base) ? `${base}Extension` : base;
 }
 
-export function generateExtensionSource(project: Project, ext: Extension): string {
+/** Creates the generation context with every name reserved and data / computed values planned. */
+function prepare(project: Project, ext: Extension): { ctx: GenContext; name: string } {
   const ctx = createContext(project, ext);
-  const name = componentName(ext);
+  let name = componentName(ext);
   reserveUserNames(ctx);
+  // A helper with the component's name would collide at module level.
+  if (ctx.userHelpers.names.includes(name)) name = ctx.names.allocate(`${name}Component`);
   ctx.names.reserve(name);
   planDataSources(ctx);
+  planComputed(ctx);
+  return { ctx, name };
+}
+
+export function generateExtensionSource(project: Project, ext: Extension): string {
+  const { ctx, name } = prepare(project, ext);
 
   // JSX first: it declares the handlers and registers component imports.
   const jsx = new JsxRenderer(ctx);
@@ -186,6 +258,7 @@ export function generateExtensionSource(project: Project, ext: Extension): strin
   const sections: Array<(w: CodeWriter) => boolean> = [
     (w) => emitState(w, ctx),
     (w) => emitDataSources(w, ctx),
+    (w) => emitComputed(w, ctx),
     (w) => {
       jsx.handlers.forEach((h, i) => {
         if (i > 0) w.line();
@@ -216,6 +289,15 @@ export function generateExtensionSource(project: Project, ext: Extension): strin
   const hubspot = importValue(ctx, UI_EXTENSIONS, 'hubspot');
   // User code may call `logger` directly (custom code, handler expressions).
   if (ctx.referenced.has('logger') && !ctx.shadowed.has('logger')) importValue(ctx, UI_EXTENSIONS, 'logger');
+  // Helper code is module-level code: it may use `hubspot` / `logger` from the SDK directly.
+  const helperCode = ctx.userHelpers.code.trim() ? prepareHelpersForTypeScript(ctx.userHelpers.code) : '';
+  if (helperCode) {
+    const ids = scanCode(helperCode).identifiers;
+    for (const sdk of ['hubspot', 'logger']) {
+      if (ids.has(sdk) && !ctx.shadowed.has(sdk) && !ctx.imports.has(UI_EXTENSIONS, sdk)) ctx.imports.add(UI_EXTENSIONS, sdk);
+    }
+    if (/\bany\b/.test(helperCode)) ctx.usesAny = true;
+  }
   ctx.imports.addType(UI_EXTENSIONS, ctxType);
   ctx.imports.addType(UI_EXTENSIONS, 'ExtensionPointApiActions');
 
@@ -236,6 +318,10 @@ export function generateExtensionSource(project: Project, ext: Extension): strin
     // Helper sources declare `const <helper> = ...`; a shadowed helper is declared as `local`.
     if (local) out.push(helperSources[helper].replace(`const ${helper} `, `const ${local} `), '');
   }
+  if (helperCode) {
+    out.push('// Helper functions (Data panel › Helpers): module-level code, callable from any expression.');
+    out.push(...helperCode.split('\n'), '');
+  }
   out.push('interface ExtensionProps {');
   out.push(`  context: ${ctxType};`);
   out.push(`  actions: ExtensionPointApiActions<'${location}'>;`);
@@ -255,4 +341,43 @@ function describeExtension(ext: Extension, location: string): string {
   if (ext.kind === 'settings') return 'app settings page';
   if (ext.kind === 'home') return 'app home page';
   return `app card (${location})`;
+}
+
+/**
+ * The JSX of one node subtree as it appears inside the generated component: condition / repeat
+ * wrappers, slot content, handlers referenced by the names the full file declares (the whole tree
+ * is rendered so names match `generateExtensionSource`). A node inside a slot (e.g. a Modal in a
+ * button's `overlay`) is returned as the bare element; other nodes as a JSX child (`{...}` around
+ * expressions). The root id yields the whole `<>...</>` fragment. Returns '' for unknown ids.
+ * Used by "view code of selection" and "copy JSX".
+ */
+export function generateNodeJsx(project: Project, ext: Extension, nodeId: NodeId): string {
+  if (!ext?.nodes || !ext.nodes[ext.rootId]) return '';
+  const { ctx } = prepare(project, ext);
+  const jsx = new JsxRenderer(ctx);
+  if (nodeId === ext.rootId) {
+    const lines = jsx.renderRoot(2);
+    return lines.length ? `${['<>', ...indentLines(lines), '</>'].join('\n')}\n` : '';
+  }
+  if (!ext.nodes[nodeId]) return '';
+  jsx.capture(nodeId);
+  jsx.renderRoot(6);
+  const parents = buildParentIndex(ext);
+  const inSlot = !!parents.get(nodeId)?.slot;
+  let lines = jsx.capturedJsx(inSlot);
+  if (!lines) {
+    // Not reachable from the root (malformed document): render it on its own with the repeat
+    // variables of its ancestors in scope.
+    const repeats: Array<{ itemName: string; indexName: string }> = [];
+    const seen = new Set<NodeId>();
+    let cur = parents.get(nodeId)?.parentId;
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const r = ext.nodes[cur]?.repeat;
+      if (r) repeats.unshift({ itemName: r.itemName, indexName: r.indexName });
+      cur = parents.get(cur)?.parentId;
+    }
+    lines = jsx.renderDetached(nodeId, repeats, inSlot);
+  }
+  return lines && lines.length ? `${lines.join('\n')}\n` : '';
 }

@@ -2,7 +2,8 @@
  * Per-extension generation context: import collection, identifier allocation, helper usage and
  * the extension's scope (state variables, data sources) used to analyse user code.
  */
-import type { AppFunction, DataSource, Extension, ExtensionLocation, Project, StateVar } from '../model/types';
+import type { AppFunction, ComputedValue, DataSource, Extension, ExtensionLocation, Project, StateVar } from '../model/types';
+import { helperNames } from '../power/helpers';
 import { extensionLocation } from '../model/rules';
 import { isIdentifierName, scanCode } from './printer';
 
@@ -161,6 +162,10 @@ export interface GenContext {
   shadowed: Set<string>;
   /** Module-level helpers that are used, with their local names (renamed when shadowed). */
   helperNames: Map<HelperName, string>;
+  /** Computed values that are declared (valid, non-conflicting names), in order. See planComputed. */
+  computed: ComputedValue[];
+  /** The extension's helper code (Extension.helpers) and the top-level names it declares. */
+  userHelpers: { code: string; names: string[] };
 }
 
 export const CRM_LOCATIONS: ReadonlySet<ExtensionLocation> = new Set([
@@ -247,6 +252,7 @@ export function createContext(project: Project, ext: Extension): GenContext {
     states.set(s.name, s);
   }
   const functions = new Map((Array.isArray(project.functions) ? project.functions : []).map((f) => [f.id, f]));
+  const helperCode = typeof ext.helpers === 'string' ? ext.helpers : '';
   return {
     project,
     ext,
@@ -264,6 +270,8 @@ export function createContext(project: Project, ext: Extension): GenContext {
     usedSetters: new Set(),
     shadowed: new Set(),
     helperNames: new Map(),
+    computed: [],
+    userHelpers: { code: helperCode, names: helperNames(helperCode) },
   };
 }
 

@@ -2,7 +2,6 @@
  * Zip export: every generated project file under a root folder named after the project, ready
  * for `hs project upload`.
  */
-import JSZip from 'jszip';
 import { toProjectSlug } from '../model/factory';
 import type { Project } from '../model/types';
 import { formatSource, parserForPath } from './format';
@@ -34,6 +33,8 @@ export async function formattedProjectFiles(project: Project): Promise<Generated
 
 export async function buildProjectZip(project: Project, options: ZipOptions = {}): Promise<Blob> {
   const files = options.format === false ? generateProjectFiles(project) : await formattedProjectFiles(project);
+  // Loaded on demand: exporting is rare, so the zip library stays out of the main bundle.
+  const { default: JSZip } = await import('jszip');
   const zip = new JSZip();
   const root = zip.folder(zipRootFolder(project));
   if (!root) throw new Error('Could not create the project folder in the zip archive');

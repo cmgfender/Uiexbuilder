@@ -35,6 +35,10 @@ export interface DropIndicator {
   rect: { left: number; top: number; width: number; height: number };
   /** Message when the drop would be rejected (shown near the pointer). */
   rejectReason?: string;
+  /** Optional hint shown with the indicator, e.g. "Attach as overlay" (additive). */
+  label?: string;
+  /** Which drop surface computed the indicator, e.g. 'canvas' or 'layers' (additive). */
+  source?: string;
 }
 
 interface DragState {
@@ -61,7 +65,9 @@ export const useDragStore = create<DragState>()((set, get) => ({
       cur.rect.top === indicator.rect.top &&
       cur.rect.width === indicator.rect.width &&
       cur.rect.height === indicator.rect.height &&
-      cur.rejectReason === indicator.rejectReason
+      cur.rejectReason === indicator.rejectReason &&
+      cur.label === indicator.label &&
+      cur.source === indicator.source
     ) {
       return;
     }

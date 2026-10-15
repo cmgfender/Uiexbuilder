@@ -1,0 +1,1022 @@
+/*
+ * Canvas (design surface). Prefix: `ub-cv-`. Uses the builder tokens from src/styles/app.css for
+ * chrome and HubSpot-like values (scoped `--ub-cv-hs-*` variables) for the location frames.
+ */
+
+.ub-cv {
+  --ub-cv-hs-font: 'Lexend Deca', 'Avenir Next', Helvetica, Arial, sans-serif;
+  --ub-cv-hs-text: #33475b;
+  --ub-cv-hs-muted: #516f90;
+  --ub-cv-hs-light: #7c98b6;
+  --ub-cv-hs-border: #dfe3eb;
+  --ub-cv-hs-page: #f5f8fa;
+  --ub-cv-hs-skel: #e5eaf0;
+  --ub-cv-hs-link: #0091ae;
+
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--ub-bg);
+  font-family: var(--ub-font);
+  font-size: 13px;
+  color: var(--ub-text);
+}
+
+/* ------------------------------------------------------------------ Toolbar */
+.ub-cv-toolbar {
+  container-type: inline-size;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  height: 40px;
+  padding: 0 8px 0 8px;
+  background: var(--ub-surface);
+  border-bottom: 1px solid var(--ub-border);
+}
+.ub-cv-toolbar--preview {
+  background: var(--ub-accent-soft);
+  border-bottom-color: #ffd5c8;
+}
+.ub-cv-toolbar__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  margin-left: auto;
+}
+.ub-cv-toolbar__divider {
+  width: 1px;
+  height: 20px;
+  background: var(--ub-border);
+}
+
+.ub-cv-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.ub-cv-crumbs__list {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.ub-cv-crumbs__list::-webkit-scrollbar {
+  display: none;
+}
+.ub-cv-crumbs__item {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.ub-cv-crumbs__sep {
+  flex: none;
+  margin: 0 1px;
+  color: var(--ub-text-3);
+}
+.ub-cv-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 200px;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--ub-radius-sm);
+  background: transparent;
+  color: var(--ub-text-3);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.ub-cv-crumb:hover {
+  background: var(--ub-surface-3);
+  color: var(--ub-text);
+}
+.ub-cv-crumb:focus-visible {
+  outline: none;
+  box-shadow: var(--ub-focus);
+}
+.ub-cv-crumb--current {
+  color: var(--ub-text);
+  font-weight: 600;
+}
+.ub-cv-crumb__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ub-cv-crumbs__hint {
+  /* Only takes the room the breadcrumbs leave, so it never squeezes them. */
+  flex: 1 1 0%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ub-text-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ub-cv-preview-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.ub-cv-preview-banner__text {
+  /* Block (not flex) so the sentence truncates with an ellipsis and "Preview" stays visible. */
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ub-accent-text);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ub-cv-live-dot {
+  display: inline-block;
+  vertical-align: 1px;
+  margin-right: 6px;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ub-accent);
+  box-shadow: 0 0 0 0 rgba(255, 92, 53, 0.5);
+  animation: ub-cv-pulse 1.8s ease-out infinite;
+}
+@keyframes ub-cv-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 92, 53, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(255, 92, 53, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 92, 53, 0);
+  }
+}
+
+.ub-cv-chrome-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ub-text-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.ub-cv-zoom-ctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+/* The kit's icon buttons inherit the UA button padding, which squeezes icons in small buttons. */
+.ub-cv-zoom-ctl .ub-icon-btn,
+.ub-cv-quick .ub-icon-btn {
+  padding: 0;
+}
+.ub-cv-zoom-ctl .ub-icon-btn svg,
+.ub-cv-quick .ub-icon-btn svg {
+  flex: none;
+}
+.ub-cv-zoom-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 58px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--ub-radius-sm);
+  background: transparent;
+  color: var(--ub-text-2);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.ub-cv-zoom-value:hover {
+  background: var(--ub-surface-3);
+  color: var(--ub-text);
+}
+.ub-cv-zoom-value:focus-visible {
+  outline: none;
+  box-shadow: var(--ub-focus);
+}
+.ub-cv-zoom-item--on {
+  color: var(--ub-select);
+  font-weight: 600;
+}
+.ub-cv-menu-icon {
+  display: inline-flex;
+  justify-content: center;
+  width: 16px;
+  color: var(--ub-text-3);
+}
+
+/* ------------------------------------------------------------------ Stage */
+.ub-cv-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.ub-cv-stage {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  outline: none;
+  background-color: #e9ecf1;
+  background-image: radial-gradient(rgba(16, 24, 40, 0.08) 1px, transparent 1px);
+  background-size: 16px 16px;
+  scrollbar-width: thin;
+}
+.ub-cv-stage:focus-visible {
+  box-shadow: inset 0 0 0 2px rgba(47, 107, 255, 0.35);
+}
+.ub-cv--preview .ub-cv-stage {
+  background-color: #e5e8ee;
+}
+.ub-cv-stage-inner {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
+  min-height: 100%;
+  padding: 32px;
+}
+.ub-cv-zoom-box {
+  flex: none;
+  position: relative;
+}
+.ub-cv-zoom-box--scaled {
+  overflow: hidden;
+}
+.ub-cv-surface {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 40px;
+  width: max-content;
+  transform-origin: 0 0;
+}
+
+/* Design mode: the card is an editing surface, not a document. */
+.ub-cv--design .ub-cv-card-root,
+.ub-cv--design .ub-cv-sb-frame__body {
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* Repeat copies are faintly tinted so designers see what is generated. */
+.ub-cv--design .ub-cv-surface [data-uiex-clone] {
+  box-shadow: inset 0 0 0 9999px rgba(47, 107, 255, 0.035);
+}
+
+/* ------------------------------------------------------------------ Location frames */
+.ub-cv-loc {
+  font-family: var(--ub-cv-hs-font);
+  color: var(--ub-cv-hs-text);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.08), 0 8px 24px rgba(16, 24, 40, 0.06);
+}
+.ub-cv-skel {
+  display: block;
+  margin: 7px 0;
+  border-radius: 4px;
+  background: var(--ub-cv-hs-skel);
+}
+.ub-cv-skel--round {
+  margin: 0;
+  border-radius: 50%;
+}
+
+/* Card container */
+.ub-cv-card {
+  border: 1px solid var(--ub-cv-hs-border);
+  border-radius: 4px;
+  background: #fff;
+  font-family: var(--ub-cv-hs-font);
+  color: var(--ub-cv-hs-text);
+}
+.ub-cv-card--bare {
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.08), 0 8px 24px rgba(16, 24, 40, 0.06);
+}
+.ub-cv-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 16px 0;
+}
+.ub-cv-card__title {
+  margin: 0;
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ub-cv-card__app {
+  flex: none;
+  color: var(--ub-cv-hs-light);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+}
+.ub-cv-card-body {
+  position: relative;
+}
+.ub-cv-card-root {
+  position: relative;
+  min-height: 56px;
+  padding: 16px;
+}
+/* Preview: give open Modals / Panels / the iframe modal room inside short cards. */
+.ub-cv-card-root:has(> .hsp-rt-host > :not(.hsp-rt-alerts):not(.hsp-rt-tooltip)) {
+  min-height: 520px;
+}
+
+/* Empty card */
+.ub-cv-card-body--empty .ub-cv-card-root > .hsp-rt-drop-placeholder {
+  min-height: 168px;
+  padding: 24px;
+  border: 2px dashed #cbd6e2;
+  border-radius: 8px;
+  background: var(--ub-cv-hs-page);
+  color: var(--ub-cv-hs-muted);
+  font-size: 14px;
+  line-height: 22px;
+}
+.ub-cv-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px 20px;
+  font-family: var(--ub-font);
+  text-align: center;
+}
+.ub-cv-empty__lead {
+  max-width: 420px;
+  color: var(--ub-text-3);
+  font-size: 12px;
+}
+.ub-cv-empty__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* crm.record.tab: record page with summary column, tab bar and the card */
+.ub-cv-loc--record {
+  display: flex;
+  overflow: hidden;
+  border: 1px solid var(--ub-cv-hs-border);
+  border-radius: 8px;
+  background: var(--ub-cv-hs-page);
+}
+.ub-cv-rec-left {
+  flex: none;
+  width: 260px;
+  padding: 24px 16px;
+  border-right: 1px solid var(--ub-cv-hs-border);
+  background: #fff;
+  opacity: 0.6;
+  filter: grayscale(1);
+  text-align: center;
+}
+.ub-cv-rec-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: 8px;
+  border-radius: 50%;
+  background: var(--ub-cv-hs-skel);
+  color: var(--ub-cv-hs-muted);
+  font-size: 18px;
+  font-weight: 600;
+}
+.ub-cv-rec-avatar--sm {
+  width: 40px;
+  height: 40px;
+  margin: 0;
+  font-size: 14px;
+}
+.ub-cv-rec-name {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 22px;
+}
+.ub-cv-rec-detail {
+  min-height: 18px;
+  color: var(--ub-cv-hs-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+.ub-cv-rec-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin: 16px 0 8px;
+}
+.ub-cv-rec-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: var(--ub-cv-hs-muted);
+  font-size: 10px;
+}
+.ub-cv-rec-section {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ub-cv-hs-border);
+  text-align: left;
+}
+.ub-cv-rec-section__title {
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.ub-cv-rec-main {
+  padding: 0 24px 24px;
+}
+/* Narrow stage: drop the decorative summary column so the card itself fits without scrolling. */
+.ub-cv-loc--compact .ub-cv-rec-left {
+  display: none;
+}
+.ub-cv-loc--compact .ub-cv-rec-main {
+  padding: 0 16px 16px;
+}
+.ub-cv-rec-tabs,
+.ub-cv-page-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 24px;
+  height: 48px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--ub-cv-hs-border);
+}
+.ub-cv-page-tabs {
+  height: 40px;
+  margin-bottom: 0;
+  border-bottom: 0;
+}
+.ub-cv-rec-tab {
+  padding: 0 2px 10px;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -1px;
+  color: var(--ub-cv-hs-light);
+  font-size: 14px;
+  white-space: nowrap;
+}
+.ub-cv-rec-tab--active {
+  border-bottom-color: var(--ub-cv-hs-text);
+  color: var(--ub-cv-hs-text);
+  font-weight: 600;
+}
+
+/* Sidebars (record sidebar, preview panel, help desk) */
+.ub-cv-loc--sidebar,
+.ub-cv-loc--helpdesk,
+.ub-cv-loc--panel {
+  overflow: hidden;
+  border: 1px solid var(--ub-cv-hs-border);
+  border-radius: 8px;
+  background: #fff;
+}
+.ub-cv-side-stub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--ub-cv-hs-border);
+  color: var(--ub-cv-hs-light);
+  font-size: 14px;
+  font-weight: 600;
+  opacity: 0.7;
+}
+.ub-cv-side-card {
+  border-bottom: 1px solid var(--ub-cv-hs-border);
+  background: #fff;
+}
+.ub-cv-side-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 12px 16px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ub-cv-hs-text);
+  font-family: var(--ub-cv-hs-font);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.ub-cv-side-head[aria-expanded='false'] {
+  padding-bottom: 12px;
+}
+.ub-cv-side-head:hover .ub-cv-side-head__title {
+  color: var(--ub-cv-hs-link);
+}
+.ub-cv-side-head:focus-visible {
+  outline: none;
+  box-shadow: inset var(--ub-focus);
+}
+.ub-cv-side-head__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ub-cv-side-head .ub-cv-card__app {
+  margin-left: auto;
+}
+.ub-cv-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid var(--ub-cv-hs-border);
+  background: var(--ub-cv-hs-page);
+  opacity: 0.75;
+}
+.ub-cv-panel-head__text {
+  flex: 1;
+  min-width: 0;
+}
+.ub-cv-panel-head__close {
+  color: var(--ub-cv-hs-muted);
+}
+.ub-cv-help-head {
+  padding: 16px;
+  border-bottom: 1px solid var(--ub-cv-hs-border);
+  background: var(--ub-cv-hs-page);
+  opacity: 0.75;
+}
+.ub-cv-help-head__eyebrow,
+.ub-cv-page-head__eyebrow {
+  color: var(--ub-cv-hs-light);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.ub-cv-help-pills {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.ub-cv-help-pill {
+  padding: 0 8px;
+  border: 1px solid var(--ub-cv-hs-border);
+  border-radius: 3px;
+  background: #fff;
+  color: var(--ub-cv-hs-muted);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+/* App settings page / app home page */
+.ub-cv-loc--page {
+  padding: 24px 32px 32px;
+  border: 1px solid var(--ub-cv-hs-border);
+  border-radius: 8px;
+  background: var(--ub-cv-hs-page);
+}
+.ub-cv-page-head {
+  margin-bottom: 16px;
+}
+.ub-cv-page-head__title {
+  margin: 4px 0 0;
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 32px;
+}
+.ub-cv-card--page .ub-cv-card-root {
+  padding: 24px;
+}
+
+/* ------------------------------------------------------------------ Overlay storyboard */
+.ub-cv-sb {
+  width: 100%;
+  min-width: 480px;
+  font-family: var(--ub-font);
+}
+.ub-cv-sb__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--ub-border-strong);
+  color: var(--ub-text-2);
+}
+.ub-cv-sb__title {
+  font-size: 12px;
+  font-weight: 600;
+}
+.ub-cv-sb__hint {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ub-text-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ub-cv-sb__list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+}
+.ub-cv-sb-frame {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  max-width: 100%;
+}
+.ub-cv-sb-frame__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  max-width: 640px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: var(--ub-radius-sm);
+  background: transparent;
+  color: var(--ub-text-2);
+  font-family: var(--ub-font);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.ub-cv-sb-frame__title:hover {
+  background: var(--ub-surface);
+  color: var(--ub-select);
+}
+.ub-cv-sb-frame__title:focus-visible {
+  outline: none;
+  box-shadow: var(--ub-focus);
+}
+.ub-cv-sb-frame__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ub-cv-sb-frame__go {
+  flex: none;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.ub-cv-sb-frame__title:hover .ub-cv-sb-frame__go,
+.ub-cv-sb-frame__title:focus-visible .ub-cv-sb-frame__go {
+  opacity: 1;
+}
+.ub-cv-sb-frame__body {
+  position: relative;
+  min-width: 320px;
+  padding: 20px;
+  border: 1px dashed var(--ub-border-strong);
+  border-radius: 8px;
+  background: rgba(45, 62, 80, 0.07);
+}
+.ub-cv-sb-frame--tooltip .ub-cv-sb-frame__body {
+  min-width: 0;
+  padding: 12px 16px;
+}
+.ub-cv-sb-frame__hidden {
+  color: var(--ub-text-3);
+  font-family: var(--ub-font);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ Inline text editor */
+.ub-cv-inline-editor {
+  position: absolute;
+  z-index: 20;
+  box-sizing: border-box;
+  margin: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 2px;
+  outline: 2px solid var(--ub-select);
+  outline-offset: 1px;
+  background: #fff;
+  box-shadow: 0 0 0 5px rgba(47, 107, 255, 0.14);
+  resize: none;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+/* ------------------------------------------------------------------ Overlay layer */
+.ub-cv-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 5;
+  overflow: hidden;
+  pointer-events: none;
+  font-family: var(--ub-font);
+}
+.ub-cv-overlay > * {
+  position: absolute;
+  box-sizing: border-box;
+}
+.ub-cv-hover {
+  border: 1px solid var(--ub-hover);
+  border-radius: 1px;
+}
+.ub-cv-hover__label {
+  position: absolute;
+  top: -17px;
+  left: -1px;
+  padding: 0 5px;
+  border-radius: 3px 3px 0 0;
+  background: var(--ub-hover);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.ub-cv-hover__label--inside {
+  top: 0;
+  left: 0;
+  border-radius: 0 0 3px 0;
+}
+.ub-cv-select {
+  outline: 2px solid var(--ub-select);
+  outline-offset: -1px;
+  border-radius: 1px;
+}
+.ub-cv-select--locked {
+  outline-style: dashed;
+}
+.ub-cv-clone-outline {
+  border: 1px dashed rgba(47, 107, 255, 0.5);
+}
+.ub-cv-moving {
+  border: 1px dashed var(--ub-select);
+  background: rgba(244, 245, 247, 0.65);
+}
+.ub-cv-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 320px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 4px 4px 0 0;
+  background: var(--ub-select);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.ub-cv-chip--inside {
+  border-radius: 0 0 4px 0;
+}
+.ub-cv-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ub-cv-chip__type {
+  font-weight: 500;
+  opacity: 0.75;
+}
+.ub-cv-chip__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.22);
+  pointer-events: auto;
+}
+.ub-cv-quick {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  padding: 2px;
+  border: 1px solid var(--ub-border);
+  border-radius: var(--ub-radius);
+  background: var(--ub-surface);
+  box-shadow: var(--ub-shadow);
+  pointer-events: auto;
+}
+.ub-cv-quick .ub-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--ub-focus);
+}
+.ub-cv-quick__danger:hover:not(:disabled) {
+  background: var(--ub-danger-soft);
+  color: var(--ub-danger);
+}
+.ub-cv-quick__sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 2px;
+  background: var(--ub-border);
+}
+.ub-cv-quick__grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--ub-radius-sm);
+  color: var(--ub-text-3);
+  cursor: grab;
+}
+.ub-cv-quick__grip:hover {
+  background: var(--ub-surface-3);
+  color: var(--ub-text);
+}
+.ub-cv-quick__grip:active {
+  cursor: grabbing;
+}
+.ub-cv-quick__grip--disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.ub-cv-quick__grip--disabled:hover {
+  background: transparent;
+}
+
+/* Condition / empty-repeat flags */
+.ub-cv-flag {
+  border-radius: 2px;
+}
+.ub-cv-flag--cond {
+  outline: 1px dashed rgba(74, 84, 104, 0.55);
+  outline-offset: -1px;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(122, 131, 150, 0.18) 0,
+    rgba(122, 131, 150, 0.18) 4px,
+    transparent 4px,
+    transparent 9px
+  );
+}
+.ub-cv-flag--empty {
+  outline: 1px dashed var(--ub-warning);
+  outline-offset: -1px;
+}
+.ub-cv-flag__tag {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 5px;
+  border: 1px solid var(--ub-border);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--ub-text-2);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.ub-cv-flag--empty .ub-cv-flag__tag {
+  border-color: #f1d7a8;
+  color: var(--ub-warning);
+}
+
+/* Drop indicators */
+.ub-cv-drop-line {
+  border-radius: 2px;
+  background: var(--ub-drop);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.85);
+}
+.ub-cv-drop-line::before,
+.ub-cv-drop-line::after {
+  content: '';
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ub-drop);
+}
+.ub-cv-drop-line--h::before {
+  top: -2px;
+  left: -3px;
+}
+.ub-cv-drop-line--h::after {
+  top: -2px;
+  right: -3px;
+}
+.ub-cv-drop-line--v::before {
+  top: -3px;
+  left: -2px;
+}
+.ub-cv-drop-line--v::after {
+  bottom: -3px;
+  left: -2px;
+}
+.ub-cv-drop-inside {
+  border-radius: 3px;
+  outline: 2px solid var(--ub-drop);
+  outline-offset: -2px;
+  background: rgba(47, 107, 255, 0.08);
+}
+.ub-cv-drop-inside--slot {
+  outline-style: dashed;
+  background: rgba(47, 107, 255, 0.12);
+}
+.ub-cv-drop-reject {
+  border-radius: 3px;
+  outline: 2px dashed var(--ub-danger);
+  outline-offset: -2px;
+  background: rgba(214, 64, 58, 0.06);
+}
+.ub-cv-drop-tip {
+  position: absolute;
+  top: -24px;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 360px;
+  overflow: hidden;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: var(--ub-drop);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-shadow: var(--ub-shadow-sm);
+}
+.ub-cv-drop-tip--inside {
+  top: 4px;
+  left: 4px;
+}
+.ub-cv-drop-tip--reject {
+  background: var(--ub-danger);
+}
+
+/* Save-as-block prompt */
+.ub-cv-save-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ub-cv-live-dot {
+    animation: none;
+  }
+  .ub-cv-crumb,
+  .ub-cv-sb-frame__go {
+    transition: none;
+  }
+}
+
+/* Narrow canvas: the chrome switch keeps its icon, switch and tooltip; its caption is visually
+   hidden (still its accessible name). */
+@container (max-width: 620px) {
+  .ub-cv-chrome-toggle .ub-switch > span:not(.ub-switch__track) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}

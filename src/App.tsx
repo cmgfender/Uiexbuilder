@@ -1,4 +1,16 @@
-/** Placeholder shell — replaced by the editor shell (src/shell). */
+import { useState } from 'react';
+import { ToastProvider } from './ui';
+import { AppShell, bootstrapEditor } from './shell';
+
+/** Root component: restores the last project once, then renders the editor shell. */
 export function App() {
-  return <div style={{ padding: 24 }}>UI Extension Builder — loading editor…</div>;
+  useState(() => {
+    bootstrapEditor();
+    return true;
+  });
+  return (
+    <ToastProvider>
+      <AppShell />
+    </ToastProvider>
+  );
 }

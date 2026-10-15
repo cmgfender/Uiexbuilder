@@ -61,6 +61,9 @@ export class JsxRenderer {
   readonly handlers: HandlerDecl[] = [];
   /** Nodes currently being rendered (guards against cyclic references in malformed documents). */
   private readonly active = new Set<NodeId>();
+  /** Node whose rendering is recorded while the whole tree renders (generateNodeJsx). */
+  private captureId: NodeId | null = null;
+  private captured: Rendered | null = null;
 
   constructor(private readonly ctx: GenContext) {}
 
@@ -69,6 +72,45 @@ export class JsxRenderer {
     const root = this.ctx.ext.nodes[this.ctx.ext.rootId];
     if (!root) return [];
     return this.renderChildList(root.children, [], col);
+  }
+
+  /** Records the output of node `id` during the next render (see capturedJsx). */
+  capture(id: NodeId): void {
+    this.captureId = id;
+    this.captured = null;
+  }
+
+  /**
+   * The captured node as it appears in the component: a JSX child (`{cond ? <X /> : null}` for
+   * expressions) or, for slot content (`asSlotContent`), the bare element / expression. Null when
+   * the node was not rendered.
+   */
+  capturedJsx(asSlotContent: boolean): string[] | null {
+    return this.captured ? this.asJsx(this.captured, asSlotContent) : null;
+  }
+
+  /**
+   * Renders a node outside of the tree pass (nodes the tree does not reach). `repeatScope` lists
+   * the item / index names of enclosing repeats, outermost first.
+   */
+  renderDetached(id: NodeId, repeatScope: Array<{ itemName: string; indexName: string }>, asSlotContent: boolean): string[] | null {
+    const scope: RepeatBinding[] = [];
+    for (const r of repeatScope) {
+      const item = validLocalName(r.itemName, 'item');
+      let index = validLocalName(r.indexName, 'index');
+      if (index === item) index = `${item}Index`;
+      const kept = scope.filter((b) => b.name !== item && b.name !== index);
+      scope.length = 0;
+      scope.push(...kept, { name: item, kind: 'item' }, { name: index, kind: 'index' });
+    }
+    const r = this.renderNode(id, scope, 0);
+    return r ? this.asJsx(r, asSlotContent) : null;
+  }
+
+  private asJsx(r: Rendered, asSlotContent: boolean): string[] {
+    if (r.kind === 'comment') return [`{/* ${r.text} */}`];
+    if (asSlotContent || r.kind === 'element') return r.lines;
+    return wrapBraces(r.lines);
   }
 
   private renderChildList(ids: NodeId[] | undefined, scope: RepeatBinding[], col: number): string[] {
@@ -92,7 +134,9 @@ export class JsxRenderer {
     if (!node || node.type === ROOT_TYPE || this.active.has(id)) return null;
     this.active.add(id);
     try {
-      return this.renderNodeInner(node, scope, col);
+      const rendered = this.renderNodeInner(node, scope, col);
+      if (id === this.captureId && !this.captured && rendered) this.captured = rendered;
+      return rendered;
     } finally {
       this.active.delete(id);
     }

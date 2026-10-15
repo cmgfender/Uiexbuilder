@@ -334,21 +334,38 @@ export interface DialogProps {
 export function Dialog({ open, onClose, title, children, footer, wide }: DialogProps) {
   const titleId = useId();
   const ref = useRef<HTMLDivElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  // Keep the latest onClose without re-running the open effect (which moves focus) on every render.
+  const onCloseRef = useRef(onClose);
+  useLayoutEffect(() => {
+    onCloseRef.current = onClose;
+  });
   useEffect(() => {
     if (!open) return;
+    const restore = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onClose();
-      }
+      // Bubble phase: widgets inside the dialog (autocomplete lists, menus, inline editors) handle
+      // Escape first and mark it handled with preventDefault().
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      // Only the topmost dialog closes when dialogs are stacked.
+      const backdrops = document.querySelectorAll('.ub-dialog-backdrop');
+      if (backdrops.length && backdrops[backdrops.length - 1] !== backdropRef.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onCloseRef.current();
     };
-    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('keydown', onKey);
     ref.current?.focus();
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [open, onClose]);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      // Return focus to where it was (e.g. the button that opened the dialog).
+      const lost = !document.activeElement || document.activeElement === document.body;
+      if (lost && restore && restore.isConnected) restore.focus({ preventScroll: true });
+    };
+  }, [open]);
   if (!open) return null;
   return createPortal(
-    <div className="ub-dialog-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div ref={backdropRef} className="ub-dialog-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         ref={ref}
         className={cx('ub-dialog', wide && 'ub-dialog--wide')}
@@ -411,7 +428,12 @@ export function Menu({ x, y, items, onClose }: MenuProps) {
     const onDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     };
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      // Handled: an enclosing dialog stays open and global shortcuts ignore it.
+      e.preventDefault();
+      onClose();
+    };
     window.addEventListener('mousedown', onDown, true);
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('blur', onClose);

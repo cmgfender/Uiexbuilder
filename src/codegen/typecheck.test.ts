@@ -17,7 +17,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { createProject } from '../model/factory';
 import { ALL_COMPONENTS } from '../registry';
 import { formatDiagnostics, scratchDir, typecheck, writeFiles } from '../test/typecheck';
-import { createEdgeCaseProject, createFeatureProject, createKitchenSinkProject } from './fixtures';
+import { createEdgeCaseProject, createFeatureProject, createKitchenSinkProject, createPowerProject } from './fixtures';
 import { formatSource, generateProjectFiles, type GeneratedFile } from './index';
 
 interface CaseOutput {
@@ -45,6 +45,7 @@ beforeAll(() => {
   cases.push(writeCase('features', generateProjectFiles(createFeatureProject())));
   cases.push(writeCase('kitchen-sink', generateProjectFiles(createKitchenSinkProject())));
   cases.push(writeCase('edge-cases', generateProjectFiles(createEdgeCaseProject())));
+  cases.push(writeCase('power', generateProjectFiles(createPowerProject())));
 });
 
 describe('generated projects', () => {

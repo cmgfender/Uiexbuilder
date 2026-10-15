@@ -20,10 +20,12 @@ import {
 } from './tree';
 import { canAccept } from './rules';
 import { getComponent } from '../registry';
+import { uniqueComputedName } from '../power/computed';
 import type {
   ActionStep,
   AppConfig,
   AppFunction,
+  ComputedValue,
   DataSource,
   Extension,
   JsonValue,
@@ -127,6 +129,20 @@ export interface EditorState {
   updateFunction: (id: string, patch: Partial<AppFunction>) => void;
   removeFunction: (id: string) => void;
   updateMock: (recipe: (mock: Draft<PreviewMockData>) => void) => void;
+
+  // ---- computed values & helper code (active extension; power features)
+  /**
+   * Appends a computed value. The name (default base `computed`) is made a unique, valid
+   * identifier that does not clash with state, data sources, other computed values or helpers.
+   */
+  addComputed: (partial?: Partial<Omit<ComputedValue, 'id'>>) => ComputedValue;
+  /** Updates a computed value (rapid edits of the same fields coalesce into one undo step). */
+  updateComputed: (id: string, patch: Partial<Omit<ComputedValue, 'id'>>) => void;
+  removeComputed: (id: string) => void;
+  /** Moves a computed value to `index` in the list (declaration order matters). */
+  moveComputed: (id: string, index: number) => void;
+  /** Replaces the helper code (typing coalesces into one undo step). Empty code removes it. */
+  setHelpers: (code: string) => void;
 }
 
 /** Returns the active extension of a state snapshot. */
@@ -313,6 +329,8 @@ export const useEditor = create<EditorState>()((set, get) => {
         description: src.description,
         state: JSON.parse(JSON.stringify(src.state)),
         dataSources: JSON.parse(JSON.stringify(src.dataSources)),
+        ...(src.computed?.length ? { computed: JSON.parse(JSON.stringify(src.computed)) as ComputedValue[] } : {}),
+        ...(src.helpers ? { helpers: src.helpers } : {}),
         mock: JSON.parse(JSON.stringify(src.mock)),
         nodes,
       };
@@ -558,6 +576,58 @@ export const useEditor = create<EditorState>()((set, get) => {
         for (const e of d.extensions) delete e.mock.functions[id];
       }),
     updateMock: (recipe) => mutateActive((d) => recipe(d.mock), { coalesceKey: 'mock' }),
+
+    addComputed: (partial = {}) => {
+      const ext = selectActiveExtension(get());
+      const c: ComputedValue = {
+        id: `c_${newId('n').slice(2)}`,
+        name: uniqueComputedName(ext, partial.name?.trim() || 'computed'),
+        expr: partial.expr ?? '',
+        ...(partial.description ? { description: partial.description } : {}),
+      };
+      mutateActive((d) => {
+        if (!d.computed) d.computed = [];
+        d.computed.push(c as Draft<ComputedValue>);
+      });
+      return c;
+    },
+    updateComputed: (id, patch) =>
+      mutateActive(
+        (d) => {
+          const c = d.computed?.find((x) => x.id === id);
+          if (!c) return;
+          for (const [k, v] of Object.entries(patch)) {
+            if (k === 'id') continue;
+            if (v === undefined || (k === 'description' && v === '')) delete (c as Record<string, unknown>)[k];
+            else (c as Record<string, unknown>)[k] = v;
+          }
+        },
+        { coalesceKey: `computed:${id}:${Object.keys(patch).join(',')}` },
+      ),
+    removeComputed: (id) =>
+      mutateActive((d) => {
+        if (!d.computed) return;
+        d.computed = d.computed.filter((c) => c.id !== id);
+        if (d.computed.length === 0) delete d.computed;
+      }),
+    moveComputed: (id, index) =>
+      mutateActive((d) => {
+        const list = d.computed;
+        if (!list) return;
+        const from = list.findIndex((c) => c.id === id);
+        const to = Math.max(0, Math.min(index, list.length - 1));
+        if (from === -1 || from === to) return;
+        const [item] = list.splice(from, 1);
+        list.splice(to, 0, item);
+      }),
+    setHelpers: (code) =>
+      mutateActive(
+        (d) => {
+          if (code.trim() === '') delete d.helpers;
+          else d.helpers = code;
+        },
+        { coalesceKey: `helpers:${get().activeExtensionId}` },
+      ),
   };
 });
 

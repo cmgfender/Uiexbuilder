@@ -27,7 +27,7 @@ import {
 import { resolvePropValue, type Scope } from './expr';
 import { mockDataForSource } from './mockData';
 import {
-  buildBaseScope,
+  buildScopeWithDiagnostics,
   initialStateValues,
   reconcileStateValues,
   resolveDataSources,
@@ -181,9 +181,9 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
   );
 
   // ---------------------------------------------------------------- base scope
-  const scope = useMemo(
-    () => buildBaseScope({ project, extension, stateValues, setters, dataSources }),
-    // buildBaseScope reads only these parts of the project / extension.
+  const { scope, diagnostics } = useMemo(
+    () => buildScopeWithDiagnostics({ project, extension, stateValues, setters, dataSources }),
+    // buildScopeWithDiagnostics reads only these parts of the project / extension.
     [
       project.app.name,
       extension.name,
@@ -192,6 +192,8 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
       extension.mock,
       extension.state,
       extension.dataSources,
+      extension.computed,
+      extension.helpers,
       stateValues,
       setters,
       dataSources,
@@ -357,6 +359,22 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
     };
   }, []);
 
+  // Helper / computed value errors are logged once per distinct message (not on every render).
+  // Declared after the mount effect so the first report happens once `log` is live.
+  const reportedRef = useRef<{ helpers: string | null; computed: Record<string, string> }>({ helpers: null, computed: {} });
+  useEffect(() => {
+    const reported = reportedRef.current;
+    if (diagnostics.helpersError && diagnostics.helpersError !== reported.helpers) {
+      log('error', `Helper functions failed: ${diagnostics.helpersError}`);
+    }
+    for (const [id, message] of Object.entries(diagnostics.computedErrors)) {
+      if (reported.computed[id] === message) continue;
+      const name = extRef.current.computed?.find((c) => c.id === id)?.name ?? id;
+      log('error', `Computed value "${name}" failed: ${message}`);
+    }
+    reportedRef.current = { helpers: diagnostics.helpersError, computed: diagnostics.computedErrors };
+  }, [diagnostics, log]);
+
   // ---------------------------------------------------------------- context values
   const controls = useMemo<RuntimeControls>(
     () => ({
@@ -384,6 +402,7 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
       project,
       extension,
       scope,
+      diagnostics,
       stateValues,
       setStateValue,
       dataSources,
@@ -409,6 +428,7 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, childr
       project,
       extension,
       scope,
+      diagnostics,
       stateValues,
       setStateValue,
       dataSources,

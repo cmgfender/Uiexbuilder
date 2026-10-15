@@ -2,15 +2,20 @@
  * Expression scope construction for the preview runtime.
  *
  * The base scope mirrors what generated code has in scope inside the extension component:
+ *   - helper functions / constants declared in Extension.helpers (module level: shadowed by
+ *     every other name)
  *   - each state variable `<name>` and its setter `set<Name>`
  *   - each data source `<name>`, `<name>Loading`, `<name>Error`
  *   - `context` (HubSpot extension context: user, portal, crm, location, extension)
+ *   - computed values, evaluated in order after everything above (each sees the earlier ones)
  * Repeat items and event handler params are layered on top by the renderer / action runner.
  */
 import { defaultMockData } from '../model/factory';
 import { extensionLocation } from '../model/rules';
 import type { Extension, JsonValue, Project, StateVar } from '../model/types';
-import type { Scope } from './expr';
+import { usableComputed } from '../power/computed';
+import { compileHelpers } from '../power/helpers';
+import { evaluate, type Scope } from './expr';
 import { isDeferredSource, mockDataForSource } from './mockData';
 import type { DataSourceState } from './types';
 
@@ -112,9 +117,72 @@ export interface BaseScopeInput {
   dataSources: Record<string, DataSourceState>;
 }
 
-/** Builds the base expression scope (see module comment). */
-export function buildBaseScope({ project, extension, stateValues, setters, dataSources }: BaseScopeInput): Scope {
-  const scope: Scope = { context: buildContext(project, extension) };
+/** Problems found while building the scope (reported in the console, shown in the Data panel). */
+export interface ScopeDiagnostics {
+  /** Error compiling or running the extension's helper code, or null. */
+  helpersError: string | null;
+  /** Errors of computed values keyed by computed value id (their value is `undefined`). */
+  computedErrors: Record<string, string>;
+}
+
+export interface ScopeWithDiagnostics {
+  scope: Scope;
+  diagnostics: ScopeDiagnostics;
+}
+
+/**
+ * Evaluates the extension's computed values in declaration order on top of `scope` (mutated:
+ * each value is added as soon as it is computed, so later values see earlier ones). Computed
+ * values run like render code: calling a state setter while computing is an error (it would loop),
+ * but functions a computed value returns may call setters later (e.g. from an event handler).
+ * Errors never throw: the value becomes `undefined` and the message is returned per id.
+ */
+export function applyComputedValues(
+  extension: Pick<Extension, 'state' | 'dataSources' | 'computed'>,
+  scope: Scope,
+): Record<string, string> {
+  const errors: Record<string, string> = {};
+  const list = usableComputed(extension);
+  if (list.length === 0) return errors;
+  let computing: string | null = null;
+  const evalScope: Scope = { ...scope };
+  for (const v of extension.state ?? []) {
+    const name = setterName(v.name);
+    const real = scope[name];
+    if (typeof real !== 'function') continue;
+    evalScope[name] = (...args: unknown[]) => {
+      if (computing !== null) {
+        throw new Error(`computed values cannot change state (${name} was called while computing “${computing}”)`);
+      }
+      return (real as (...a: unknown[]) => unknown)(...args);
+    };
+  }
+  for (const c of list) {
+    computing = c.name;
+    let value: unknown;
+    if (typeof c.expr === 'string' && c.expr.trim() !== '') {
+      const r = evaluate(c.expr, evalScope);
+      if (r.ok) value = r.value;
+      else errors[c.id] = r.error;
+    }
+    computing = null;
+    evalScope[c.name] = value;
+    scope[c.name] = value;
+  }
+  return errors;
+}
+
+/**
+ * Builds the base expression scope (see module comment) plus helper functions (module level, so
+ * every other name shadows them) and computed values (after everything else, in order).
+ */
+export function buildScopeWithDiagnostics({ project, extension, stateValues, setters, dataSources }: BaseScopeInput): ScopeWithDiagnostics {
+  const scope: Scope = {};
+  const helpers = compileHelpers(extension.helpers);
+  for (const name of helpers.names) {
+    if (name in helpers.values) scope[name] = helpers.values[name];
+  }
+  scope.context = buildContext(project, extension);
   for (const ds of extension.dataSources ?? []) {
     const st = dataSources[ds.id];
     scope[ds.name] = st ? st.data : null;
@@ -126,7 +194,13 @@ export function buildBaseScope({ project, extension, stateValues, setters, dataS
     const setter = setters[v.name];
     if (setter) scope[setterName(v.name)] = setter;
   }
-  return scope;
+  const computedErrors = applyComputedValues(extension, scope);
+  return { scope, diagnostics: { helpersError: helpers.error, computedErrors } };
+}
+
+/** Builds the base expression scope (see buildScopeWithDiagnostics). */
+export function buildBaseScope(input: BaseScopeInput): Scope {
+  return buildScopeWithDiagnostics(input).scope;
 }
 
 const noop = () => {};

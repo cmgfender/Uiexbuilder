@@ -134,8 +134,10 @@ pre,
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: none;
   width: 28px;
   height: 28px;
+  padding: 0;
   border-radius: var(--ub-radius);
   border: 1px solid transparent;
   background: transparent;
@@ -157,6 +159,13 @@ pre,
 .ub-icon-btn--sm {
   width: 22px;
   height: 22px;
+}
+.ub-icon-btn > svg {
+  flex: none;
+}
+.ub-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--ub-focus);
 }
 
 /* ---------- Form controls ---------- */
@@ -277,6 +286,13 @@ pre,
   align-items: center;
   gap: 4px;
 }
+.ub-segmented button:hover:not([aria-pressed='true']):not(:disabled) {
+  color: var(--ub-text);
+}
+.ub-segmented button:focus-visible {
+  outline: none;
+  box-shadow: var(--ub-focus);
+}
 .ub-segmented button[aria-pressed='true'] {
   background: var(--ub-surface);
   color: var(--ub-text);
@@ -305,6 +321,11 @@ pre,
 }
 .ub-tab:hover {
   color: var(--ub-text);
+}
+.ub-tab:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px rgba(47, 107, 255, 0.35);
+  border-radius: var(--ub-radius-sm) var(--ub-radius-sm) 0 0;
 }
 .ub-tab[aria-selected='true'] {
   color: var(--ub-text);
@@ -393,6 +414,10 @@ pre,
 }
 .ub-dialog--wide {
   width: min(1080px, 100%);
+}
+/* The dialog container is focused programmatically on open; no focus ring around the whole box. */
+.ub-dialog:focus {
+  outline: none;
 }
 .ub-dialog__header {
   display: flex;

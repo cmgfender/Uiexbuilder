@@ -8,7 +8,9 @@ export { PreviewHost } from './PreviewHost';
 export { DropPlaceholder } from './DropPlaceholder';
 
 export {
+  applyComputedValues,
   buildBaseScope,
+  buildScopeWithDiagnostics,
   buildContext,
   createInitialScope,
   initialStateValues,
@@ -16,6 +18,8 @@ export {
   resolveDataSources,
   setterName,
   type BaseScopeInput,
+  type ScopeDiagnostics,
+  type ScopeWithDiagnostics,
 } from './scope';
 export {
   generateAssociationRows,

@@ -25,6 +25,8 @@ State variable names, their setters `setX` (in handlers/custom code), data sourc
 `<name>Loading` / `<name>Error`, `context` (user, portal, crm{objectId,objectTypeId}, location,
 extension), repeat item/index names of the node and its ancestors, and in event handlers the
 event's params (e.g. `value`, `event`). Custom code additionally gets `actions`, `hubspot`, `logger`.
+Plus the power features: helper functions declared in `Extension.helpers` (module level — every
+other name shadows them) and computed values (`Extension.computed`, see §6c).
 
 ### Template strings (`src/model/template.ts`) — runtime and codegen MUST agree
 1. No `{{` → plain string.
@@ -124,6 +126,10 @@ store (`insertNode`, `moveNode`, `paste`), drag & drop and the palette.
 coalescing rapid edits). UI state: `mode` ('design' | 'preview'), `selectedNodeId`,
 `hoveredNodeId`, `leftPanel`, `rightPanel`, `bottomPanel`, `clipboard`, `previewResetKey`.
 Hooks: `useActiveExtension()`, `useSelectedNode()`, `selectActiveExtension(state)`.
+Power actions (active extension): `addComputed(partial?)` (unique valid name, default base
+`computed`), `updateComputed(id, patch)` (coalesced), `removeComputed(id)`, `moveComputed(id, index)`,
+`setHelpers(code)` (coalesced; empty code removes the field). `duplicateExtension` copies computed
+values and helpers.
 
 ## 5. Runtime (`src/runtime`) — see `src/runtime/types.ts`
 `RuntimeProvider`, `useRuntime`, `NodeRenderer`, `ExtensionRenderer`, `PreviewHost`,
@@ -135,6 +141,10 @@ Hooks: `useActiveExtension()`, `useSelectedNode()`, `selectActiveExtension(state
 `position: relative` card frame). In design mode the canvas may dispatch a bubbling
 `CustomEvent(UIEX_REVEAL_EVENT)` (`'uiex:reveal'`, exported by `registry/components/layout`) on a
 selected node's element so enclosing Tabs / Accordions reveal it.
+The base scope (`buildBaseScope` / `buildScopeWithDiagnostics`) also holds helper values and
+computed values; `RuntimeApi.diagnostics` (optional) reports `helpersError` and `computedErrors`
+(by computed id). Errors never throw: a failing computed value is `undefined`, and each distinct
+error is logged once to the console panel.
 
 ## 6. Codegen (`src/codegen`)
 `generateExtensionSource(project, ext)`, `generateProjectFiles(project)`,
@@ -142,6 +152,72 @@ selected node's element so enclosing Tabs / Accordions reveal it.
 match the official 2026.03 templates. User expressions are wrapped so they type-check (`any` at
 the boundaries). Imports are minimal and sorted; `@hubspot/ui-extensions/crm` used for CRM
 components and `useCrmProperties`/`useAssociations`.
+`generateNodeJsx(project, ext, nodeId)` returns one node subtree's JSX exactly as it appears in the
+generated component (condition / repeat wrappers, slot content as the bare element, handler names
+of the full file); the root id yields the `<>…</>` fragment, unknown ids `''`.
+
+## 6b. Templates & validation (`src/templates`, `src/model/validate.ts`)
+* `ExtensionTemplate.build(existing, functionIds?)`; templates that need server code declare
+  `functions?: () => AppFunction[]`. Use `instantiateExtensionTemplate(tpl, project)` — it creates
+  the functions with unique uid / file name and passes their ids to `build`. `BlockTemplate` may
+  list `keywords`. `freshBlockTemplate(template, ext)` renames Modal/Panel ids (and `@id`
+  closeOverlay refs) that the extension already uses — call it before inserting / dragging a block.
+* `validateProject(project)` issues carry a stable `rule` id (see the list at the top of
+  validate.ts); `field` follows the Issue doc (`state:<id>`, `dataSource:<id>`, `computed:<id>`,
+  `helpers`, `function:<id>`, `app.*`, `project.name`, extension fields, prop names, `text`,
+  `condition`, `repeat`, `binding`, `event:<name>`). Every starter / block validates without
+  errors or warnings and type-checks (`src/templates/templates.test.ts`).
+
+## 6c. Power features (`src/power`)
+* **Helpers** (`Extension.helpers`): module-level JavaScript or TypeScript. `helperNames(code)` lists
+  top-level `function` / `class` / `const` / `let` / `var` names (`src/power/helpers.ts`, pure and
+  dependency-free so model / runtime / codegen / validation import it). Codegen emits the code after
+  the imports and generated helpers (`// Helper functions …` header); parameters without a type get
+  `: any` (`prepareHelpersForTypeScript`) so plain JS helpers type-check under `strict` — other TS
+  strictness (e.g. indexing `{}` with a string) is the author's to satisfy, so type params / locals
+  or use `any`. Import names and generated helpers that clash with a helper are aliased (`Text as
+  TextComponent`, `toText2`); `hubspot` / `logger` used by helper code are imported. The preview
+  evaluates the code once per source text (`compileHelpers`) after `stripTypeScript` removes
+  annotations, casts, generics, `type` / `interface` declarations and `export`; helpers cannot see
+  the extension scope (pass values as arguments). `checkHelpersSyntax` accepts TypeScript.
+* **Computed values** (`Extension.computed`): `const <name>: any = <expr>;` in list order, declared
+  after state, data hooks and data source loaders and before handlers — each may use state, data,
+  context, helpers and the computed values above it. Data source options are emitted earlier and so
+  must not reference computed values (the generated hook would read them before their
+  declaration; validation should check data source code without computed names in scope). Names that
+  are invalid or redeclare state / setters / data source names / earlier computed values are
+  skipped by both runtime and codegen (`usableComputed`); `validateComputedName` explains why.
+  Computing a value may not call state setters (an error), but functions it returns may.
+* **UI**: `ComputedSection` / `HelpersSection` live in the Data panel. `CommandPalette` (mounted
+  once by the shell) toggles on ⌘K / Ctrl+K in the capture phase (works inside inputs);
+  `openCommandPalette()` opens it programmatically. Commands (`buildCommands`) are rebuilt from
+  the store; ranking (`rankCommands`, `fuzzyMatch`: exact > prefix > word start > words at word
+  starts > acronym > substring > subsequence) caps results at 50; recent command ids are kept in
+  localStorage (`uiex-builder:palette-recent`).
+
+## 6d. Editor integration notes
+* **Problems**: `Issue.subject` (optional) carries the value an issue is about (scope, origin,
+  bound state name). `src/shell/quickFixes.ts` turns unambiguous issues into one-click fixes in the
+  Problems panel (add scope / permitted URL, valid project name, create a missing bound state
+  variable, browse components). Navigating to a node issue focuses the field (`revealField` from
+  `src/inspector/Problems`); `state:` / `dataSource:` / `computed:` / `helpers` issues expand that
+  item in the Data panel (`src/panels/reveal.ts`, `usePowerUi.revealComputed / focusHelpers`).
+* **Validation**: data source options are checked without computed values in scope
+  (`data-source-computed`, error) because data hooks and loaders are emitted before the computed
+  constants. HubSpot uids follow `uidProblem` (`src/model/ids.ts`): letters, digits, `_`, `-`, `.`,
+  at most 64 characters — shared by validation and the inspector.
+* **Blocks**: `insertBlock(template, state, label, at?)` (src/templates/actions) inserts at an
+  explicit drop target or the smart target; the canvas and the layers tree use it so a block and
+  the state it needs are one undo step.
+* **Drag sources** must not re-render their own list on `dragstart` (moving or detaching the
+  dragged element cancels a native drag). The palette records "recently used" on a successful
+  `dragend` (`dropEffect !== 'none'`).
+* **Kit Dialog** listens for Escape in the bubble phase and ignores events already handled
+  (`defaultPrevented`), so autocomplete lists, chip inputs and menus inside a dialog close first;
+  only the topmost dialog closes; focus returns to the opener. Its `onClose` may be unstable.
+* **Canvas frames** are responsive: settings / home pages follow the stage width (max 960 / 1200);
+  the record page hides its decorative summary column when the stage is narrower than the frame.
+* JSZip is loaded on demand by `buildProjectZip` (export only).
 
 ## 7. Conventions
 * TypeScript strict, no `any` leaks into public APIs (internal `any` in previews is fine).
