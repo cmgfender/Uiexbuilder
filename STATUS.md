@@ -1,5 +1,17 @@
 # Project status log
 
+## 2026-10-16 — first-run experience shipped; broad QA paused to save usage
+
+- Done: security and UX fixes, the first-run experience (welcome, guided connect, tour), and a
+  usability pass as a brand-new admin. The full gate passed: `tsc -b`, 2,658 unit tests, the build,
+  30 Playwright tests and the connector e2e suite (twice).
+- Closing the HubSpot sign-in window without a result now explains the likely causes (policy not
+  signed by the host, a Super Admin needs to connect first). After deploying the connector app, the
+  next steps include signing HubSpot's Acceptable Use Policy, and so does `/setup.html`.
+- Paused at the owner's request (usage): four of the six QA reviews (HubSpot correctness and docs,
+  visual and accessibility, a click-through of every control, error handling and security) and
+  their fixes. The workflow can resume where it stopped.
+
 _Last updated: 2026-10-16. A usability test (a brand-new, non-technical admin role-played end to
 end against the production build + fake HubSpot) found 20 hesitations; the fixes are in and the
 journey was re-run until every task was smooth. Earlier notes further down are history._

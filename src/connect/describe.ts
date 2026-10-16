@@ -164,7 +164,11 @@ export function describeAuthResult(code: string, serverMessage?: string): { titl
     case 'invalid_scope':
       return { title: 'HubSpot refused the requested access', message: "The builder asked for permissions this HubSpot app isn't set up for. Ask whoever hosts the builder to check the app's scopes." };
     case 'popup_closed':
-      return { title: 'HubSpot was not connected', message: 'The HubSpot window was closed before connecting finished. Nothing was shared.' };
+      return {
+        title: 'HubSpot was not connected',
+        message:
+          'The HubSpot window closed before connecting finished, so nothing was shared. If HubSpot showed an error first: “acceptable use policy” means whoever hosts this builder must sign it in HubSpot (the app’s Distribution page); “not allowed to install” means a HubSpot Super Admin needs to connect first. Otherwise, just try again.',
+      };
     case 'timeout':
       return { title: 'Connecting took too long', message: 'We stopped waiting for HubSpot. Please try again.' };
     case 'session_not_kept':
