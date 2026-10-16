@@ -116,7 +116,9 @@
   font-weight: 400;
   flex: none;
 }
-.ub-cn-btn__sep {
+.ub-cn-btn__sep,
+.ub-cn-btn__long {
+  /* Flex items drop leading spaces; keep the one before "HubSpot" / the separator. */
   white-space: pre;
 }
 .ub-cn-btn--muted {
@@ -640,10 +642,42 @@
 }
 
 /* ---------- Narrow layouts ---------- */
-@media (max-width: 1180px) {
+/* Top bar steps (see shell.css): the account number moves to the tooltip / account menu first,
+   then the button keeps only "Connect" and the chip only the account avatar. */
+@media (max-width: 1600px) {
   .ub-cn-btn__sep,
   .ub-cn-btn__portal {
     display: none;
+  }
+}
+@media (max-width: 1100px) {
+  .ub-cn-btn__long {
+    display: none;
+  }
+  .ub-cn-btn--chip .ub-cn-btn__text {
+    display: none;
+  }
+  .ub-cn-btn--chip {
+    padding-right: 4px;
+  }
+}
+/* In preview the data chip (Mock data / Live data · <record>) already says where the data comes
+   from, so a narrow toolbar keeps "Preview" + Reset / Exit and drops the repeated sentence. */
+@container (max-width: 980px) {
+  .ub-cv-toolbar:has(.ub-cn-live) .ub-cv-preview-banner__note {
+    display: none;
+  }
+}
+/* …and still narrower, the "HubSpot chrome" switch keeps only its switch (the label stays for
+   screen readers; canvas.css does the same at 620px when there are no live-data controls). */
+@container (max-width: 780px) {
+  .ub-cv-toolbar:has(.ub-cn-live) .ub-cv-chrome-toggle .ub-switch > span:not(.ub-switch__track) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 }
 @media (max-width: 900px) {
@@ -668,8 +702,14 @@
   .ub-cn-live__suffix {
     display: none;
   }
-  .ub-cn-chip {
+  /* Same specificity as `.ub-cn-live--compact .ub-cn-chip` (and later), so it also applies in preview. */
+  .ub-cn-live .ub-cn-chip {
     max-width: 160px;
+  }
+}
+@container (max-width: 620px) {
+  .ub-cn-live .ub-cn-chip {
+    max-width: 128px;
   }
 }
 

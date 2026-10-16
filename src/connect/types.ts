@@ -44,9 +44,18 @@ export interface ConnectorHealth {
     crm: boolean;
     fetchProxy: boolean;
     deploy: boolean;
+    /**
+     * Why `deploy` is false: 'disabled' (ENABLE_DEPLOY=false — the host turned it off) or
+     * 'session_secret' (SESSION_SECRET is missing or too short — setup isn't finished).
+     */
+    deployUnavailableReason?: 'disabled' | 'session_secret';
+    /** True when deploying needs a HubSpot sign-in (always, once sign-in is set up). */
+    deployNeedsSignIn?: boolean;
   };
   /** Scopes the connector requests at sign-in (required + optional), for the consent explainer. */
   scopes: { required: string[]; optional: string[] };
+  /** Names of the server settings that are still missing (never their values), e.g. ['HUBSPOT_CLIENT_ID']. */
+  missingSettings?: string[];
 }
 
 export type ConnectionInfo =

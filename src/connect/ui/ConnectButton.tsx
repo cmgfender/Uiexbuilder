@@ -132,7 +132,9 @@ export function ConnectButton() {
     content = (
       <>
         {status === 'error' || expired ? <TriangleAlert size={14} aria-hidden className="ub-cn-btn__warn" /> : <HubSpotMark size={15} />}
-        <span className="ub-cn-btn__text">Connect HubSpot</span>
+        <span className="ub-cn-btn__text">
+          Connect<span className="ub-cn-btn__long"> HubSpot</span>
+        </span>
       </>
     );
   }
@@ -150,7 +152,9 @@ export function ConnectButton() {
           (status === 'error' || expired) && 'ub-cn-btn--attention',
         )}
         aria-label={label}
-        aria-disabled={muted || undefined}
+        // Only "checking" does nothing on click. Unavailable / not-configured stay operable: they
+        // open the explanation, so they must not be announced as disabled (the title describes why).
+        aria-disabled={status === 'checking' || undefined}
         aria-busy={status === 'checking' || status === 'connecting' || undefined}
         aria-haspopup={status === 'connected' || muted ? 'dialog' : undefined}
         aria-expanded={status === 'connected' || muted ? panel !== null : undefined}

@@ -23,10 +23,21 @@ export interface ServerConfig {
   enableDeploy: boolean;
   /** Extra allowed browser origins for the API (CORS) besides appUrl — e.g. a separately hosted builder. */
   allowedOrigins: string[];
+  /**
+   * ALLOWED_PORTALS: HubSpot account ids (hub ids) that may sign in and deploy. Empty = any account.
+   * Optional for backwards compatibility; configFromEnv always sets it.
+   */
+  allowedPortals?: number[];
   /** Cookie `Secure` flag (false only for http://localhost development). */
   secureCookies: boolean;
   /** Injected fetch (tests use the fake HubSpot handler). Defaults to globalThis.fetch. */
   fetch: typeof fetch;
+  /**
+   * Fetch used by the preview fetch proxy for arbitrary public URLs. The Node adapter passes a
+   * DNS-checked fetch (server/guardedFetch.ts) that refuses host names resolving to private
+   * addresses and pins the connection to the checked address. Defaults to `fetch`.
+   */
+  proxyFetch?: typeof fetch;
   /** Clock (tests). Defaults to Date.now. */
   now: () => number;
   version: string;
@@ -44,7 +55,12 @@ export interface SessionData {
   userId?: number;
   scopes: string[];
   appHost: string;
-  /** Optional remembered personal access key for terminal-free deploy (beta). */
+  /** Epoch ms when HubSpot last confirmed the grant (sign-in or token refresh). */
+  verifiedAt?: number;
+  /**
+   * @deprecated Personal access keys are no longer stored in the session (any page script could
+   * have deployed with a stored key). Never set; an old cookie's key is ignored.
+   */
   personalAccessKey?: string;
 }
 
@@ -83,6 +99,14 @@ export interface RequestContext {
   session: Session;
   /** Throws a 401 ConnectorError when not signed in. */
   hubspot: () => Promise<HubSpotApi>;
+  /**
+   * The signed-in session after confirming with HubSpot that the grant is still live when that is
+   * due (token about to expire, or not checked for a few minutes). Throws 401 when signed out, 503
+   * when sign-in isn't set up. Optional for backwards compatibility; createConnector provides it.
+   */
+  signedIn?: () => Promise<SessionData>;
+  /** Client IP address when the hosting adapter knows it (rate limits, local-development checks). */
+  clientIp?: string;
 }
 
 export type RouteHandler = (ctx: RequestContext) => Promise<Response> | Response;

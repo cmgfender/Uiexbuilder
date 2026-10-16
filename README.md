@@ -52,12 +52,15 @@ Other scripts:
 
 | Command | What it does |
 | --- | --- |
-| `npm run build` | Type-check and build the static app into `dist/` and the server into `dist-server/` |
+| `npm run dev:vite` | The builder alone (no connector: Connect HubSpot shows as unavailable) |
+| `npm run build` | Type-check and build the app into `dist/` and the server into `dist-server/` |
 | `npm start` | Production server: the builder + the HubSpot connector on `$PORT` (default 3000) |
-| `npm run start:demo` | Production build with a fake HubSpot on http://localhost:4174 (demos, end-to-end tests) |
+| `npm run build:static` | The builder for plain static hosting (no connector, never calls `/api`) |
+| `npm run start:demo` | Production build with a fake HubSpot on http://localhost:4174 (demos; run `npm run build` first) |
 | `npm run secret` | Print a random `SESSION_SECRET` |
-| `npm test` | Unit/integration tests (Vitest), incl. type-checking generated cards against `@hubspot/ui-extensions` |
-| `npm run e2e` | End-to-end tests (Playwright) |
+| `npm test` | Unit/integration tests (Vitest), incl. the connector against a fake HubSpot and type-checking generated cards against `@hubspot/ui-extensions` |
+| `npm run e2e` | End-to-end tests (Playwright) of the static builder |
+| `npm run e2e:connect` | End-to-end tests of Connect HubSpot, live data and Deploy to HubSpot against the fake HubSpot (`CONNECT_SCREENSHOTS=<dir>` saves screenshots) |
 
 ## Deploying what you build
 
@@ -80,10 +83,13 @@ where each card goes) and lists the scopes and permitted URLs it needs.
 When the builder is hosted with its small **connector** (any option under [Hosting](#hosting)),
 admins can sign in with HubSpot - no terminal, no install:
 
-1. Click **Connect HubSpot**, approve in the HubSpot window, and the builder shows
-   **Connected to** your account.
-2. Pick a real **sample record**: the preview shows its real properties, associations, CRM search
-   results and record context. Switch back to mock data any time.
+1. Click **Connect HubSpot** (top right). The builder first explains what it can and cannot do;
+   click **Continue to HubSpot**, approve in the HubSpot window, and the top bar shows your
+   account (for example `acmedemo.com · 12345678`). Click it for the account menu
+   (permissions, **Switch account**, **Disconnect**).
+2. In the canvas toolbar choose **Live data** and **Pick a sample record**: the preview shows its
+   real properties, associations, CRM search results and record context. **Mock data** switches
+   back any time.
 3. Property, object-type and pipeline pickers list your account's real schema: custom properties,
    labels and dropdown options.
 4. **Deploy to HubSpot** (beta) uploads the generated project with a personal access key you
@@ -93,7 +99,9 @@ Access is **read-only**. HubSpot's tokens never reach the browser: the connector
 encrypted, `HttpOnly` cookie (there is no database) and refreshes them automatically. To remove
 access, click **Disconnect**, or uninstall the app in HubSpot (**Settings → Integrations →
 Connected apps**). Without a connector (e.g. plain static hosting or `npm run dev:vite`) the builder
-works exactly as before, with mock data.
+works exactly as before, with mock data, and **Connect HubSpot** explains that it is available on
+the hosted version. For plain static hosting build with `npm run build:static`, so the builder
+does not even try to reach `/api`.
 
 ## Hosting
 
@@ -135,6 +143,8 @@ server/
   fake-hubspot/  in-memory HubSpot for tests and `npm run dev:full`
 api/          Vercel adapter
 hubspot-app/  the HubSpot app behind "Connect HubSpot" (developer project)
+docs/         HOSTING.md: put the builder online with sign-in (for non-developers)
+e2e/          end-to-end tests of the static builder; e2e-connect/: Connect HubSpot against the fake HubSpot
 src/
   model/      document model, tree ops, placement rules, store (undo/redo), persistence, validation
   registry/   HubSpot component definitions (props, events, slots, previews)

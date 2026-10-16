@@ -173,12 +173,16 @@ function PropertyList({
   }, [id, active]);
   if (!rect) return null;
   let index = -1;
+  // At least wide enough for "label · internal name · Custom · group" (fields in the narrow
+  // sidebars are ~240px), and kept inside the window (pickers in the right-hand inspector).
+  const width = Math.min(Math.max(rect.width, 340), window.innerWidth - 16);
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
   return createPortal(
     <div
       className="ub-pp-pop"
       style={{
-        left: rect.left,
-        width: Math.max(rect.width, 260),
+        left,
+        width,
         ...(rect.flip ? { bottom: window.innerHeight - rect.top } : { top: rect.top }),
       }}
       onMouseDown={(e) => e.preventDefault()}

@@ -109,6 +109,11 @@ export function describeAuthError(code: string): { title: string; message: strin
       return { title: "Couldn't reach HubSpot", message: 'HubSpot did not respond. Check your internet connection, close this window and try again.' };
     case 'not_configured':
       return { title: 'Sign in with HubSpot is not set up', message: "This server isn't configured for HubSpot sign-in yet." };
+    case 'portal_not_allowed':
+      return {
+        title: 'This HubSpot account can’t be used here',
+        message: 'This builder only works with specific HubSpot accounts. Ask the person who set up the builder to add your account, or connect a different one.',
+      };
     case 'bad_return_to':
       return { title: 'This sign-in link is not valid', message: 'Open the builder and click “Connect HubSpot” from there.' };
     default:

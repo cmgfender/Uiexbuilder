@@ -4,7 +4,7 @@
 import { CONNECTOR_ROUTES, type ConnectionInfo, type ConnectorHealth } from '../../../src/connect/types';
 import type { RequestContext, Route } from '../types';
 import { ConnectorError, errorJson, json } from '../http';
-import { type ConfigStatus, notConfiguredMessage } from '../config';
+import { type ConfigStatus, notConfiguredMessage, portalAllowed } from '../config';
 import { CookieSession, sessionSecretUsable } from '../session';
 import { randomToken, timingSafeEqual } from '../crypto';
 import { validateReturnTo } from '../security';
@@ -121,6 +121,11 @@ export function authRoutes(status: ConfigStatus): Route[] {
         if (err instanceof OAuthError && !err.revoked && err.status >= 500) return fail('hubspot_unreachable', 502);
         return fail('token_exchange_failed');
       }
+      if (!portalAllowed(config, data.portalId)) {
+        // ALLOWED_PORTALS: give the grant back right away and keep no session.
+        await revokeRefreshToken(config, data.refreshToken);
+        return fail('portal_not_allowed', 403);
+      }
       await session.set(data);
       if (mode === 'redirect' && returnTo) return redirect(withAuthResult(returnTo, 'connected'));
       return renderAuthPage({
@@ -154,6 +159,11 @@ export function authRoutes(status: ConfigStatus): Route[] {
       if (!status.oauthConfigured) return json(signedOut);
       let data = await ctx.session.get();
       if (!data) return json(signedOut);
+      if (!portalAllowed(ctx.config, data.portalId)) {
+        ctx.session.clear();
+        return json({ connected: false, reason: 'revoked' } satisfies ConnectionInfo);
+      }
+      // Also confirms every few minutes that the grant is still live (sign-out revokes it).
       if (needsRefresh(ctx.config, data)) {
         try {
           data = await refreshSessionData(ctx.config, data);
@@ -187,6 +197,7 @@ export function authRoutes(status: ConfigStatus): Route[] {
     csrf: false,
     handler: (ctx) => {
       const { config } = ctx;
+      const secretOk = sessionSecretUsable(config);
       const body: ConnectorHealth = {
         ok: true,
         version: config.version,
@@ -195,10 +206,15 @@ export function authRoutes(status: ConfigStatus): Route[] {
           crm: status.oauthConfigured,
           fetchProxy: status.oauthConfigured && config.enableFetchProxy,
           // Deploy keeps its job state encrypted with SESSION_SECRET, so it needs a usable secret too.
-          deploy: config.enableDeploy && sessionSecretUsable(config),
+          deploy: config.enableDeploy && secretOk,
         },
         scopes: { required: [...config.requiredScopes], optional: [...config.optionalScopes] },
+        // Names only (never values), so the builder and /setup.html can say exactly what is left.
+        missingSettings: status.missing.map((m) => m.name),
       };
+      if (!config.enableDeploy) body.features.deployUnavailableReason = 'disabled';
+      else if (!secretOk) body.features.deployUnavailableReason = 'session_secret';
+      if (status.oauthConfigured) body.features.deployNeedsSignIn = true;
       return json(body);
     },
   };

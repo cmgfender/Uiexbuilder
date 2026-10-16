@@ -3,7 +3,7 @@
  *
  * Env: APP_URL, HUBSPOT_CLIENT_ID, HUBSPOT_CLIENT_SECRET, SESSION_SECRET, HUBSPOT_SCOPES,
  * HUBSPOT_OPTIONAL_SCOPES, HUBSPOT_API_BASE, HUBSPOT_APP_BASE, ENABLE_FETCH_PROXY, ENABLE_DEPLOY,
- * ALLOWED_ORIGINS, NODE_ENV.
+ * ALLOWED_ORIGINS, ALLOWED_PORTALS, NODE_ENV.
  */
 import type { ServerConfig } from './types';
 
@@ -94,6 +94,24 @@ function parseOrigins(raw: string | undefined): string[] {
   return out;
 }
 
+/** HubSpot account ids from ALLOWED_PORTALS ("12345678, 87654321"); invalid entries are skipped. */
+export function parsePortalList(raw: string | undefined): number[] {
+  if (!raw) return [];
+  const out: number[] = [];
+  for (const part of raw.split(/[\s,]+/)) {
+    if (!/^\d{1,15}$/.test(part)) continue;
+    const id = Number(part);
+    if (Number.isSafeInteger(id) && id > 0 && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+/** True when ALLOWED_PORTALS is empty or lists this HubSpot account. */
+export function portalAllowed(config: Pick<ServerConfig, 'allowedPortals'>, portalId: number): boolean {
+  const list = config.allowedPortals ?? [];
+  return list.length === 0 || list.includes(portalId);
+}
+
 const defaultFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
 
 export function configFromEnv(env: Record<string, string | undefined>, overrides: Partial<ServerConfig> = {}): ServerConfig {
@@ -119,6 +137,7 @@ export function configFromEnv(env: Record<string, string | undefined>, overrides
     enableFetchProxy: parseBool(env.ENABLE_FETCH_PROXY, true),
     enableDeploy: parseBool(env.ENABLE_DEPLOY, true),
     allowedOrigins: parseOrigins(env.ALLOWED_ORIGINS),
+    allowedPortals: parsePortalList(env.ALLOWED_PORTALS),
     secureCookies: appUrl.startsWith('https:'),
     fetch: defaultFetch,
     now: () => Date.now(),

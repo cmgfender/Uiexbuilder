@@ -25,11 +25,11 @@ export const accountChip = (page: Page): Locator =>
   topBar(page).getByRole('button', { name: new RegExp(`^Connected to HubSpot: ${HUB_DOMAIN.replace('.', '\\.')}, account ${PORTAL_ID}`) });
 
 /** Writes a screenshot when CONNECT_SCREENSHOTS=<dir> is set (the visual check of the main screens). */
-export async function snap(page: Page, name: string): Promise<void> {
+export async function snap(page: Page, name: string, opts: { keepPointer?: boolean } = {}): Promise<void> {
   const dir = process.env.CONNECT_SCREENSHOTS;
   if (!dir) return;
   mkdirSync(dir, { recursive: true });
-  await page.mouse.move(2, 2); // no hover styles / tooltips in the picture
+  if (!opts.keepPointer) await page.mouse.move(2, 2); // no hover styles / tooltips in the picture
   await page.waitForTimeout(250);
   await page.screenshot({ path: path.join(dir, `${name}.png`) });
 }

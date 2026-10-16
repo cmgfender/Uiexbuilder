@@ -1,6 +1,37 @@
 # Project status log
 
-_Last updated: 2026-10-15 — work paused at the user's request._
+_Last updated: 2026-10-16. The connector is integrated and verified end to end against the fake
+HubSpot. The 2026-10-15 notes further down are history._
+
+## Latest: connector integrated (2026-10-16)
+
+**Gate results:**
+
+| Check | Result |
+| --- | --- |
+| `npx tsc -b` | Clean |
+| `npx vitest run` | 108 files, 2,466 tests |
+| `npm run build` | Builds the app and `dist-server/` |
+| `npm start` | Serves the builder, the SPA fallback and `/api/health` (200, even for plain monitor checks without the CSRF header) |
+| `npx playwright test` | 27 passed: the 26 original tests plus "no backend", against the `build:static` builder |
+| `npm run e2e:connect` | 9 passed: sign-in popup, live sample contact with associated deals, custom property in the picker, disconnect, deploy success / failed build / wrong key, static host / not-configured states |
+
+**Fixes made during integration:**
+
+- The muted Connect button (no connector, or sign-in not set up) is no longer `aria-disabled`. It
+  opens the explanation.
+- The top-bar breakpoints were moved up so the app and extension names stay readable next to
+  Connect HubSpot / the account chip (1280–1920 px).
+- The preview banner keeps "Preview" visible next to the live-data chip.
+- The property suggestions are wider, and the label takes priority over the internal name.
+
+**Still only a human can:**
+
+- create the real HubSpot app;
+- set `HUBSPOT_CLIENT_ID` / `HUBSPOT_CLIENT_SECRET` on Render;
+- do the first real sign-in and deploy.
+
+See "What only a human can do" below.
 
 ## Where things stand
 
@@ -26,7 +57,7 @@ What it includes:
 - **Review hardening:** an adversarial review found 86 issues (1 critical, 23 high). They were fixed, and the critical one (imported projects ran code automatically) now pauses imported code until the user trusts the file.
 - **Hosted preview:** a static, private copy is at https://claude.ai/artifact/EYmLCKvc36GSN7pk1DqBMo. It has no backend, so it cannot connect to HubSpot.
 
-### 2. "Sign in with HubSpot" connector (IN PROGRESS, paused)
+### 2. "Sign in with HubSpot" connector (integrated; reviews pending)
 
 **Goal:** non-technical admins connect their HubSpot portal without a terminal and preview cards with real CRM data. Pickers then use the real portal schema, and they can deploy to HubSpot with a personal access key (beta).
 
@@ -38,13 +69,14 @@ The contracts are committed:
 
 | Module | Owner files | Status |
 | --- | --- | --- |
-| Server core: OAuth popup sign-in, encrypted cookie sessions, token refresh, read-only CRM routes, fetch proxy with SSRF guard, fake HubSpot portal | `server/core/**`, `server/fake-hubspot/handler.ts`, `seed.ts`, `search.ts` | **Done.** Its own tests pass. |
-| Hosting: Node production server, fake HubSpot dev server, `npm run dev:full`, Vercel / Cloudflare / Docker / Render adapters, `hubspot-app/` OAuth app project, `docs/HOSTING.md`, `public/secret.html` and `public/setup.html` | `server/node.ts`, `server/hosting.ts`, `api/`, `scripts/`, `docs/`, `hubspot-app/` … | **Done.** Its own tests pass. |
-| Deploy to HubSpot (beta): personal-access-key upload, stepped job, fake project endpoints, Deploy panel in the Export dialog | `server/core/deploy/**`, `server/core/routes/deploy.ts`, `server/fake-hubspot/projects.ts`, `src/panels/deploy/**` | **Partly done.** The server side is written; the UI panel and its tests were mid-way. |
-| Client connection: Connect button, consent dialog, account menu, sample-record picker, Mock/Live toggle, live adapter, catalog hooks | `src/connect/**` + mount points in TopBar, AppShell, canvas toolbar | **Partly done.** `store.ts` and `catalog.ts` were being implemented. |
-| Live data in the preview runtime | `src/runtime/**` | **Not started.** |
-| Real-portal pickers in the Data panel and inspector | `src/panels/**`, `src/inspector/**` | **Not started.** |
-| Integration, connector end-to-end tests, security and admin-UX reviews, fixes | whole repo | **Not started.** |
+| Server core: OAuth popup sign-in, encrypted cookie sessions, token refresh, read-only CRM routes, fetch proxy with SSRF guard, fake HubSpot portal | `server/core/**`, `server/fake-hubspot/handler.ts`, `seed.ts`, `search.ts` | **Done** |
+| Hosting: Node production server, fake HubSpot dev server, `npm run dev:full`, Vercel / Cloudflare / Docker / Render adapters, `hubspot-app/` OAuth app project, `docs/HOSTING.md`, `public/secret.html` and `public/setup.html` | `server/node.ts`, `server/hosting.ts`, `api/`, `scripts/`, `docs/`, `hubspot-app/` … | **Done** |
+| Deploy to HubSpot (beta): personal-access-key upload, stepped job, fake project endpoints, Deploy panel in the Export dialog | `server/core/deploy/**`, `server/core/routes/deploy.ts`, `server/fake-hubspot/projects.ts`, `src/panels/deploy/**` | **Done** |
+| Client connection: Connect button, consent dialog, account menu, sample-record picker, Mock/Live toggle, live adapter, catalog hooks | `src/connect/**` + mount points in TopBar, AppShell, canvas toolbar | **Done** |
+| Live data in the preview runtime | `src/runtime/**` | **Done** |
+| Real-portal pickers in the Data panel and inspector | `src/panels/**`, `src/inspector/**` | **Done** |
+| Integration and connector end-to-end tests (`e2e-connect/`, `npm run e2e:connect`) | whole repo | **Done** (2026-10-16) |
+| Security and first-time-admin reviews, then fixes | whole repo | **Not started** |
 
 **Current typecheck state:** 8 errors in the paused work.
 

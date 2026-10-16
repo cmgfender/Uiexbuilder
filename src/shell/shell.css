@@ -470,18 +470,25 @@ button.ub-sh-tb-save--conflict:focus-visible {
   box-shadow: var(--ub-focus);
 }
 
-@media (max-width: 1440px) {
+/* The right group never shrinks (Export and Connect HubSpot stay whole), so secondary labels drop
+   out step by step to keep the app / extension names readable. The steps leave room for the
+   Connect HubSpot button / connected-account chip (connect.css compacts it at the same widths). */
+@media (max-width: 1600px) {
   .ub-sh-tb-product {
     display: none;
   }
 }
-@media (max-width: 1320px) {
-  .ub-sh-tb-save-text,
+@media (max-width: 1440px) {
   .ub-sh-tb-ext-loc {
     display: none;
   }
 }
-@media (max-width: 1220px) {
+@media (max-width: 1366px) {
+  .ub-sh-tb-save-text {
+    display: none;
+  }
+}
+@media (max-width: 1280px) {
   .ub-sh-tb-btn-label {
     display: none;
   }

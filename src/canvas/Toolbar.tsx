@@ -104,7 +104,11 @@ function PreviewBanner() {
     <div className="ub-cv-preview-banner">
       <span className="ub-cv-preview-banner__text" role="status">
         <span className="ub-cv-live-dot" aria-hidden />
-        <strong>Preview</strong> — <PreviewDataNote />
+        <strong>Preview</strong>
+        <span className="ub-cv-preview-banner__note">
+          {' — '}
+          <PreviewDataNote />
+        </span>
       </span>
       <Button
         size="sm"
@@ -115,7 +119,7 @@ function PreviewBanner() {
           rt.reset();
         }}
       >
-        Reset
+        <span className="ub-cv-preview-banner__reset">Reset</span>
       </Button>
       <Button size="sm" variant="primary" icon={<X size={13} aria-hidden />} onClick={() => setMode('design')} title="Back to the designer">
         Exit preview

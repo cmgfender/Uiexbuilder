@@ -204,8 +204,9 @@ Domains** settings, set `APP_URL` to `https://builder.yourcompany.com`, and add
      Re-check step 3 (and on Vercel, that you redeployed).
 2. Want the raw check? Open `https://<your address>/api/health`. You should see
    `"ok":true` and `"oauthConfigured":true`.
-3. Open the builder, click **Connect HubSpot**, approve in the window that opens, and check that
-   the builder shows **Connected to** your HubSpot account.
+3. Open the builder, click **Connect HubSpot** → **Continue to HubSpot**, approve in the window
+   that opens, and check that the top right of the builder now shows your HubSpot account (its
+   domain and account number, for example `acme.com · 12345678`).
 
 Something wrong? See [Troubleshooting](#troubleshooting).
 
@@ -221,15 +222,21 @@ Send admins the address, for example:
 ### What admins see
 
 1. They open the address. The builder works right away with sample (mock) data.
-2. They click **Connect HubSpot**. A HubSpot window opens. They sign in if needed, pick the HubSpot
+2. They click **Connect HubSpot** (top right). The builder first explains, in plain words, what it
+   can and cannot do (read-only; the exact permissions are one click away). They click
+   **Continue to HubSpot**. A HubSpot window opens. They sign in if needed, pick the HubSpot
    account, and see the list of permissions (all **read**). They click **Connect app**.
    - The first person in each HubSpot account installs the app for that account. HubSpot only lets
      **Super Admins** or users with **App Marketplace access** do that; if someone sees a permission
      message, ask a Super Admin to connect first (or to grant that permission).
-3. The window closes and the builder shows **Connected to** the account.
-4. They pick a **sample record**; the preview shows its real values, associations and search
-   results. Property, object and pipeline pickers list the account's real properties (including
-   custom ones), labels and dropdown options. They can switch back to mock data at any time.
+3. The window closes and the top bar shows the account (for example `acme.com · 12345678`).
+   Clicking it opens the account menu: what the builder can see, **Switch account**,
+   **Disconnect**.
+4. Above the card they choose **Live data** and **Pick a sample record** (search by name, email
+   or ID); the preview shows its real values, associations and search results. Property, object
+   and pipeline pickers list the account's real properties (including custom ones, marked
+   **Custom**), labels and dropdown options. **Mock data** switches back at any time. If a
+   permission is missing, the builder says which one and offers **Reconnect HubSpot**.
 5. **Deploy to HubSpot** (beta) uploads what they built, using a personal access key they create
    in HubSpot ([app.hubspot.com/l/personal-access-key](https://app.hubspot.com/l/personal-access-key)).
    No terminal needed.
@@ -243,6 +250,7 @@ Send admins the address, for example:
 | --- | --- | --- |
 | `/setup.html` says **Almost there**, or the builder says Connect HubSpot **isn't set up** | A setting is missing, too short, or still a placeholder | Step 3. `SESSION_SECRET` needs at least 32 characters. On Vercel, **Redeploy** after changing settings. On Render, wait until the service is **Live** again. |
 | `/setup.html` says **no HubSpot connector** | The builder is running as plain files (for example GitHub Pages or `vite preview`) | Use one of the hosts in this guide. Plain file hosting cannot sign in to HubSpot. |
+| **Connect HubSpot** is grey and says it is **available on the hosted version** | This copy of the builder has no connector (plain static hosting, a `npm run build:static` build, or `npm run dev:vite`) | Open the builder on an address hosted as described in this guide. Everything else works with mock data. |
 | HubSpot shows an error about the **redirect URI / redirect URL** | The address in the HubSpot app does not match exactly | Open `/setup.html` on the address people use, copy the redirect URL and make the app's **Redirect URLs** contain exactly that (`https://`, no extra `/`). If you use your own domain, `APP_URL` must be that domain too. |
 | HubSpot says the **scopes** do not match, or the app "requested scopes it is not allowed to" | The scope lists of the app and the connector differ | Use the defaults everywhere, or set `HUBSPOT_SCOPES` / `HUBSPOT_OPTIONAL_SCOPES` to exactly the app's required / optional scopes. |
 | The builder says a **permission is missing** (e.g. tickets, custom objects) | That account did not grant an optional permission, or its HubSpot plan has no such data | Click **Disconnect**, then **Connect HubSpot** again and approve all permissions. Some objects (custom objects, quotes) need a paid HubSpot plan. |
@@ -375,6 +383,8 @@ Placeholder values such as `later`, `todo` or `-` count as "not set".
 | `npm run build` then `npm start` | Production server on http://localhost:3000 |
 | `npm run start:demo` | Production build + fake HubSpot on http://localhost:4174 (used for demos and end-to-end tests; run `npm run build` first) |
 | `npm run secret` | Print a new `SESSION_SECRET` |
+| `npm run build:static` | The builder alone for plain static hosting (Connect HubSpot shows "available on the hosted version"; nothing calls `/api`) |
+| `npm run e2e:connect` | End-to-end tests of the whole Connect flow, live data and Deploy to HubSpot against the fake HubSpot (`CONNECT_SCREENSHOTS=<dir>` also saves screenshots) |
 
 Code: the connector core is in `server/core` (standard Web `Request`/`Response`, no framework). The
 hosting adapters are thin: `server/node.ts` (Node, Render, Docker), `api/[...path].ts` (Vercel),

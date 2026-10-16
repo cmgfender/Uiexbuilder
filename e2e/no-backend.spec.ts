@@ -14,7 +14,8 @@ test.describe('without the HubSpot connector (static hosting)', () => {
     const button = topBar.getByRole('button', { name: 'Connect HubSpot' });
     await expect(button).toHaveAttribute('data-status', 'unavailable');
     await expect(button).toHaveAttribute('title', 'Available on the hosted version');
-    await expect(button).toHaveAttribute('aria-disabled', 'true');
+    // Muted but operable: a click (or Enter) explains why, so it is not announced as disabled.
+    await expect(button).not.toHaveAttribute('aria-disabled');
 
     await button.click();
     const note = page.getByRole('dialog', { name: 'About Connect HubSpot' });

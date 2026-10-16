@@ -365,9 +365,221 @@ of the full file); the root id yields the `<>…</>` fragment, unknown ids `''`.
 
 ## 7. Conventions
 * TypeScript strict, no `any` leaks into public APIs (internal `any` in previews is fine).
-* Tests: Vitest (`*.test.ts(x)` next to the code), Playwright e2e in `/e2e`. Vitest globals are
+* Tests: Vitest (`*.test.ts(x)` next to the code; server tests start with
+  `// @vitest-environment node`), Playwright e2e in `/e2e` (static build, no connector) and
+  `/e2e-connect` (production server + fake HubSpot, `npm run e2e:connect`). Vitest globals are
   off; `src/test/setup.ts` registers Testing Library's `cleanup` after each test. Generated code is
   type-checked with the helpers in `src/test/typecheck.ts`.
 * Builder chrome uses `src/ui` primitives and `ub-` CSS classes (`src/styles/app.css`).
 * Don't edit files owned by another module unless the task says so; if a contract change is truly
   needed, make the smallest backwards-compatible addition and document it here.
+
+## 8. HubSpot connector — "Connect HubSpot" (`server/`, `src/connect`)
+
+Non-technical admins sign in with HubSpot (OAuth, in a popup), preview cards with **real CRM
+data**, get pickers filled with their portal's real schema, and can deploy without a terminal.
+HubSpot's API refuses browser (CORS) calls, so a small **connector** backend runs next to the
+builder on the **same origin**, with every route under `/api`. The builder never sees a token.
+
+```
+browser (builder)                         connector (server/core)                 HubSpot
+src/connect/client.ts ── /api/* ──────▶  router → security (CSRF/origin)  ──▶  api.hubapi.com
+  X-UIEX-Request: 1, credentials          session cookie (AES-GCM, HttpOnly)     app.hubspot.com (OAuth)
+popup /api/auth/start ──────────────▶  302 → HubSpot consent → /api/auth/callback
+  ◀── postMessage / BroadcastChannel ── HTML page {type:'uiex-hubspot-auth', ok, error?, message?}
+```
+
+### Contracts
+* `src/connect/types.ts`: `CONNECTOR_ROUTES`, the DTOs, `CSRF_HEADER` and `ConnectorErrorBody`
+  (`{ error: { code, message, status, requiredScopes?, correlationId?, portalId? } }`). It is
+  types-only and compiled by both sides.
+* `server/core/types.ts`: `ServerConfig`, `SessionData`, `Session`, `HubSpotApi`,
+  `HubSpotApiError`, `RequestContext`, `Route`.
+* `server/core/index.ts`:
+  * `configFromEnv(env, overrides?)`, which reads APP_URL, HUBSPOT_CLIENT_ID / _SECRET,
+    SESSION_SECRET, HUBSPOT_SCOPES / _OPTIONAL_SCOPES, HUBSPOT_API_BASE / _APP_BASE,
+    ENABLE_FETCH_PROXY, ENABLE_DEPLOY, ALLOWED_ORIGINS and NODE_ENV;
+  * `createConnector(config, options?).handle(request)`, which returns `null` for non-`/api`
+    paths so an adapter can serve static files instead.
+* `LiveDataAdapter` (end of `src/runtime/types.ts`) and `RuntimeProviderProps.live` connect the
+  connector to the preview runtime.
+
+### Server core (`server/core`, Web APIs only: `fetch`, `crypto.subtle`, `Request`/`Response`)
+* **Config** (`config.ts`):
+  * `checkConfig()` lists missing settings; auth routes then answer a plain-language 503
+    `not_configured`.
+  * The default scopes are `DEFAULT_REQUIRED_SCOPES` (`oauth` plus contacts, companies and deals
+    objects and schemas, read) and `DEFAULT_OPTIONAL_SCOPES` (tickets objects and schemas, custom
+    objects and schemas, owners, line items, products and quotes, all `.read`).
+  * HubSpot retired the coarse `tickets` scope, so tickets use the granular
+    `crm.objects.tickets.read` and `crm.schemas.tickets.read`. `hubspot-app/` and
+    `public/hubspot-connector-app.uiex.json` must list the same scopes (tests check this; run
+    `node scripts/make-connector-app.mjs` after a change).
+* **Sessions** (`crypto.ts`, `cookies.ts`, `session.ts`):
+  * The session is the cookie `uiex_session`: AES-256-GCM, with a key derived by HKDF from
+    `SESSION_SECRET`, the cookie name bound as additional data and a server-checked expiry.
+    It is HttpOnly, SameSite=Lax, Secure on https, Max-Age 30 days and at most 4 KB. There is
+    no database.
+  * The single-use OAuth `state` lives in `uiex_oauth` (Path=/api/auth, 10 minutes).
+  * A tampered, expired or old-secret cookie reads as signed out.
+* **Security** (`security.ts`):
+  * `X-UIEX-Request` is required on every route except `auth/start`, `auth/callback` and the
+    health check.
+  * `Origin` must be `APP_URL` or one of `ALLOWED_ORIGINS`, and CORS answers only those.
+  * `returnTo` is validated, so there are no open redirects.
+  * Every `/api` response has `Cache-Control: no-store`, nosniff, `X-Frame-Options: DENY` and
+    no-referrer.
+* **OAuth** (`oauth.ts`, `routes/auth.ts`, `authPage.ts`):
+  * start → HubSpot authorize (`scope` + `optional_scope`) → callback (state check, code
+    exchange, token info) → a self-contained HTML page.
+  * The page's CSP allows its inline script only by hash. It posts the result to the opener's
+    validated origin and on `BroadcastChannel('uiex-hubspot-auth')`, then closes.
+  * `?mode=redirect` returns to the builder with `?uiex_auth=connected|<code>`.
+  * `/api/me` refreshes an expiring token; `invalid_grant` gives `reason: 'revoked'`.
+  * Logout revokes the refresh token.
+* **HubSpot calls** (`hubspot.ts`, `SessionHubSpotApi`):
+  * The token is refreshed 60 s before it expires, and once more on a 401. Concurrent refreshes
+    are merged.
+  * Errors map to codes: 403 MISSING_SCOPES becomes `missing_scope` with `requiredScopes`; 429
+    is retried once, then `rate_limited` with Retry-After; 5xx becomes `hubspot_error` with the
+    correlation id; plus `timeout` and `hubspot_unreachable`.
+* **Routes** (all read-only):
+  * `routes/crm.ts`: object types (standard plus custom objects), properties, pipelines, owners,
+    record-picker search, a record (`formatted=1` gives en-US / UTC display values), associations
+    (v4 plus batch read) and a validated CRM search passthrough.
+  * `routes/proxy.ts`: preview `hubspot.fetch` through `ssrf.ts`. It allows https only, blocks
+    private, loopback and metadata hosts, follows at most 3 redirects (each re-checked), times
+    out after 10 s and caps responses at 1 MB.
+  * `routes/deploy.ts`: see below.
+* **Deploy to HubSpot (beta)** (`server/core/deploy/**`, `src/panels/deploy/**`):
+  * The personal access key is exchanged for a short-lived token; the project is found or
+    created, zipped (`zip.ts`, HubSpot's ignore rules) and uploaded with the project IR
+    (`ir.ts`, platform 2025.2 and later).
+  * Build and deploy are followed one step per `GET /api/deploy/:deployId`. The deployId is an
+    encrypted job token that never holds the key.
+  * The key is stored (in the session cookie) only when the admin ticks **Remember on this
+    browser**.
+  * Deploy works without OAuth sign-in; `features.deploy` needs only a usable `SESSION_SECRET`.
+  * Without a connector, the panel falls back to the CLI steps.
+
+### Hosting adapters (all thin, same core)
+* `server/node.ts` is the production Node server (`npm start`, `dist-server/node.mjs`, built by
+  `scripts/build-server.mjs`):
+  * It serves `dist/` with caching, ETags, brotli/gzip, the SPA fallback and security headers.
+    COOP is left unset so the popup keeps `window.opener`.
+  * `/api` goes to the connector.
+  * It prints a start-up log with no secrets.
+* The other adapters:
+  * `api/[...path].ts`: Vercel Edge, with `vercel.json` rewrites.
+  * `server/cloudflare.ts`: Workers, with `wrangler.toml`.
+  * Docker (`Dockerfile`) and Render (`render.yaml`, health check `/api/health`).
+  * `server/hosting.ts`: shared helpers (placeholder env values, a plain health check for
+    monitors).
+* Setup helpers served from `public/`:
+  * `setup.html`: a live readiness check, the exact redirect URL and the connector app file.
+  * `secret.html`: makes a `SESSION_SECRET`.
+  * `hubspot-connector-app.uiex.json`: the HubSpot app as a builder document, so it can be
+    deployed from the builder itself. The CLI version is in `hubspot-app/`.
+
+### Fake HubSpot (`server/fake-hubspot`)
+* `createFakeHubSpot()` is an in-memory HubSpot with:
+  * an OAuth consent page (Approve / Deny), the token, token-info and revoke endpoints;
+  * every CRM endpoint the connector uses, with scope checks and HubSpot-format errors;
+  * developer-project endpoints for deploy (`projects.ts`). Keys containing `fail-build`,
+    `fail-deploy` and similar markers trigger failures; `FAKE_PERSONAL_ACCESS_KEY` always works.
+* The seed is portal 12345678 (acmedemo.com): contacts, companies, deals, tickets, products,
+  line items, the custom object `p_projects`, custom properties, pipelines and owners.
+* `server/fake-hubspot/server.ts` runs it on a port. `npm run dev:full` and
+  `npm run start:demo` use it.
+* `server/core/testing.ts` `createTestEnv()` wires the connector to the fake, with a clock,
+  a cookie jar and `signIn()`.
+
+### Browser side (`src/connect`)
+* **`client.ts`** (`getConnectorClient()`):
+  * Its base URL is `VITE_CONNECTOR_URL` or `''` (same origin).
+  * The value `none` (`npm run build:static`) disables it: no `/api` call is ever made.
+  * Every call sends `credentials: 'include'` and the CSRF header.
+  * Errors become `ConnectorError` (`code`, `status`, `requiredScopes`, `retryAfter`). An HTML
+    page or a 404 counts as `unavailable`.
+  * Catalog GETs are cached per portal (5 minutes), and identical in-flight requests are shared.
+* **`store.ts`** (`useConnection`):
+  * `init()` sets the status: `checking`, then `unavailable` (no connector), `not-configured`
+    (OAuth settings missing), `disconnected` or `connected`.
+  * `connect()` opens the centred popup and accepts only the connector origin's message. A
+    BroadcastChannel and polling cover a cut-off opener. A blocked popup falls back to a
+    full-page redirect.
+  * There are also `disconnect()`, `switchPortal()` and a re-check on window focus. A
+    `not_connected` answer marks the sign-in as expired.
+  * Nothing sensitive is stored in the browser.
+* **`catalog.ts`**: `usePropertyCatalog`, `useObjectTypes`, `usePipelines` and `useOwners`. When
+  signed out they return empty data with `connected: false`, so callers fall back to the
+  built-in suggestions.
+* **`records.ts` / `live.ts`**:
+  * `useLiveData` holds the Mock / Live mode and the sample record ids per project
+    (localStorage `uiex-builder:live-data:*`, ids only).
+  * `buildLiveAdapter` / `useLiveAdapter()` build the `LiveDataAdapter` that `AppShell` passes
+    to `RuntimeProvider`. It is `null` in mock mode, when signed out, or while a card has no
+    fitting record.
+  * Its key is `${portalId}|${objectTypeId}:${recordId}|live` for cards and
+    `${portalId}|settings|live` or `${portalId}|home|live` otherwise.
+* **`ui/`**:
+  * `ConnectButton` (top bar): consent explainer → popup → connected chip → `AccountMenu`.
+    When there is no connector it is muted, and a click explains why (it is not
+    `aria-disabled`).
+  * `RecordPicker` (canvas toolbar): Mock | Live switch and sample-record search. In preview it
+    collapses into one chip.
+  * `PreviewDataNote` (preview banner).
+  * `ConnectDialog`, and `connect.css` (`ub-cn-` classes).
+* **Mount points**:
+  * `src/shell/TopBar.tsx`: `<ConnectButton />` before Export.
+  * `src/shell/AppShell.tsx`: `init()` once, and `live={useLiveAdapter()}`.
+  * `src/canvas/Toolbar.tsx`: `<RecordPicker />` and `<PreviewDataNote />`.
+
+### Live preview runtime (`src/runtime/live.ts`)
+* With `live` set, `crmProperties`, `associations` and `crmSearch` sources load from the portal
+  through the adapter. Their requests are built from the scope exactly like the generated hook
+  config (`buildSearchRequest`).
+* `hubspot.fetch` (fetch sources, fetch actions and custom code) goes through `proxyFetch` when
+  the connector offers it. App functions keep their mocks.
+* Sources start in their first-render state, as on HubSpot. A source waits for the on-open
+  sources its request reads, and re-runs (debounced by `RUNTIME_TIMING.liveDebounceMs`) when its
+  request changes.
+* Stale responses are dropped (per-source counters and a session epoch). A key change reloads
+  everything.
+* Errors become `<name>Error` plus a console entry that keeps the connector code. A card without
+  a record gets `NO_SAMPLE_RECORD_MESSAGE`; settings pages and app home get
+  `NO_RECORD_CONTEXT_MESSAGE`.
+* `live.context` overrides the portal, the user's email and id, and the record in
+  `context`.
+
+### Real-portal pickers (`src/panels`, `src/inspector`)
+* `PropertyPicker` is a combobox in single or chip mode. It shows each property's label, internal
+  name, type, group and a **Custom** badge, warns about names not found in the portal, and
+  suggests near misses.
+* `ObjectTypeSelect` offers standard objects plus the portal's custom objects. `portal.ts` holds
+  the hooks and pure helpers.
+* They are used by:
+  * the Data panel: property lists, filters (dropdown and date values) and sorts;
+  * the inspector (`PortalFields.tsx`): property-list props of CRM components, the options
+    editor's "Import from HubSpot property", the Step indicator's "Use stages from pipeline",
+    and CrmStatistics.
+* Mock data has "Use a real record as mock data".
+* Offline, everything falls back to the built-in suggestions.
+
+### Builds and tests
+* The build scripts:
+  * `npm run build`: app (`dist/`) plus server bundles (`dist-server/node.mjs`,
+    `dist-server/fake-hubspot.mjs`).
+  * `build:app`: the app only (Vercel, Cloudflare).
+  * `build:static`: the app with `VITE_CONNECTOR_URL=none`, for plain static hosting and the
+    main e2e suite.
+* The tests:
+  * Unit and integration: `server/**/*.test.ts` covers the node environment (core, fake,
+    adapters, deploy) against the fake HubSpot.
+  * `src/connect/**`, `src/runtime/live.test.tsx` and the `*.portal.test.tsx` files cover the
+    client side.
+  * `e2e-connect/` (`playwright.connect.config.ts`) runs `npm run build:app &&
+    node scripts/dev.mjs --fake --prod` on :4175, with the fake on :4011. It covers sign-in,
+    the sample record with live properties and associations, the custom-property picker,
+    disconnect, deploy (success, failed build, wrong key) and the unavailable / not-configured
+    states. `CONNECT_SCREENSHOTS=<dir>` saves screenshots of the main screens.

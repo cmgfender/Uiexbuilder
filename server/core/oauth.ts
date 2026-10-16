@@ -185,24 +185,36 @@ export function buildSessionData(config: ServerConfig, tokens: TokenResponse, in
   };
   const userId = info.user_id ?? previous?.userId;
   if (userId !== undefined) data.userId = userId;
-  if (previous?.personalAccessKey) data.personalAccessKey = previous.personalAccessKey;
+  data.verifiedAt = config.now();
   return data;
 }
 
 /** Refresh the session's access token (keeps portal/user/scopes; HubSpot refresh tokens don't rotate). */
 export async function refreshSessionData(config: ServerConfig, data: SessionData): Promise<SessionData> {
   const tokens = await refreshAccessToken(config, data.refreshToken);
-  return {
+  const next: SessionData = {
     ...data,
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token || data.refreshToken,
     expiresAt: config.now() + tokens.expires_in * 1000,
+    verifiedAt: config.now(),
   };
+  delete next.personalAccessKey;
+  return next;
 }
 
 /** Refresh when the access token expires within a minute. */
 export const REFRESH_MARGIN_MS = 60_000;
 
+/**
+ * How often the grant is confirmed with HubSpot (by refreshing the token). Signing out revokes the
+ * refresh token, so a copy of an old session cookie stops working within this time instead of
+ * lasting until the access token expires.
+ */
+export const GRANT_CHECK_INTERVAL_MS = 5 * 60_000;
+
 export function needsRefresh(config: ServerConfig, data: SessionData): boolean {
-  return data.expiresAt - REFRESH_MARGIN_MS < config.now();
+  const now = config.now();
+  if (data.expiresAt - REFRESH_MARGIN_MS < now) return true;
+  return data.verifiedAt === undefined || data.verifiedAt + GRANT_CHECK_INTERVAL_MS < now || data.verifiedAt > now + 60_000;
 }

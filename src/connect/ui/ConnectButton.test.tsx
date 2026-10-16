@@ -41,8 +41,11 @@ describe('ConnectButton', () => {
     useConnection.setState({ status: 'unavailable' });
     render(<ConnectButton />);
     const btn = screen.getByRole('button', { name: 'Connect HubSpot' });
-    expect(btn).toHaveAttribute('aria-disabled', 'true');
+    // Muted, but still operable (it opens the explanation), so not announced as disabled.
+    expect(btn).not.toHaveAttribute('aria-disabled');
+    expect(btn).toHaveClass('ub-cn-btn--muted');
     expect(btn).toHaveAttribute('title', 'Available on the hosted version');
+    expect(btn).toHaveAttribute('aria-haspopup', 'dialog');
     fireEvent.click(btn);
     const note = screen.getByRole('dialog', { name: 'About Connect HubSpot' });
     expect(note).toHaveTextContent(/available on the hosted version/i);

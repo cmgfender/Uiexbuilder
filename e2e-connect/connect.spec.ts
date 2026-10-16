@@ -28,7 +28,7 @@ async function importLiveContactCard(page: Page): Promise<void> {
 const previewData = (page: Page) => page.getByRole('group', { name: 'Preview data' });
 
 /** Live data → pick a sample contact through the record picker (search + keyboard). */
-async function pickSampleContact(page: Page, query: string, name: string): Promise<void> {
+async function pickSampleContact(page: Page, query: string, name: string, screenshot?: string): Promise<void> {
   await previewData(page).getByRole('button', { name: /Live/ }).click();
   const chip = page.getByRole('button', { name: 'Pick a sample record to preview with real data' });
   await expect(chip).toBeVisible();
@@ -38,6 +38,7 @@ async function pickSampleContact(page: Page, query: string, name: string): Promi
   await expect(search).toBeFocused();
   // Without a query it lists recently updated contacts from the portal.
   await expect(picker.getByRole('listbox', { name: 'Matching contacts' }).getByRole('option').first()).toBeVisible();
+  if (screenshot) await snap(page, screenshot, { keepPointer: true });
   // Type and press Enter right away (before the search answers): it picks the first match of
   // this search, never a row of the list that was showing before.
   await search.fill(query);
@@ -79,7 +80,7 @@ test.describe('Connect HubSpot (fake portal)', () => {
     await connectHubSpot(page);
     await importLiveContactCard(page);
 
-    await pickSampleContact(page, 'Priya', 'Priya Patel');
+    await pickSampleContact(page, 'Priya', 'Priya Patel', '02a-record-picker-open');
     await expect(cardRoot(page).getByText('First name: Priya')).toBeVisible();
     await expect(cardRoot(page).getByText('Email: priya@globex.io')).toBeVisible();
     const deals = cardRoot(page).locator('[data-node-type="TableBody"]');

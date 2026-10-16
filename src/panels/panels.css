@@ -1421,10 +1421,13 @@
 .ub-pp-option--active {
   background: var(--ub-select-soft);
 }
+/* The label is what people recognise: it keeps its width (up to 60%) while the internal name and
+   the group shrink first. The option's tooltip has the full description. */
 .ub-pp-option__label {
   overflow: hidden;
   min-width: 0;
-  flex: 0 1 auto;
+  max-width: 60%;
+  flex: 0 0 auto;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1439,7 +1442,8 @@
   white-space: nowrap;
 }
 .ub-pp-option__group {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: 35%;
   overflow: hidden;
   color: var(--ub-text-3);

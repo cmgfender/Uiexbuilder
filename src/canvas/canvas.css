@@ -1027,10 +1027,12 @@
   }
 }
 
-/* Narrow canvas: the chrome switch keeps its icon, switch and tooltip; its caption is visually
-   hidden (still its accessible name). */
+/* Narrow canvas: the chrome switch keeps its icon, switch and tooltip, and the preview's Reset
+   button its icon; their captions are visually hidden (still their accessible names), so the
+   "Preview" label keeps its room. */
 @container (max-width: 620px) {
-  .ub-cv-chrome-toggle .ub-switch > span:not(.ub-switch__track) {
+  .ub-cv-chrome-toggle .ub-switch > span:not(.ub-switch__track),
+  .ub-cv-preview-banner__reset {
     position: absolute;
     width: 1px;
     height: 1px;
