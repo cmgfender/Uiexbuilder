@@ -9,3 +9,4 @@ playwright-report/
 .env*
 *.tsbuildinfo
 dist-server/
+!.env.example

@@ -8,7 +8,7 @@ import { Callout, CommitInput, JsonEditor } from '../common';
 import { addMissingMockProperties, copyRecordIntoMock, missingMockProperties, mockRecordPropertyNames, sampleMockForSource } from '../actions';
 import { kindInfo } from '../dataSourceMeta';
 import { ObjectTypeSelect } from '../ObjectTypeSelect';
-import { useSampleRecordForMock } from '../portal';
+import { useLivePreview, useSampleRecordForMock } from '../portal';
 
 export function MockSection({ ext }: { ext: Extension }) {
   return (
@@ -285,7 +285,12 @@ const SIMULATIONS: Array<{ value: DataSourceSimulation; label: string; title: st
  * spinners, empty states and error alerts can be checked before HubSpot shows them.
  */
 function SimulateStates({ ext }: { ext: Extension }) {
+  const live = useLivePreview(ext);
   if (ext.dataSources.length === 0) return null;
+  // Sources the preview loads from HubSpot right now (see isLiveSource in src/runtime/live.ts).
+  const loadsLive = (kind: Extension['dataSources'][number]['kind']) =>
+    live.on && (kind === 'crmProperties' || kind === 'associations' || kind === 'crmSearch' || (kind === 'fetch' && live.fetchProxy));
+  const anyLive = ext.dataSources.some((ds) => loadsLive(ds.kind));
   const simulate = ext.mock.simulate ?? {};
   const set = (dsId: string, value: DataSourceSimulation) =>
     useEditor.getState().updateMock((m) => {
@@ -304,6 +309,11 @@ function SimulateStates({ ext }: { ext: Extension }) {
         <span>Simulate in preview</span>
       </div>
       <div className="ub-pn-muted">Check how the card looks while data loads, when nothing is found and when a request fails.</div>
+      {anyLive && (
+        <div className="ub-pn-muted">
+          Sources marked Live load real data from HubSpot right now. To try their loading, empty and error states, switch the preview to Mock data.
+        </div>
+      )}
       {ext.dataSources.map((ds) => {
         const Icon = kindInfo(ds.kind).icon;
         const value = simulate[ds.id] ?? 'ok';
@@ -312,12 +322,18 @@ function SimulateStates({ ext }: { ext: Extension }) {
             <Icon size={13} aria-hidden />
             <span className="ub-pn-item__name">{ds.name}</span>
             <span className="ub-pn-spacer" />
-            <Segmented<DataSourceSimulation>
-              aria-label={`Simulate ${ds.name}`}
-              value={value}
-              options={SIMULATIONS}
-              onChange={(v) => set(ds.id, v)}
-            />
+            {loadsLive(ds.kind) ? (
+              <Badge tone="success" title="Loads real data from HubSpot">
+                Live
+              </Badge>
+            ) : (
+              <Segmented<DataSourceSimulation>
+                aria-label={`Simulate ${ds.name}`}
+                value={value}
+                options={SIMULATIONS}
+                onChange={(v) => set(ds.id, v)}
+              />
+            )}
           </div>
         );
       })}

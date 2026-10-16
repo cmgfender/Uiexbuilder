@@ -10,13 +10,23 @@ const ALLOWED = 'https://other-builder.example.test';
 describe('CSRF guard', () => {
   it('requires the X-UIEX-Request header on API routes', async () => {
     const env = createTestEnv();
-    for (const path of ['/api/health', '/api/me', '/api/crm/object-types']) {
+    for (const path of ['/api/me', '/api/crm/object-types', '/api/crm/properties/contacts']) {
       const res = await env.call(path, { csrf: false });
       expect(res.status, path).toBe(403);
       expect((await res.json()).error.code).toBe('csrf');
     }
     const post = await env.call('/api/auth/logout', { method: 'POST', csrf: false });
     expect(post.status).toBe(403);
+  });
+
+  it('lets plain health checks through without the header (no user data there)', async () => {
+    const env = createTestEnv();
+    const res = await env.call('/api/health', { csrf: false });
+    expect(res.status).toBe(200);
+    expect((await res.json()).ok).toBe(true);
+    // A foreign page still cannot read it: no CORS headers for unknown origins.
+    const foreign = await env.call('/api/health', { csrf: false, origin: 'https://evil.example' });
+    expect(foreign.headers.get('access-control-allow-origin')).toBeNull();
   });
 
   it('accepts same-origin requests with or without an Origin header', async () => {

@@ -82,7 +82,7 @@ Pick **one** host. Render is the simplest. Vercel is just as good if your compan
 
 ### Option B: Vercel
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fcmgfender%2FUiexbuilder&project-name=uiex-builder&repository-name=uiex-builder&env=APP_URL,HUBSPOT_CLIENT_ID,HUBSPOT_CLIENT_SECRET,SESSION_SECRET&envDescription=Type%20%22later%22%20in%20each%20box%20if%20you%20do%20not%20have%20the%20values%20yet.%20The%20builder%20works%20without%20them%3B%20only%20Connect%20HubSpot%20waits.&envLink=https%3A%2F%2Fgithub.com%2Fcmgfender%2FUiexbuilder%2Fblob%2Fmain%2Fdocs%2FHOSTING.md%23step-3---add-the-hubspot-settings-to-your-host)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fcmgfender%2FUiexbuilder&project-name=uiex-builder&repository-name=uiex-builder&env=APP_URL,HUBSPOT_CLIENT_ID,HUBSPOT_CLIENT_SECRET,SESSION_SECRET&envDescription=Type%20%22later%22%20in%20each%20box%20if%20you%20do%20not%20have%20the%20values%20yet.%20The%20builder%20works%20without%20them%3B%20only%20Connect%20HubSpot%20waits.&envLink=https%3A%2F%2Fgithub.com%2Fcmgfender%2FUiexbuilder%2Fblob%2FHEAD%2Fdocs%2FHOSTING.md%23step-3---add-the-hubspot-settings-to-your-host)
 
 1. Click **Deploy with Vercel** above and sign in with **GitHub**.
 2. **Create Git Repository**: keep the name `uiex-builder` (or choose another) and click **Create**.

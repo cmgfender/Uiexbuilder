@@ -3,11 +3,11 @@
  * connection, the active extension and its sample record (see LiveDataAdapter in
  * src/runtime/types.ts). Every call goes through the connector (read-only).
  */
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { LiveDataAdapter } from '../runtime/types';
 import type { Extension } from '../model/types';
 import { selectActiveExtension, useEditor } from '../model/store';
-import type { ConnectionInfo, ConnectorHealth, CrmObjectTypeInfo, CrmRecordSummary } from './types';
+import type { ConnectionInfo, ConnectorHealth, CrmObjectTypeInfo, CrmOwner, CrmRecordSummary } from './types';
 import { getConnectorClient, isAbortError, type ConnectorClient } from './client';
 import { canonicalObjectType } from './objectTypes';
 import { useConnection } from './store';
@@ -15,6 +15,8 @@ import { useLiveData } from './records';
 
 export interface BuildLiveAdapterOptions {
   client?: ConnectorClient;
+  /** The signed-in user's name (from the portal's owner list), for `context.user.firstName/lastName`. */
+  userName?: { firstName?: string; lastName?: string } | null;
   /** Called with every failure (not aborts), e.g. to show a missing permission. */
   onError?: (err: unknown) => void;
 }
@@ -47,10 +49,10 @@ export function buildLiveAdapter(
       throw err;
     });
 
-  const context: LiveDataAdapter['context'] = {
-    portal: { id: info.portalId },
-    user: info.user.id !== undefined ? { id: info.user.id, email: info.user.email } : { email: info.user.email },
-  };
+  const user: NonNullable<LiveDataAdapter['context']['user']> = info.user.id !== undefined ? { id: info.user.id, email: info.user.email } : { email: info.user.email };
+  if (options.userName?.firstName) user.firstName = options.userName.firstName;
+  if (options.userName?.lastName) user.lastName = options.userName.lastName;
+  const context: LiveDataAdapter['context'] = { portal: { id: info.portalId }, user };
   if (isCard && record) context.crm = { objectId: Number(record.id), objectTypeId: record.objectTypeId };
 
   const adapter: LiveDataAdapter = {
@@ -72,6 +74,54 @@ export function buildLiveAdapter(
     adapter.proxyFetch = (request) => report(client.proxyFetch(request));
   }
   return adapter;
+}
+
+const OWNERS_SCOPE = 'crm.objects.owners.read';
+
+/** The signed-in user's owner entry: same HubSpot user id, else the same email (case-insensitive). */
+export function findOwnerForUser(owners: readonly CrmOwner[], user: { id?: number; email: string }): CrmOwner | null {
+  if (user.id !== undefined) {
+    const byId = owners.find((o) => o.userId === user.id);
+    if (byId) return byId;
+  }
+  const email = user.email.trim().toLowerCase();
+  return (email && owners.find((o) => o.email.trim().toLowerCase() === email)) || null;
+}
+
+/**
+ * The signed-in user's first and last name for the live preview context. Looked up in the portal's
+ * owner list only while live data is on and the owners permission was granted; otherwise null
+ * (the context keeps the mock names). Failures are silent: names are a nicety, not data.
+ */
+function useSignedInUserName(enabled: boolean): { firstName?: string; lastName?: string } | null {
+  const portalId = useConnection((s) => (s.info.connected ? s.info.portalId : null));
+  const userId = useConnection((s) => (s.info.connected ? s.info.user.id : undefined));
+  const userEmail = useConnection((s) => (s.info.connected ? s.info.user.email : ''));
+  const canReadOwners = useConnection((s) => s.info.connected && s.info.scopes.includes(OWNERS_SCOPE));
+  const active = enabled && canReadOwners && portalId !== null;
+  const [found, setFound] = useState<{ key: string; name: { firstName?: string; lastName?: string } | null } | null>(null);
+  const key = active ? `${portalId}|${userId ?? ''}|${userEmail}` : null;
+
+  useEffect(() => {
+    if (!key) return;
+    const controller = new AbortController();
+    getConnectorClient()
+      .owners({ signal: controller.signal })
+      .then(
+        (owners) => {
+          const owner = Array.isArray(owners) ? findOwnerForUser(owners, { id: userId, email: userEmail }) : null;
+          const name = owner && (owner.firstName || owner.lastName) ? { firstName: owner.firstName || undefined, lastName: owner.lastName || undefined } : null;
+          setFound({ key, name });
+        },
+        () => {
+          if (!controller.signal.aborted) setFound({ key, name: null });
+        },
+      );
+    return () => controller.abort();
+    // `key` covers the portal and the user.
+  }, [key]);
+
+  return key && found?.key === key ? found.name : null;
 }
 
 /** The active extension's sample record (only when it belongs to the connected portal and fits the card). */
@@ -112,6 +162,9 @@ export function useLiveAdapter(): LiveDataAdapter | null {
 
   const objectTypes = useMemo(() => (typesKey ? typesKey.split(',') : []), [typesKey]);
   const record = useSampleRecord({ id: extId, kind, objectTypes });
+  const userName = useSignedInUserName(mode === 'live' && status === 'connected');
+  const firstName = userName?.firstName;
+  const lastName = userName?.lastName;
 
   // Rebuilt only when what the preview reads changes (not when a label is looked up or the token renews).
   const recordId = record?.id ?? null;
@@ -123,10 +176,11 @@ export function useLiveAdapter(): LiveDataAdapter | null {
     if (!info.connected) return null;
     const sample: CrmRecordSummary | null = recordId ? { id: recordId, objectType: recordType, objectTypeId: recordTypeId, label: '' } : null;
     return buildLiveAdapter({ info, health: { features: { fetchProxy } } as ConnectorHealth }, { kind }, sample, {
+      userName: firstName || lastName ? { firstName, lastName } : null,
       onError: (err) => useLiveData.getState().reportError(err),
     });
     // userId / userEmail: the context reads them from the current info.
-  }, [loadedProject, projectId, mode, status, portalId, userId, userEmail, fetchProxy, kind, recordId, recordType, recordTypeId]);
+  }, [loadedProject, projectId, mode, status, portalId, userId, userEmail, fetchProxy, kind, recordId, recordType, recordTypeId, firstName, lastName]);
 
   // A new adapter (another record, portal or mode) starts without the previous problem.
   const key = adapter?.key ?? null;

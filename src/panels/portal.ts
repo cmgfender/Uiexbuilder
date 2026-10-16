@@ -439,6 +439,19 @@ export function useIsConnected(): boolean {
   return useConnection((s) => s.status === 'connected' && s.info.connected);
 }
 
+/**
+ * Whether the preview of this extension currently shows real HubSpot data, mirroring
+ * src/connect/live.ts useLiveAdapter: connected, Live data chosen, and (for a CRM card) a sample
+ * record that fits it. `fetchProxy` says whether hubspot.fetch goes through the connector too.
+ */
+export function useLivePreview(ext: Pick<Extension, 'id' | 'kind' | 'objectTypes'>): { on: boolean; fetchProxy: boolean } {
+  const live = useLiveData((s) => s.mode === 'live');
+  const fetchProxy = useConnection((s) => !!s.health?.features?.fetchProxy);
+  const { connected, record } = useSampleRecordForMock(ext);
+  const on = live && connected && (ext.kind !== 'card' || record !== null);
+  return { on, fetchProxy: on && fetchProxy };
+}
+
 /** Stages of a pipeline in display order. */
 export function pipelineStages(pipeline: CrmPipeline | undefined | null): CrmPipeline['stages'] {
   if (!pipeline || !Array.isArray(pipeline.stages)) return [];

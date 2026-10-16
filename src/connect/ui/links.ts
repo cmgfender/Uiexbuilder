@@ -3,7 +3,7 @@ import { getConnectorClient } from '../client';
 import type { ConnectionInfo } from '../types';
 
 /** Hosting guide (for whoever puts the builder online and sets up HubSpot sign-in). */
-export const HOSTING_DOCS_URL = 'https://github.com/cmgfender/Uiexbuilder/blob/main/docs/HOSTING.md';
+export const HOSTING_DOCS_URL = 'https://github.com/cmgfender/Uiexbuilder/blob/HEAD/docs/HOSTING.md';
 
 /** The connector's setup checklist page (served next to the builder). */
 export function setupPageUrl(): string {

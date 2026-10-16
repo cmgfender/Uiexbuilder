@@ -443,6 +443,12 @@ describe('helpers', () => {
     ]);
     const unset = describeStartup({ ...config, appUrl: '', hubspotClientId: '' }, { listenUrl: 'http://localhost:3000', appUrlSource: 'APP_URL is not set', staticRoot: null, staticFound: false }).join('\n');
     expect(unset).toContain('NOT CONFIGURED - missing APP_URL, HUBSPOT_CLIENT_ID');
+    expect(unset).toContain('live CRM data off until sign-in is set up');
+    expect(text).toContain('live CRM data on | fetch proxy on');
+    const noSecret = describeStartup({ ...config, enableDeploy: true, sessionSecret: '' }, { listenUrl: 'http://localhost:3000', appUrlSource: 'APP_URL', staticRoot: null, staticFound: false }).join('\n');
+    expect(noSecret).toContain('deploy to HubSpot (beta) off until SESSION_SECRET is set');
+    const withSecret = describeStartup({ ...config, enableDeploy: true }, { listenUrl: 'http://localhost:3000', appUrlSource: 'APP_URL', staticRoot: null, staticFound: false }).join('\n');
+    expect(withSecret).toContain('deploy to HubSpot (beta) on');
     expect(unset).toContain('API-only mode');
   });
 });

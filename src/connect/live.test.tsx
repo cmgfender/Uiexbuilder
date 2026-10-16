@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { createExtension, createProject } from '../model/factory';
 import { useEditor } from '../model/store';
 import { ConnectorClient, ConnectorError, setConnectorClient } from './client';
-import { buildLiveAdapter, recordFitsCard, useLiveAdapter } from './live';
+import { buildLiveAdapter, findOwnerForUser, recordFitsCard, useLiveAdapter } from './live';
 import { LIVE_DATA_KEY_PREFIX, resetLiveDataForTests, useLiveData } from './records';
 import { resetConnectionForTests, useConnection } from './store';
 import type { CrmRecordSummary } from './types';
@@ -85,6 +85,25 @@ describe('buildLiveAdapter', () => {
     await expect(a.getRecordProperties('0-1', 404, ['email'], false)).rejects.toBeInstanceOf(ConnectorError);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onError.mock.calls[0][0]).toMatchObject({ code: 'missing_scope', requiredScopes: ['crm.objects.contacts.read'] });
+  });
+
+  it('adds the signed-in user name when it is known', () => {
+    const a = buildLiveAdapter({ info: connectedInfo() }, { kind: 'card' }, ADA, { userName: { firstName: 'Ada', lastName: 'Lovelace' } })!;
+    expect(a.context.user).toEqual({ id: 7, email: 'ada@acme.com', firstName: 'Ada', lastName: 'Lovelace' });
+    const b = buildLiveAdapter({ info: connectedInfo() }, { kind: 'card' }, ADA, { userName: { firstName: 'Ada' } })!;
+    expect(b.context.user).toEqual({ id: 7, email: 'ada@acme.com', firstName: 'Ada' });
+  });
+
+  it('findOwnerForUser matches by HubSpot user id, then by email', () => {
+    const owners = [
+      { id: '1', email: 'someone@acme.com', firstName: 'Some', lastName: 'One', userId: 7 },
+      { id: '2', email: 'Ada@Acme.com', firstName: 'Ada', lastName: 'Lovelace', userId: 8 },
+    ];
+    expect(findOwnerForUser(owners, { id: 7, email: 'ada@acme.com' })?.id).toBe('1');
+    expect(findOwnerForUser(owners, { id: 99, email: 'ada@acme.com' })?.id).toBe('2');
+    expect(findOwnerForUser(owners, { email: ' ADA@acme.com ' })?.id).toBe('2');
+    expect(findOwnerForUser(owners, { email: 'nobody@acme.com' })).toBeNull();
+    expect(findOwnerForUser(owners, { email: '' })).toBeNull();
   });
 
   it('recordFitsCard matches any spelling of the card object types', () => {
@@ -193,5 +212,42 @@ describe('useLiveAdapter (shell → RuntimeProvider live=)', () => {
     expect(result.current).toBeNull();
     act(() => useLiveData.getState().setRecord(card.id, ADA, 4242));
     expect(result.current).toBeNull();
+  });
+
+  it('uses the real user name from the owner list in live mode (only with the owners permission)', async () => {
+    const r = routedFetch({
+      'GET /api/crm/owners': () => json([{ id: '11', email: 'ada@acme.com', firstName: 'Ada', lastName: 'Lovelace', userId: 7 }]),
+    });
+    setConnectorClient(new ConnectorClient({ baseUrl: '', fetch: r.fetch }));
+    const { card } = loadEditor();
+    useConnection.setState({ status: 'connected', info: connectedInfo({ scopes: ['oauth', 'crm.objects.owners.read'] }), health: healthFixture() });
+    const { result } = renderHook(() => useLiveAdapter());
+    act(() => {
+      useLiveData.getState().setMode('live');
+      useLiveData.getState().setRecord(card.id, ADA);
+    });
+    const key = result.current?.key;
+    await waitFor(() => expect(result.current?.context.user).toEqual({ id: 7, email: 'ada@acme.com', firstName: 'Ada', lastName: 'Lovelace' }));
+    expect(result.current?.key).toBe(key); // names do not reload the data
+  });
+
+  it('does not ask for owners without the permission or in mock mode', async () => {
+    const owners = vi.fn(() => json([]));
+    const r = routedFetch({ 'GET /api/crm/owners': owners });
+    setConnectorClient(new ConnectorClient({ baseUrl: '', fetch: r.fetch }));
+    const { card } = loadEditor();
+    useConnection.setState({ status: 'connected', info: connectedInfo(), health: healthFixture() });
+    const { result } = renderHook(() => useLiveAdapter());
+    act(() => {
+      useLiveData.getState().setMode('live');
+      useLiveData.getState().setRecord(card.id, ADA);
+    });
+    expect(result.current?.context.user).toEqual({ id: 7, email: 'ada@acme.com' });
+    act(() => {
+      useConnection.setState({ info: connectedInfo({ scopes: ['oauth', 'crm.objects.owners.read'] }) });
+      useLiveData.getState().setMode('mock');
+    });
+    await Promise.resolve();
+    expect(owners).not.toHaveBeenCalled();
   });
 });

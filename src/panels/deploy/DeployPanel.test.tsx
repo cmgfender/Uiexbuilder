@@ -86,6 +86,8 @@ function typeKey(value = 'CiRuYTEtZmFrZS1rZXktZm9yLXRlc3Rz') {
   fireEvent.change(screen.getByLabelText('Paste your key'), { target: { value } });
 }
 
+const realConnect = useConnection.getState().connect;
+
 beforeEach(() => {
   mocks.issues = [];
   loadProject();
@@ -94,6 +96,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  useConnection.setState({ connect: realConnect });
 });
 
 describe('<DeployToHubSpotPanel> availability', () => {

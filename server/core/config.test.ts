@@ -118,8 +118,15 @@ describe('not configured connector', () => {
     const res = (await req('/api/health'))!;
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ ok: true, oauthConfigured: false, features: { crm: false, fetchProxy: false, deploy: true } });
+    // No SESSION_SECRET: deploy can't keep its encrypted job state, so it reports off.
+    expect(body).toMatchObject({ ok: true, oauthConfigured: false, features: { crm: false, fetchProxy: false, deploy: false } });
     expect(body.scopes.required).toContain('oauth');
+  });
+
+  it('offers deploy before sign-in is set up when SESSION_SECRET is there (no-terminal app creation)', async () => {
+    const c = createConnector(configFromEnv({ APP_URL: 'https://b.example.com', SESSION_SECRET: 'x'.repeat(40) }));
+    const res = (await c.handle(new Request('https://b.example.com/api/health')))!;
+    expect(await res.json()).toMatchObject({ oauthConfigured: false, features: { crm: false, deploy: true } });
   });
 
   it('answers auth routes with 503 not_configured naming the missing variables', async () => {

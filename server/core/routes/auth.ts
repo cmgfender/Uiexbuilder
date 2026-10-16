@@ -5,7 +5,7 @@ import { CONNECTOR_ROUTES, type ConnectionInfo, type ConnectorHealth } from '../
 import type { RequestContext, Route } from '../types';
 import { ConnectorError, errorJson, json } from '../http';
 import { type ConfigStatus, notConfiguredMessage } from '../config';
-import { CookieSession } from '../session';
+import { CookieSession, sessionSecretUsable } from '../session';
 import { randomToken, timingSafeEqual } from '../crypto';
 import { validateReturnTo } from '../security';
 import { OAuthError, authorizeUrl, buildSessionData, exchangeCode, getTokenInfo, needsRefresh, refreshSessionData, revokeRefreshToken } from '../oauth';
@@ -182,6 +182,9 @@ export function authRoutes(status: ConfigStatus): Route[] {
   const health: Route = {
     method: 'GET',
     path: CONNECTOR_ROUTES.health,
+    // Holds no user data, so platform health checks (Render, Docker, uptime monitors) and people
+    // opening the address in a browser can read it without the X-UIEX-Request marker.
+    csrf: false,
     handler: (ctx) => {
       const { config } = ctx;
       const body: ConnectorHealth = {
@@ -191,7 +194,8 @@ export function authRoutes(status: ConfigStatus): Route[] {
         features: {
           crm: status.oauthConfigured,
           fetchProxy: status.oauthConfigured && config.enableFetchProxy,
-          deploy: config.enableDeploy,
+          // Deploy keeps its job state encrypted with SESSION_SECRET, so it needs a usable secret too.
+          deploy: config.enableDeploy && sessionSecretUsable(config),
         },
         scopes: { required: [...config.requiredScopes], optional: [...config.optionalScopes] },
       };

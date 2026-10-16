@@ -795,9 +795,13 @@ export function describeStartup(config: ServerConfig, info: StartupInfo): string
   lines.push(`  Required scopes:  ${config.requiredScopes.join(' ') || '(none)'}`);
   lines.push(`  Optional scopes:  ${config.optionalScopes.join(' ') || '(none)'}`);
   lines.push(`  HubSpot hosts:    ${config.hubspotApiBase} | ${config.hubspotAppBase}`);
-  lines.push(
-    `  Features:         live CRM data on | fetch proxy ${config.enableFetchProxy ? 'on' : 'off'} | deploy to HubSpot (beta) ${config.enableDeploy ? 'on' : 'off'}`,
-  );
+  // Same rules as the connector's /api/health features: CRM data and the fetch proxy need sign-in;
+  // deploy needs a usable SESSION_SECRET (its job state is encrypted with it).
+  const secretUsable = config.sessionSecret.length >= 32;
+  const crm = configured ? 'on' : 'off until sign-in is set up';
+  const proxy = !config.enableFetchProxy ? 'off' : configured ? 'on' : 'off until sign-in is set up';
+  const deploy = !config.enableDeploy ? 'off' : secretUsable ? 'on' : 'off until SESSION_SECRET is set';
+  lines.push(`  Features:         live CRM data ${crm} | fetch proxy ${proxy} | deploy to HubSpot (beta) ${deploy}`);
   if (config.allowedOrigins.length > 0) lines.push(`  Extra origins:    ${config.allowedOrigins.join(', ')}`);
   lines.push(`  Health check:     ${config.appUrl || info.listenUrl}${HEALTH_PATH}`);
   return lines;
