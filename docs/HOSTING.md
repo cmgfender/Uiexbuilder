@@ -134,6 +134,18 @@ folder is the same app as a HubSpot developer project:
 
 Details: [hubspot-app/README.md](../hubspot-app/README.md).
 
+### Accept HubSpot's Acceptable Use Policy (once)
+
+HubSpot will not install a public (OAuth) app until its developer has signed the **Acceptable Use
+Policy**. Until then, **Connect HubSpot** opens a HubSpot window that says *"The app could not be
+installed because the app developer has not signed the acceptable use policy"*.
+
+1. In HubSpot go to **Development** → **Projects** → **uiex-builder-connector** → click the app →
+   **Distribution** tab.
+2. Click **Begin publishing**, review the Acceptable Use Policy and **sign** it. You do **not** have to
+   finish a Marketplace listing: once the policy is signed the app can be installed in up to 25
+   HubSpot accounts without being listed.
+
 ### Copy the Client ID and Client secret
 
 In HubSpot, go to **Development** → **Projects** → **uiex-builder-connector** → click the app
@@ -239,6 +251,7 @@ Send admins the address, for example:
 | Connect works, but the builder immediately shows **not connected** again | The browser is not keeping the builder's cookie | Allow cookies for the builder's address (strict privacy settings or extensions can block them). Use the exact address in `APP_URL`, over `https://`. On Vercel, use the production address, not a preview address. |
 | **This website is not allowed to use the HubSpot connector** | The builder was opened on a different address than `APP_URL` | Open the builder on its `APP_URL` address, or add the other address to `ALLOWED_ORIGINS`. |
 | The HubSpot window does not open | The browser blocked the pop-up | Allow pop-ups for the builder's address and click **Connect HubSpot** again. |
+| HubSpot says the app **could not be installed because the app developer has not signed the acceptable use policy** | The HubSpot account that owns the app has not accepted HubSpot's Acceptable Use Policy yet | Step 2 → [Accept HubSpot's Acceptable Use Policy](#accept-hubspots-acceptable-use-policy-once): **Development → Projects → your project → app → Distribution → Begin publishing**, then sign. No Marketplace listing is needed. |
 | The first visit is very slow (Render) | The free plan sleeps after 15 minutes | Choose the **Starter** plan, or wait up to a minute. |
 | **Deploy to HubSpot** says the key is not valid | Wrong, deleted, or another account's personal access key | Create a new key in the account you are deploying to and paste it again. |
 | Render's deploy fails with a **health check** error | The server did not start | Open **Logs** in Render. The start-up message lists what is set and what is missing (never the secret values). |
