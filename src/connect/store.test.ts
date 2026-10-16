@@ -65,6 +65,22 @@ describe('init(): is a connector here?', () => {
     expect(r.calls.map((c) => c.path)).toEqual(['/api/health']);
   });
 
+  it.each(['none', 'off', 'NONE'])('a build without a connector (VITE_CONNECTOR_URL=%s) is unavailable without any request', async (base) => {
+    const r = routedFetch({ 'GET /api/health': () => json(healthFixture()) });
+    const c = new ConnectorClient({ baseUrl: base, fetch: r.fetch });
+    expect(c.disabled).toBe(true);
+    expect(c.baseUrl).toBe('');
+    setConnectorClient(c);
+    await useConnection.getState().init();
+    expect(useConnection.getState().status).toBe('unavailable');
+    expect(r.calls).toHaveLength(0);
+  });
+
+  it('a real connector address is not mistaken for "none"', () => {
+    expect(new ConnectorClient({ baseUrl: 'https://none.example.com/' }).disabled).toBe(false);
+    expect(new ConnectorClient({ baseUrl: '' }).disabled).toBe(false);
+  });
+
   it('reports not-configured when OAuth is not set up', async () => {
     const r = setup({ 'GET /api/health': () => json(healthFixture({ oauthConfigured: false })) });
     await useConnection.getState().init();
