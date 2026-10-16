@@ -20,7 +20,9 @@ export const DEFAULT_REQUIRED_SCOPES = [
 ];
 
 export const DEFAULT_OPTIONAL_SCOPES = [
-  'tickets',
+  // HubSpot retired the coarse 'tickets' scope; granular read scopes replace it.
+  'crm.objects.tickets.read',
+  'crm.schemas.tickets.read',
   'crm.objects.custom.read',
   'crm.schemas.custom.read',
   'crm.objects.owners.read',

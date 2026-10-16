@@ -98,6 +98,7 @@ export interface CrmPropertyDef {
   options?: CrmPropertyOption[];
   hidden?: boolean;
   calculated?: boolean;
+  /** true for HubSpot's default properties, false for the portal's own (custom) ones. */
   hubspotDefined?: boolean;
   /** Read-only properties (calculated / system). */
   readOnlyValue?: boolean;

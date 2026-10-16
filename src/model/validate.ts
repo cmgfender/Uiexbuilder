@@ -34,6 +34,7 @@
 import { getComponent } from '../registry';
 import type { ComponentDef, PropDef } from '../registry/types';
 import { deriveRequirements, staticOrigin, urlOriginHint } from '../codegen/requirements';
+import { RETIRED_SCOPES, isRetiredScope } from './scopes';
 import { stateTypeArg } from '../codegen/context';
 import { fitsStateType, inferValueType } from '../codegen/rewrite';
 import { propertyNameWarning } from '../panels/crmProperties';
@@ -1057,6 +1058,18 @@ function validateRequirements(project: Project, c: Collector): void {
   const configured = new Set(
     [...asArray(app.requiredScopes), ...asArray(app.optionalScopes), ...asArray(app.conditionallyRequiredScopes)].map((s) => str(s).trim()),
   );
+  for (const scope of configured) {
+    if (!isRetiredScope(scope)) continue;
+    const retired = RETIRED_SCOPES[scope];
+    c.add(
+      'retired-scope',
+      'error',
+      `HubSpot no longer accepts the ${quote(scope)} scope (it covered ${retired.covers}), so publishing would fail. Replace it with ${retired.readReplacement.map(quote).join(' and ')} (read access). Need to edit ${retired.covers} too? Also add the matching .write scopes.`,
+      { field: 'app.requiredScopes' },
+      scope,
+      scope,
+    );
+  }
   for (const scope of req.scopes) {
     if (configured.has(scope)) continue;
     c.add('missing-scope', 'info', `Scope ${quote(scope)} is needed by your extensions and will be added automatically on export.`, { field: 'app.requiredScopes' }, scope, scope);

@@ -620,7 +620,7 @@ export function createFakeHubSpot(opts: FakeHubSpotOptions): FakeHubSpotControls
     fetch: fakeFetch,
     droppedScopes: dropped,
     issueTokens(o = {}) {
-      const all = [...(o.scopes ?? ['oauth', 'crm.objects.contacts.read', 'crm.objects.companies.read', 'crm.objects.deals.read', 'crm.schemas.contacts.read', 'crm.schemas.companies.read', 'crm.schemas.deals.read', 'tickets', 'crm.objects.custom.read', 'crm.schemas.custom.read', 'crm.objects.owners.read', 'crm.objects.line_items.read', 'crm.objects.products.read', 'crm.objects.quotes.read'])];
+      const all = [...(o.scopes ?? ['oauth', 'crm.objects.contacts.read', 'crm.objects.companies.read', 'crm.objects.deals.read', 'crm.schemas.contacts.read', 'crm.schemas.companies.read', 'crm.schemas.deals.read', 'crm.objects.tickets.read', 'crm.schemas.tickets.read', 'crm.objects.custom.read', 'crm.schemas.custom.read', 'crm.objects.owners.read', 'crm.objects.line_items.read', 'crm.objects.products.read', 'crm.objects.quotes.read'])];
       const grant = newGrant(opts.clientId, all);
       const at = newAccessToken(grant, o.expiresInSeconds ?? ttl);
       return { accessToken: at.token, refreshToken: grant.refreshToken, expiresIn: o.expiresInSeconds ?? ttl };

@@ -10,6 +10,7 @@ import { renameReferences } from '../panels/findUsages';
 import type { Issue } from '../model/validate';
 import { getComponent } from '../registry';
 import { showLeftTab } from './shellStore';
+import { RETIRED_SCOPES, modernizeScopes } from '../model/scopes';
 
 export interface QuickFix {
   /** Button text, e.g. "Add scope". */
@@ -36,6 +37,22 @@ export function quickFixFor(issue: Issue, project: Project): QuickFix | null {
           const scopes = useEditor.getState().project.app.requiredScopes;
           if (!scopes.includes(subject)) useEditor.getState().updateApp({ requiredScopes: [...scopes, subject] });
           return `Added the “${subject}” scope.`;
+        },
+      };
+    }
+    case 'retired-scope': {
+      if (!subject) return null;
+      return {
+        label: 'Replace scope',
+        title: `Replace “${subject}” with HubSpot's current read scopes`,
+        apply: () => {
+          const app = useEditor.getState().project.app;
+          useEditor.getState().updateApp({
+            requiredScopes: modernizeScopes(app.requiredScopes),
+            optionalScopes: modernizeScopes(app.optionalScopes),
+            conditionallyRequiredScopes: modernizeScopes(app.conditionallyRequiredScopes),
+          });
+          return `Replaced “${subject}” with ${(RETIRED_SCOPES[subject]?.readReplacement ?? []).join(', ')}.`;
         },
       };
     }

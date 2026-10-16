@@ -19,6 +19,8 @@ export interface HubSpotApiOptions {
 
 const SCOPE_FRIENDLY: Record<string, string> = {
   tickets: 'tickets',
+  'crm.objects.tickets.read': 'tickets',
+  'crm.schemas.tickets.read': 'ticket properties',
   'crm.objects.contacts.read': 'contacts',
   'crm.objects.companies.read': 'companies',
   'crm.objects.deals.read': 'deals',

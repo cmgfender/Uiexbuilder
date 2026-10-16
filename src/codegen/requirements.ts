@@ -5,8 +5,9 @@
  *   card objectTypes, association targets, CRM search object types and the literal
  *   `objectTypeId` props of CRM data components. Mapping (HubSpot scope names):
  *     contacts/companies/deals/line_items/quotes/... -> crm.objects.<type>.read
- *     tickets                                        -> tickets
- *     products                                       -> e-commerce
+ *     tickets                                        -> crm.objects.tickets.read
+ *     products                                       -> crm.objects.products.read
+ *   (HubSpot retired the coarse `tickets` / `e-commerce` scopes — see src/model/scopes.ts.)
  *     custom objects (p_<name>, 2-<id>)              -> crm.objects.custom.read
  *   Engagement objects (calls, emails, meetings, notes, tasks) have no dedicated read scope and
  *   unknown types are skipped.
@@ -65,9 +66,9 @@ const OBJECT_SCOPES: Record<string, string> = {
   contacts: 'crm.objects.contacts.read',
   companies: 'crm.objects.companies.read',
   deals: 'crm.objects.deals.read',
-  tickets: 'tickets',
+  tickets: 'crm.objects.tickets.read',
   line_items: 'crm.objects.line_items.read',
-  products: 'e-commerce',
+  products: 'crm.objects.products.read',
   quotes: 'crm.objects.quotes.read',
   invoices: 'crm.objects.invoices.read',
   orders: 'crm.objects.orders.read',

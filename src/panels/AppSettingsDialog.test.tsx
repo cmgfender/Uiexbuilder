@@ -76,17 +76,17 @@ describe('<AppSettingsDialog>', () => {
     expect(app().requiredScopes).toEqual(['oauth', 'crm.objects.contacts.read']);
     const suggestions = screen.getByRole('group', { name: 'Suggestions' });
     expect(within(suggestions).getByText('crm.objects.deals.read')).toBeInTheDocument();
-    expect(within(suggestions).getByText('tickets')).toBeInTheDocument();
+    expect(within(suggestions).getByText('crm.objects.tickets.read')).toBeInTheDocument();
     expect(within(suggestions).queryByText('crm.objects.contacts.read')).toBeNull();
     fireEvent.click(within(suggestions).getByRole('button', { name: 'Add all' }));
-    expect(app().requiredScopes).toEqual(['oauth', 'crm.objects.contacts.read', 'crm.objects.deals.read', 'tickets']);
+    expect(app().requiredScopes).toEqual(['oauth', 'crm.objects.contacts.read', 'crm.objects.deals.read', 'crm.objects.tickets.read']);
     expect(screen.queryByRole('group', { name: 'Suggestions' })).toBeNull();
   });
 
   it('adds a single suggested scope and edits scopes as chips', () => {
     setup('auth');
-    fireEvent.click(screen.getByRole('button', { name: 'Add tickets' }));
-    expect(app().requiredScopes).toContain('tickets');
+    fireEvent.click(screen.getByRole('button', { name: 'Add crm.objects.tickets.read' }));
+    expect(app().requiredScopes).toContain('crm.objects.tickets.read');
     const optional = screen.getByRole('combobox', { name: 'Optional scopes' });
     fireEvent.focus(optional);
     fireEvent.change(optional, { target: { value: 'crm.lists.re' } });

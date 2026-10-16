@@ -13,6 +13,7 @@
 import { toPascalCase } from '../model/ids';
 import { toProjectSlug } from '../model/factory';
 import { serializeProject } from '../model/persistence';
+import { modernizeScopes } from '../model/scopes';
 import type { AppFunction, Extension, ExtensionKind, Project } from '../model/types';
 import { extensionLocation } from '../model/rules';
 import { componentName, generateExtensionSource } from './extension';
@@ -324,9 +325,12 @@ function appMeta(project: Project, req: ProjectRequirements): unknown {
   const app = project.app;
   const auth: Record<string, unknown> = { type: app.authType };
   if (app.authType === 'oauth') auth.redirectUrls = app.redirectUrls;
-  auth.requiredScopes = mergeRequiredScopes(app, req.scopes);
-  auth.optionalScopes = app.optionalScopes;
-  auth.conditionallyRequiredScopes = app.conditionallyRequiredScopes;
+  // HubSpot rejects retired coarse scopes (e.g. 'tickets') at deploy time, so exports always use
+  // their granular read replacements (src/model/scopes.ts). Validation tells the user as well.
+  const required = modernizeScopes(app.requiredScopes);
+  auth.requiredScopes = mergeRequiredScopes({ ...app, requiredScopes: required }, req.scopes);
+  auth.optionalScopes = modernizeScopes(app.optionalScopes).filter((s) => !required.includes(s));
+  auth.conditionallyRequiredScopes = modernizeScopes(app.conditionallyRequiredScopes);
   const support: Record<string, string> = {};
   for (const [key, value] of Object.entries(app.support)) if (value && value.trim()) support[key] = value.trim();
   const config: Record<string, unknown> = {

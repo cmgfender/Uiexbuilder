@@ -113,6 +113,43 @@ describe('RecordPicker', () => {
     expect(chip()).toHaveTextContent('Live data · Ada Lovelace');
   });
 
+  it('Enter typed before the search answers picks the first match of that search, not a stale row', async () => {
+    const { card } = setup();
+    useLiveData.getState().setMode('live');
+    render(<RecordPicker />);
+    fireEvent.click(chip());
+    const panel = screen.getByRole('dialog', { name: 'Sample record' });
+    const input = within(panel).getByRole('combobox', { name: 'Find a contact' });
+    const listbox = within(panel).getByRole('listbox', { name: 'Matching contacts' });
+    await waitFor(() => expect(within(listbox).getAllByRole('option')).toHaveLength(3));
+
+    // Fast typist: "grace" + Enter while the list still shows the recent records (Ada first).
+    fireEvent.change(input, { target: { value: 'grace' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByRole('dialog', { name: 'Sample record' })).toBeInTheDocument();
+    expect(useLiveData.getState().recordByExtension[card.id]).toBeUndefined();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(useLiveData.getState().recordByExtension[card.id]).toMatchObject({ id: '103', label: 'Grace Hopper' });
+  });
+
+  it('a pending Enter is dropped when the search is cleared or finds nothing', async () => {
+    const { card } = setup();
+    useLiveData.getState().setMode('live');
+    render(<RecordPicker />);
+    fireEvent.click(chip());
+    const panel = screen.getByRole('dialog', { name: 'Sample record' });
+    const input = within(panel).getByRole('combobox', { name: 'Find a contact' });
+    fireEvent.change(input, { target: { value: 'zzz' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(within(panel).getByRole('status')).toHaveTextContent('No contacts match “zzz”.'));
+    expect(screen.getByRole('dialog', { name: 'Sample record' })).toBeInTheDocument();
+    expect(useLiveData.getState().recordByExtension[card.id]).toBeUndefined();
+    // A later search does not pick by itself.
+    fireEvent.change(input, { target: { value: 'ada' } });
+    await waitFor(() => expect(within(panel).getByRole('status')).toHaveTextContent('1 match'));
+    expect(screen.getByRole('dialog', { name: 'Sample record' })).toBeInTheDocument();
+  });
+
   it('first Escape clears the search, the next closes the picker', async () => {
     setup();
     useLiveData.getState().setMode('live');

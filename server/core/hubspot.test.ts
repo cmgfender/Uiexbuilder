@@ -67,13 +67,13 @@ describe('HubSpotApi via ctx.hubspot()', () => {
 
   it('maps MISSING_SCOPES to missing_scope with the required scopes and a plain explanation', async () => {
     const env = createTestEnv();
-    env.fake.dropScopes('tickets');
+    env.fake.dropScopes('crm.schemas.tickets.read');
     await env.signIn();
     const res = await env.call('/api/crm/properties/tickets');
     expect(res.status).toBe(403);
     const body = await res.json();
-    expect(body.error).toMatchObject({ code: 'missing_scope', status: 403, requiredScopes: ['tickets'] });
-    expect(body.error.message).toContain('tickets');
+    expect(body.error).toMatchObject({ code: 'missing_scope', status: 403, requiredScopes: ['crm.schemas.tickets.read'] });
+    expect(body.error.message).toContain('ticket');
     expect(body.error.message).toMatch(/connect again/i);
     expect(body.error.correlationId).toEqual(expect.any(String));
   });

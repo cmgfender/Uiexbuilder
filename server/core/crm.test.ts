@@ -71,6 +71,7 @@ describe('GET /api/crm/properties/:objectType', () => {
       fieldType: 'select',
       description: 'Which plan the contact likes best',
       groupName: 'contactinformation',
+      hubspotDefined: false,
       options: [
         { label: 'Starter', value: 'starter', displayOrder: 0 },
         { label: 'Professional', value: 'pro', displayOrder: 1 },
@@ -80,7 +81,7 @@ describe('GET /api/crm/properties/:objectType', () => {
     expect(body.find((p) => p.name === 'email')).toMatchObject({ type: 'string', fieldType: 'text', hubspotDefined: true });
     expect(body.find((p) => p.name === 'hs_object_id')).toMatchObject({ readOnlyValue: true });
     expect(body.find((p) => p.name === 'loyalty_points')).toMatchObject({ type: 'number' });
-    expect(body.find((p) => p.name === 'loyalty_points')?.hubspotDefined).toBeUndefined();
+    expect(body.find((p) => p.name === 'loyalty_points')?.hubspotDefined).toBe(false);
   });
 
   it('accepts object type ids and custom object names', async () => {
@@ -304,7 +305,7 @@ describe('GET /api/crm/records/:objectType/:id/associations/:toObjectType', () =
 
   it('reports a missing scope for the associated object type', async () => {
     const e = createTestEnv();
-    e.fake.dropScopes('tickets');
+    e.fake.dropScopes('crm.objects.tickets.read');
     await e.signIn();
     const res = await get<{ error: { code: string } }>('/api/crm/records/contacts/1001/associations/tickets', e);
     expect(res.status).toBe(403);

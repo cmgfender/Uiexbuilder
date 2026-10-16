@@ -349,12 +349,20 @@ export function RecordSearch({ objectType, onPick, selectedId, known, inputId }:
   const [error, setError] = useState<FriendlyError | null>(null);
   const [active, setActive] = useState(-1);
   const [attempt, setAttempt] = useState(0);
+  // Enter pressed while the list still shows results for an older query: pick the first match of
+  // the new search as soon as it arrives (never a stale row the user did not mean).
+  const pendingPick = useRef(false);
+  const onPickRef = useRef(onPick);
+  onPickRef.current = onPick;
   const autoId = useId();
   const baseId = inputId ?? `${autoId}-search`;
   const listId = `${baseId}-list`;
   const plural = objectTypeLabel(objectType, known);
   const lowerPlural = plural.toLowerCase();
   const hint = SEARCH_HINT[objectTypeIdOf(objectType, known) ?? ''] ?? 'name or record ID';
+
+  const latestQuery = useRef(query);
+  latestQuery.current = query;
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(query.trim()), SEARCH_DEBOUNCE_MS);
@@ -373,9 +381,14 @@ export function RecordSearch({ objectType, onPick, selectedId, known, inputId }:
           setResults(rows);
           setStatus('ok');
           setActive(rows.length ? 0 : -1);
+          if (pendingPick.current && debounced === latestQuery.current.trim()) {
+            pendingPick.current = false;
+            if (rows.length) onPickRef.current(rows[0]);
+          }
         },
         (err: unknown) => {
           if (isAbortError(err) || controller.signal.aborted) return;
+          pendingPick.current = false;
           setResults([]);
           setActive(-1);
           setError(describeError(err));
@@ -393,6 +406,12 @@ export function RecordSearch({ objectType, onPick, selectedId, known, inputId }:
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     const n = results.length;
+    const searching = status === 'loading' || query.trim() !== debounced;
+    if (e.key === 'Enter' && searching) {
+      e.preventDefault();
+      pendingPick.current = true;
+      return;
+    }
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       if (n) setActive((i) => (i + 1) % n);
@@ -408,6 +427,7 @@ export function RecordSearch({ objectType, onPick, selectedId, known, inputId }:
       // First Escape clears the search; the next one closes the picker.
       e.preventDefault();
       e.stopPropagation();
+      pendingPick.current = false;
       setQuery('');
     }
   };

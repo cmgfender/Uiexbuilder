@@ -126,7 +126,7 @@ describe('generateProjectFiles', () => {
       'crm.objects.companies.read',
       'crm.objects.custom.read',
       'crm.objects.deals.read',
-      'tickets',
+      'crm.objects.tickets.read',
     ]);
     expect(app.config.permittedUrls).toEqual({
       fetch: ['https://api.example.com/', 'https://data.example.org', 'https://settings.example.com'],
@@ -191,8 +191,8 @@ describe('deriveRequirements', () => {
     expect(scopeForObjectType('contacts')).toBe('crm.objects.contacts.read');
     expect(scopeForObjectType('CONTACT')).toBe('crm.objects.contacts.read');
     expect(scopeForObjectType('0-3')).toBe('crm.objects.deals.read');
-    expect(scopeForObjectType('tickets')).toBe('tickets');
-    expect(scopeForObjectType('0-7')).toBe('e-commerce');
+    expect(scopeForObjectType('tickets')).toBe('crm.objects.tickets.read');
+    expect(scopeForObjectType('0-7')).toBe('crm.objects.products.read');
     expect(scopeForObjectType('p_cars')).toBe('crm.objects.custom.read');
     expect(scopeForObjectType('2-12345')).toBe('crm.objects.custom.read');
     expect(scopeForObjectType('calls')).toBeNull();
@@ -212,7 +212,7 @@ describe('deriveRequirements', () => {
 
   it('collects scopes and URLs from cards, data sources, actions and images', () => {
     expect(deriveRequirements(createFeatureProject())).toEqual({
-      scopes: ['crm.objects.companies.read', 'crm.objects.contacts.read', 'crm.objects.custom.read', 'crm.objects.deals.read', 'tickets'],
+      scopes: ['crm.objects.companies.read', 'crm.objects.contacts.read', 'crm.objects.custom.read', 'crm.objects.deals.read', 'crm.objects.tickets.read'],
       fetch: ['https://api.example.com', 'https://data.example.org', 'https://settings.example.com'],
       iframe: ['https://embed.example.com', 'https://help.example.com'],
       img: ['https://images.example.com'],

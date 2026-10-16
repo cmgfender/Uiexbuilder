@@ -13,7 +13,7 @@ function fake(extra: Partial<Parameters<typeof createFakeHubSpot>[0]> = {}): Fak
 }
 
 function authorizeUrl(params: Record<string, string> = {}): string {
-  const q = new URLSearchParams({ client_id: 'cid', redirect_uri: REDIRECT, scope: 'oauth crm.objects.contacts.read', optional_scope: 'tickets', state: 'st', ...params });
+  const q = new URLSearchParams({ client_id: 'cid', redirect_uri: REDIRECT, scope: 'oauth crm.objects.contacts.read', optional_scope: 'crm.objects.tickets.read', state: 'st', ...params });
   return `${APP}/oauth/authorize?${q}`;
 }
 
@@ -126,7 +126,7 @@ describe('fake OAuth', () => {
 
     const info = await (await f.fetch(`${API}/oauth/v1/access-tokens/${first.body.access_token}`)).json();
     expect(info).toMatchObject({ hub_id: 12345678, hub_domain: 'acmedemo.com', user: 'jordan.lee@acmedemo.com', user_id: 9001, token_type: 'access', expires_in: 1800 });
-    expect(info.scopes).toEqual(['oauth', 'crm.objects.contacts.read', 'tickets']);
+    expect(info.scopes).toEqual(['oauth', 'crm.objects.contacts.read', 'crm.objects.tickets.read']);
 
     const refreshed = await exchange(f, { grant_type: 'refresh_token', refresh_token: first.body.refresh_token });
     expect(refreshed.status).toBe(200);
@@ -180,7 +180,7 @@ describe('fake CRM', () => {
     const { accessToken } = f.issueTokens({ scopes: ['oauth', 'crm.objects.contacts.read'] });
     const res = await api(f, accessToken, '/crm/v3/objects/tickets/4001');
     expect(res.status).toBe(403);
-    expect(res.body).toMatchObject({ category: 'MISSING_SCOPES', errors: [{ context: { requiredGranularScopes: ['tickets'] } }] });
+    expect(res.body).toMatchObject({ category: 'MISSING_SCOPES', errors: [{ context: { requiredGranularScopes: ['crm.objects.tickets.read'] } }] });
     expect(res.body.correlationId).toEqual(expect.any(String));
     f.dropScopes('crm.objects.contacts.read');
     expect((await api(f, accessToken, '/crm/v3/objects/contacts/1001')).status).toBe(403);

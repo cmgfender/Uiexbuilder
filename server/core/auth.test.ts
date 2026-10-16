@@ -100,7 +100,7 @@ describe('GET /api/auth/callback', () => {
       portalId: 12345678,
       hubDomain: 'acmedemo.com',
       user: { id: 9001, email: 'jordan.lee@acmedemo.com' },
-      scopes: expect.arrayContaining(['oauth', 'crm.objects.contacts.read', 'tickets']),
+      scopes: expect.arrayContaining(['oauth', 'crm.objects.contacts.read', 'crm.objects.tickets.read']),
       expiresAt: env.now() + 1800 * 1000,
       appHost: 'app.hubspot.com',
     });

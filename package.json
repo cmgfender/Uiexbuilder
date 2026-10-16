@@ -18,7 +18,8 @@
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "e2e:connect": "playwright test -c playwright.connect.config.ts"
   },
   "dependencies": {
     "immer": "^11.1.21",

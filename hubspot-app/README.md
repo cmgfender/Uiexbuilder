@@ -66,7 +66,8 @@ Add account**. People from other accounts then see an error when they try to con
 
 | Optional (asked for, can be declined) | Why |
 | --- | --- |
-| `tickets` | Ticket records and pipelines |
+| `crm.objects.tickets.read` | Ticket records |
+| `crm.schemas.tickets.read` | Ticket properties and pipelines |
 | `crm.objects.custom.read`, `crm.schemas.custom.read` | Custom objects |
 | `crm.objects.owners.read` | Record owners |
 | `crm.objects.line_items.read`, `crm.objects.products.read`, `crm.objects.quotes.read` | Line items, products and quotes |

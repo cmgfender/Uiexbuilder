@@ -14,6 +14,7 @@
  * clock).
  */
 import { readStoredZip } from '../core/deploy/zip';
+import { RETIRED_SCOPES } from '../../src/model/scopes';
 
 export const FAKE_PROJECT_PATH_PREFIXES = ['/localdevauth/', '/dfs/', '/project-components-external/', '/developer/', '/apps-dev/'];
 
@@ -87,6 +88,8 @@ interface FakeBuild {
   status: 'PENDING' | 'BUILDING' | 'SUCCESS' | 'FAILURE';
   createdAt: number;
   components: Array<{ uid: string; type: string }>;
+  /** Retired scopes the app component requests (real HubSpot fails the deploy for these). */
+  retiredScopes: Array<{ uid: string; scope: string }>;
   autoDeploy: boolean;
   autoDeployId: number;
   locatorDelay: number;
@@ -482,7 +485,13 @@ async function upload(request: Request, s: Store, tok: FakeToken): Promise<Respo
   }
   const errors: Array<{ message: string }> = [];
   const components: Array<{ uid: string; type: string }> = [];
+  const retiredScopes: Array<{ uid: string; scope: string }> = [];
   for (const [uid, raw] of Object.entries(nodes as Record<string, unknown>)) {
+    const auth = ((raw as { config?: { auth?: Record<string, unknown> } }).config ?? {}).auth ?? {};
+    for (const key of ['requiredScopes', 'optionalScopes', 'conditionallyRequiredScopes']) {
+      const list = auth[key];
+      if (Array.isArray(list)) for (const scope of list) if (typeof scope === 'string' && RETIRED_SCOPES[scope]) retiredScopes.push({ uid, scope });
+    }
     const node = raw as { uid?: unknown; componentType?: unknown; metaFilePath?: unknown; componentDeps?: unknown; config?: unknown; files?: unknown };
     if (node.uid !== uid) errors.push({ message: `Component ${uid}: uid does not match its key` });
     if (typeof node.componentType !== 'string' || !(SCHEMA_TYPES.includes(node.componentType) || node.componentType === 'SERVERLESS_PACKAGE')) {
@@ -519,6 +528,7 @@ async function upload(request: Request, s: Store, tok: FakeToken): Promise<Respo
     status: 'PENDING',
     createdAt: s.now(),
     components,
+    retiredScopes,
     autoDeploy,
     autoDeployId: 0,
     locatorDelay: tok.modes.has('slow-autodeploy') ? 2 : 0,
@@ -623,7 +633,8 @@ function advanceDeploy(s: Store, deploy: FakeDeploy): void {
     deploy.status = deploy.polls === 1 ? 'PENDING' : 'DEPLOYING';
     return;
   }
-  deploy.status = deploy.modes.has('fail-deploy') ? 'FAILURE' : 'SUCCESS';
+  const retired = s.builds.get(deploy.buildId)?.retiredScopes ?? [];
+  deploy.status = deploy.modes.has('fail-deploy') || retired.length > 0 ? 'FAILURE' : 'SUCCESS';
   if (deploy.status === 'SUCCESS') {
     const project = s.projects.get(projectKey(deploy.portalId, deploy.projectName));
     if (project) {
@@ -632,6 +643,16 @@ function advanceDeploy(s: Store, deploy: FakeDeploy): void {
       if (app && !s.apps.has(`${deploy.portalId}:${app.uid}`)) s.apps.set(`${deploy.portalId}:${app.uid}`, { id: s.nextId++, projectId: project.id, portalId: deploy.portalId });
     }
   }
+}
+
+/** Mirrors real HubSpot's deploy error for retired scopes (seen live), else a generic failure. */
+function deployFailureMessage(s: Store, deploy: FakeDeploy, uid: string): string {
+  const retired = s.builds.get(deploy.buildId)?.retiredScopes ?? [];
+  if (retired.length > 0) {
+    const r = RETIRED_SCOPES[retired[0].scope];
+    return `${retired[0].uid} failed: The scope ${r.scope} has been replaced by more specific scopes and is no longer available. Use the following scope(s) instead: ${r.allReplacements.join(', ')}.`;
+  }
+  return `Could not deploy ${uid}: the app's scopes changed and need to be re-approved`;
 }
 
 function deployJson(s: Store, deploy: FakeDeploy) {
@@ -656,7 +677,7 @@ function deployJson(s: Store, deploy: FakeDeploy) {
         deployType: c.type,
         action: 'INSTALL',
         status: deploy.status === 'SUCCESS' ? 'SUCCESS' : failed ? 'FAILURE' : deploy.status,
-        errorMessage: failed && i === 0 ? `Could not deploy ${c.uid}: the app's scopes changed and need to be re-approved` : '',
+        errorMessage: failed && i === 0 ? deployFailureMessage(s, deploy, c.uid) : '',
         standardError: failed && i > 0 ? { status: 'error', category: 'VALIDATION_ERROR', subCategory: 'DeployPipelineErrorType.DEPENDENT_SUBDEPLOY_FAILED', context: {}, links: {} } : null,
         startedAt: iso(s.now()),
         finishedAt: '',

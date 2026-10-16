@@ -21,7 +21,8 @@
         "crm.schemas.deals.read"
       ],
       "optionalScopes": [
-        "tickets",
+        "crm.objects.tickets.read",
+        "crm.schemas.tickets.read",
         "crm.objects.custom.read",
         "crm.schemas.custom.read",
         "crm.objects.owners.read",

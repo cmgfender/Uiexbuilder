@@ -149,7 +149,8 @@ export function mapProperty(p: HsProperty): CrmPropertyDef {
   }
   if (p.hidden) def.hidden = true;
   if (p.calculated) def.calculated = true;
-  if (p.hubspotDefined) def.hubspotDefined = true;
+  // HubSpot omits hubspotDefined on the portal's own properties; the DTO is explicit (false = custom).
+  def.hubspotDefined = p.hubspotDefined === true;
   if (p.modificationMetadata?.readOnlyValue || p.calculated) def.readOnlyValue = true;
   return def;
 }
