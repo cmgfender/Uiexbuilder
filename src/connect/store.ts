@@ -469,6 +469,11 @@ async function runInit(): Promise<void> {
   useConnection.setState({ status: 'checking', error: null, errorCode: null, errorSource: null });
   const redirectResult = consumeRedirectResult();
   const c = client();
+  if (c.disabled) {
+    // A static build without a connector: "available on the hosted version", without a request.
+    useConnection.setState({ status: 'unavailable', health: null });
+    return;
+  }
   let health: ConnectorHealth;
   try {
     const h: unknown = await c.health();

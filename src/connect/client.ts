@@ -1,7 +1,9 @@
 /**
  * Typed browser client for the hosted HubSpot connector (routes in ./types CONNECTOR_ROUTES).
  *
- * - Base URL: `import.meta.env.VITE_CONNECTOR_URL` or '' (same origin as the builder).
+ * - Base URL: `import.meta.env.VITE_CONNECTOR_URL` or '' (same origin as the builder). The value
+ *   'none' (`npm run build:static`) means there is no connector at all: the client is `disabled`
+ *   and the builder never calls /api (no failed requests on static hosting).
  * - Every request sends the session cookie (`credentials: 'include'`) and the CSRF header.
  * - Errors become `ConnectorError` (stable `code`, HTTP `status`, `requiredScopes` for missing
  *   permissions, `retryAfter` for rate limits). A response that is not JSON (e.g. the builder's own
@@ -114,6 +116,9 @@ interface Inflight {
 
 export const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
 
+/** VITE_CONNECTOR_URL values meaning "this build has no connector" (static hosting). */
+const NO_CONNECTOR = /^(none|off|false|disabled)$/i;
+
 function envBaseUrl(): string {
   let raw: unknown;
   try {
@@ -126,6 +131,8 @@ function envBaseUrl(): string {
 
 export class ConnectorClient {
   readonly baseUrl: string;
+  /** Built without a connector (VITE_CONNECTOR_URL=none): nothing should call /api. */
+  readonly disabled: boolean;
   private readonly options: ConnectorClientOptions;
   private cache = new Map<string, { expires: number; value: unknown }>();
   private inflight = new Map<string, Inflight>();
@@ -136,7 +143,9 @@ export class ConnectorClient {
 
   constructor(options: ConnectorClientOptions = {}) {
     this.options = options;
-    this.baseUrl = (options.baseUrl ?? envBaseUrl()).replace(/\/+$/, '');
+    const base = (options.baseUrl ?? envBaseUrl()).trim();
+    this.disabled = NO_CONNECTOR.test(base);
+    this.baseUrl = this.disabled ? '' : base.replace(/\/+$/, '');
   }
 
   // ------------------------------------------------------------------ plumbing

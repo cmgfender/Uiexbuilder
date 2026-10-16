@@ -1,5 +1,5 @@
 /// <reference types="vitest/config" />
-import { defineConfig, type ProxyOptions } from 'vite';
+import { defineConfig, type ProxyOptions, type UserConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import type { ServerResponse } from 'node:http';
 
@@ -33,7 +33,7 @@ const apiProxy: ProxyOptions = {
   },
 };
 
-export default defineConfig({
+const config = {
   plugins: [react()],
   server: { port: 5173, host: true, proxy: { '/api': apiProxy } },
   // `vite preview` (used by the Playwright suite) behaves like static hosting: no connector.
@@ -44,4 +44,11 @@ export default defineConfig({
     setupFiles: ['src/test/setup.ts'],
     testTimeout: 60000,
   },
+} satisfies UserConfig;
+
+export default defineConfig(({ mode }) => {
+  // `vite build --mode static` (npm run build:static): a builder for plain static hosting with no
+  // connector. Connect HubSpot then shows "available on the hosted version" without calling /api.
+  if (mode === 'static' && !process.env.VITE_CONNECTOR_URL) process.env.VITE_CONNECTOR_URL = 'none';
+  return config;
 });
