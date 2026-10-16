@@ -334,6 +334,25 @@ describe('Runtime — state & actions', () => {
     expect(r.api.alerts.some((a) => a.title === 'Copied to clipboard (preview)' && a.message === '“jordan.lee@example.com”')).toBe(true);
   });
 
+  it('does not repeat the copy confirmation when the handler shows its own alert', async () => {
+    const written: string[] = [];
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: async (t: string) => void written.push(t) },
+    });
+    const { project, ext } = makeDoc([]);
+    const r = renderDoc(project, ext);
+    await act(() =>
+      r.api.runActions([
+        { id: 'c', type: 'copyToClipboard', text: '{{ context.user.email }}' },
+        { id: 'a', type: 'addAlert', alertType: 'success', title: 'Email copied', message: '{{ context.user.email }} is on your clipboard.' },
+      ]),
+    );
+    expect(written).toEqual(['jordan.lee@example.com']);
+    expect(r.api.alerts.map((a) => a.title)).toEqual(['Email copied']);
+    expect(r.api.logs.some((l) => l.message === 'Copied to clipboard: "jordan.lee@example.com"')).toBe(true);
+  });
+
   it('runs custom code with setters, actions and logger; errors are logged and abort', async () => {
     const { project, ext } = makeDoc([], {
       state: [

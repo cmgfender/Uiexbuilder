@@ -1,11 +1,14 @@
 /**
  * Shown above the card while the project's code is paused (an imported, untrusted document — see
- * model/trust.ts): says what does not run and lets the user trust the project. Rendered by
- * <ExtensionRenderer> in both modes; it is builder chrome (`data-cv-chrome`), not a component.
+ * model/trust.ts): says what does not run, says plainly what trusted code can do (with HubSpot
+ * connected: read the connected account's data), and lets the user trust the project. A project
+ * trusted before HubSpot was connected is paused again — and asked about again — once it is.
+ * Rendered by <ExtensionRenderer> in both modes; it is builder chrome (`data-cv-chrome`), not a
+ * component.
  */
 import { useMemo, useSyncExternalStore } from 'react';
 import { ShieldAlert } from 'lucide-react';
-import { codeTrustVersion, isProjectTrusted, subscribeCodeTrust, trustProject } from '../model/trust';
+import { codeTrustState, codeTrustVersion, hubSpotAccess, subscribeCodeTrust, trustProject } from '../model/trust';
 import type { ActionStep, Extension } from '../model/types';
 import { helperNames } from '../power/helpers';
 import { collectExtensionCode } from '../codegen/extension';
@@ -45,7 +48,9 @@ export function CodeTrustNotice() {
   const rt = useInternalRuntime('CodeTrustNotice');
   useSyncExternalStore(subscribeCodeTrust, codeTrustVersion, codeTrustVersion);
   const projectId = rt.project.id;
-  const trusted = isProjectTrusted(projectId);
+  const state = codeTrustState(projectId);
+  const connected = hubSpotAccess();
+  const trusted = state === 'trusted';
   const scopeNames = useMemo(() => Object.keys(rt.scope), [rt.scope]);
   const summary = useMemo(() => (trusted ? null : pausedCode(rt.extension, scopeNames)), [trusted, rt.extension, scopeNames]);
   // Nothing is paused (only simple values): no need to interrupt.
@@ -55,19 +60,32 @@ export function CodeTrustNotice() {
     summary.helpers ? plural(summary.helpers, 'helper function', 'helper functions') : '',
     summary.custom ? plural(summary.custom, 'custom code action', 'custom code actions') : '',
   ].filter(Boolean);
+  const what = parts.length ? ` (${parts.join(', ')})` : '';
+  const reconfirm = state === 'needs-hubspot-confirmation';
   return (
-    <div className="hsp-rt-trust" role="region" aria-label="Paused code" data-cv-chrome="">
+    <div className={connected ? 'hsp-rt-trust hsp-rt-trust--hubspot' : 'hsp-rt-trust'} role="region" aria-label="Paused code" data-cv-chrome="">
       <ShieldAlert size={18} aria-hidden="true" className="hsp-rt-trust-icon" />
       <div className="hsp-rt-trust-body">
-        <strong>Code in this imported project is paused</strong>
-        <span>
-          It came from a file, so its code does not run until you trust it{parts.length ? ` (${parts.join(', ')})` : ''}.
-          Simple values such as {'{{ contact.firstname }}'} still show; paused expressions appear as their source text. Only
-          trust files from people you trust.
-        </span>
+        <strong>{reconfirm ? 'HubSpot is connected: confirm this imported project’s code' : 'Code in this imported project is paused'}</strong>
+        {reconfirm ? (
+          <span>
+            You trusted this file’s code{what} before connecting HubSpot. Now it would run with your HubSpot connection: it could read the
+            contacts, companies, deals and other records your connection can see, and send them to someone else. It stays paused until you
+            confirm.
+          </span>
+        ) : (
+          <span>
+            It came from a file, so its code does not run until you trust it{what}. Simple values such as {'{{ contact.firstname }}'} still show;
+            paused expressions appear as their source text.{' '}
+            {connected
+              ? 'Trusted code runs inside the builder with your HubSpot connection: it could read the contacts, companies, deals and other records your connection can see, and send them to someone else.'
+              : 'Trusted code runs inside the builder. If you connect HubSpot, it could also read your HubSpot data — you’ll be asked again then.'}{' '}
+            Only trust files from people you trust.
+          </span>
+        )}
       </div>
       <button type="button" className="hsp-rt-trust-button" onClick={() => trustProject(projectId)}>
-        Trust and run code
+        {connected ? 'Trust it with my HubSpot data' : 'Trust and run code'}
       </button>
     </div>
   );

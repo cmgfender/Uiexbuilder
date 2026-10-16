@@ -379,7 +379,7 @@ function SlotSection({ node, def, slotName, ext }: { node: UINode; def: Componen
           {!confirmFirst && confirmButton}
         </div>
       )}
-      {ids.length === 0 && addable.length === 0 && <div className="ub-insp-muted">Nothing can be attached here in this extension.</div>}
+      {ids.length === 0 && addable.length === 0 && <div className="ub-insp-muted">Nothing can be attached here on this card.</div>}
     </InspectorSection>
   );
 }

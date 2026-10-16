@@ -129,8 +129,8 @@ const SYSTEM = (lastModified: string, created = 'createdate'): FakeProperty[] =>
 ];
 
 export const OWNERS: FakeOwner[] = [
-  { id: '101', email: 'jordan.lee@acmedemo.com', firstName: 'Jordan', lastName: 'Lee', userId: 9001 },
-  { id: '102', email: 'sam.rivera@acmedemo.com', firstName: 'Sam', lastName: 'Rivera', userId: 9002 },
+  { id: '101', email: 'sam.rivera@acmedemo.com', firstName: 'Sam', lastName: 'Rivera', userId: 9001 },
+  { id: '102', email: 'morgan.blake@acmedemo.com', firstName: 'Morgan', lastName: 'Blake', userId: 9002 },
   { id: '103', email: 'alex.morgan@acmedemo.com', firstName: 'Alex', lastName: 'Morgan', userId: 9003 },
 ];
 
@@ -191,9 +191,18 @@ export const TICKET_PIPELINES: FakePipeline[] = [
   },
 ];
 
+/** Every stage of every pipeline, labelled with the stage name (like HubSpot's dealstage options). */
 function stageOptions(pipelines: FakePipeline[]): FakePropertyOption[] {
   let i = 0;
-  return pipelines.flatMap((p) => p.stages.map((s) => ({ value: s.id, label: `${s.label} (${p.label})`, displayOrder: i++, hidden: false })));
+  return pipelines.flatMap((p) => p.stages.map((s) => ({ value: s.id, label: s.label, displayOrder: i++, hidden: false })));
+}
+
+/** HubSpot's calculated hs_is_closed / hs_is_closed_won of a deal, from its stage's metadata. */
+function closedFlags(stageId: string | null | undefined): { hs_is_closed: string; hs_is_closed_won: string } {
+  const stage = DEAL_PIPELINES.flatMap((p) => p.stages).find((s) => s.id === stageId);
+  const closed = stage?.metadata?.isClosed === 'true';
+  const won = closed && Number(stage?.metadata?.probability) >= 1;
+  return { hs_is_closed: String(closed), hs_is_closed_won: String(won) };
 }
 
 function pipelineOptions(pipelines: FakePipeline[]): FakePropertyOption[] {
@@ -329,6 +338,8 @@ export function buildObjectTypes(portalId: number): FakeObjectType[] {
           ]),
         }),
         std('description', 'Deal description', 'string', 'textarea', 'dealinformation'),
+        std('hs_is_closed', 'Is closed', 'bool', 'booleancheckbox', 'dealinformation', { calculated: true, readOnlyValue: true, options: opts([['true', 'Yes'], ['false', 'No']]) }),
+        std('hs_is_closed_won', 'Is closed won', 'bool', 'booleancheckbox', 'dealinformation', { calculated: true, readOnlyValue: true, options: opts([['true', 'Yes'], ['false', 'No']]) }),
         OWNER_PROPERTY,
         ...SYSTEM('hs_lastmodifieddate'),
         custom('deal_source', 'Deal source', 'enumeration', 'select', 'dealinformation', {
@@ -497,6 +508,11 @@ export function buildObjectTypes(portalId: number): FakeObjectType[] {
   ];
 }
 
+function withClosedFlags(deals: FakeRecord[]): FakeRecord[] {
+  for (const d of deals) Object.assign(d.properties, closedFlags(d.properties.dealstage));
+  return deals;
+}
+
 function rec(id: string, properties: Record<string, string | null>, lastModifiedProperty = 'hs_lastmodifieddate', created = 'createdate'): FakeRecord {
   return {
     id,
@@ -535,7 +551,7 @@ function buildRecords(): Map<string, FakeRecord[]> {
     rec('2006', { name: 'Initech', domain: 'initech.com', industry: 'CONSULTING', city: 'Austin', country: 'United States', phone: '+1 512 555 0100', numberofemployees: '310', annualrevenue: '22000000', lifecyclestage: 'customer', hubspot_owner_id: '103', customer_tier: 'bronze', contract_renewal_date: '2025-11-30', health_score: '45' }),
   ];
 
-  const deals: FakeRecord[] = [
+  const deals: FakeRecord[] = withClosedFlags([
     rec('3001', { dealname: 'Analytical Engines – Enterprise plan', amount: '48000', dealstage: 'closedwon', pipeline: 'default', closedate: '2025-02-28T17:00:00.000Z', dealtype: 'newbusiness', description: 'Three-year enterprise agreement', hubspot_owner_id: '101', deal_source: 'inbound', discount_percent: '10', is_renewal: 'false' }),
     rec('3002', { dealname: 'COBOL Works – Expansion', amount: '22500', dealstage: 'contractsent', pipeline: 'default', closedate: '2025-07-15T17:00:00.000Z', dealtype: 'existingbusiness', description: 'Add 150 seats for the platform team', hubspot_owner_id: '102', deal_source: 'outbound', discount_percent: '5', is_renewal: 'false' }),
     rec('3003', { dealname: 'Bletchley Labs – Pilot', amount: '7500', dealstage: 'qualifiedtobuy', pipeline: 'default', closedate: '2025-08-01T17:00:00.000Z', dealtype: 'newbusiness', description: 'Eight-week pilot for the research team', hubspot_owner_id: '101', deal_source: 'referral', discount_percent: '0', is_renewal: 'false' }),
@@ -546,7 +562,7 @@ function buildRecords(): Map<string, FakeRecord[]> {
     rec('3008', { dealname: 'Analytical Engines – Training', amount: '3200', dealstage: 'closedlost', pipeline: 'default', closedate: '2025-04-30T17:00:00.000Z', dealtype: 'existingbusiness', description: 'On-site admin training', hubspot_owner_id: '101', deal_source: 'inbound', discount_percent: '0', is_renewal: 'false' }),
     rec('3009', { dealname: 'Northwind – Warehouse integration', amount: '27500', dealstage: 'qualifiedtobuy', pipeline: 'default', closedate: '2025-11-15T17:00:00.000Z', dealtype: 'existingbusiness', description: 'Connect the warehouse system', hubspot_owner_id: '102', deal_source: 'partner', discount_percent: '3', is_renewal: 'false' }),
     rec('3010', { dealname: 'Initech – Multi-year renewal', amount: '54000', dealstage: '1001', pipeline: '75012345', closedate: '2025-11-30T17:00:00.000Z', dealtype: 'existingbusiness', description: 'Three-year renewal proposal', hubspot_owner_id: '103', deal_source: 'inbound', discount_percent: '15', is_renewal: 'true' }),
-  ];
+  ]);
 
   const tickets: FakeRecord[] = [
     rec('4001', { subject: 'Cannot export report to CSV', content: 'The export button spins forever on the revenue report.', hs_pipeline: '0', hs_pipeline_stage: '3', hs_ticket_priority: 'HIGH', hubspot_owner_id: '101', product_area: 'reporting', affected_users: '12', sla_due: '2025-06-05T12:00:00.000Z' }),

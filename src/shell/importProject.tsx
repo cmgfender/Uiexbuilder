@@ -16,7 +16,7 @@ import { create } from 'zustand';
 import { Copy, Download, Replace } from 'lucide-react';
 import { downloadFile, loadSavedProject, parseProjectJson, serializeProject } from '../model/persistence';
 import { useEditor } from '../model/store';
-import { isProjectTrusted, markProjectUntrusted, trustProject } from '../model/trust';
+import { isProjectTrusted, markProjectUntrusted, restoreCodeTrust, snapshotCodeTrust } from '../model/trust';
 import type { Project } from '../model/types';
 import { Button, Dialog } from '../ui';
 import { pausedCode } from '../runtime/CodeTrustNotice';
@@ -79,12 +79,12 @@ function askImportChoice(incoming: Project, existing: Project, isOpen: boolean, 
 export async function importProjectFromText(text: string, opts: { fileName?: string } = {}): Promise<ImportResult> {
   // Trust of a project saved here under the same id, before parsing marks that id untrusted.
   const id = peekId(text);
-  const trustedBefore = id !== null && isProjectTrusted(id);
+  const before = id !== null ? snapshotCodeTrust(id) : null;
   const parsed = parseProjectJson(text);
   if (!parsed.ok) return { ok: false, error: parsed.error };
   const incoming = parsed.project;
   const restoreTrust = () => {
-    if (trustedBefore && incoming.id === id) trustProject(incoming.id);
+    if (before && incoming.id === id) restoreCodeTrust(before);
   };
 
   // Store the current project's latest edits under its own id before anything else is opened.

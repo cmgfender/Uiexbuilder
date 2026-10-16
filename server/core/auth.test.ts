@@ -2,7 +2,11 @@
 import { describe, expect, it } from 'vitest';
 import { createTestEnv, TEST_APP_URL, TEST_CLIENT_ID, TEST_APP_BASE } from './testing';
 import { appHostFor } from './oauth';
-import { OAUTH_COOKIE, SESSION_COOKIE } from './session';
+import { GRANT_CHECK_INTERVAL_MS } from './oauth';
+
+/** Cookie names on https (TEST_APP_URL): the __Host- prefix keeps sibling subdomains from planting them. */
+const SESSION_COOKIE = '__Host-uiex_session';
+const OAUTH_COOKIE = '__Host-uiex_oauth';
 import { sha256Base64 } from './crypto';
 
 const html = { Accept: 'text/html,application/xhtml+xml,*/*;q=0.8' };
@@ -99,7 +103,7 @@ describe('GET /api/auth/callback', () => {
       connected: true,
       portalId: 12345678,
       hubDomain: 'acmedemo.com',
-      user: { id: 9001, email: 'jordan.lee@acmedemo.com' },
+      user: { id: 9001, email: 'sam.rivera@acmedemo.com' },
       scopes: expect.arrayContaining(['oauth', 'crm.objects.contacts.read', 'crm.objects.tickets.read']),
       expiresAt: env.now() + 1800 * 1000,
       appHost: 'app.hubspot.com',
@@ -255,7 +259,7 @@ describe('/api/me', () => {
     env.jar.set(SESSION_COOKIE, 'v1.AAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBBB');
     const res = await env.call('/api/me');
     expect(await res.json()).toEqual({ connected: false, reason: 'signed-out' });
-    expect(res.headers.getSetCookie()[0]).toMatch(/^uiex_session=; .*Max-Age=0/);
+    expect(res.headers.getSetCookie()[0]).toMatch(/^__Host-uiex_session=; .*Max-Age=0/);
     expect(env.jar.get(SESSION_COOKIE)).toBeUndefined();
   });
 
@@ -335,6 +339,21 @@ describe('POST /api/auth/logout', () => {
     const env = createTestEnv();
     expect((await env.call('/api/auth/logout', { method: 'POST' })).status).toBe(200);
   });
+
+  it('a copy of the cookie stops working once HubSpot is asked again (the refresh token was revoked)', async () => {
+    const env = createTestEnv();
+    await env.signIn();
+    const copied = env.jar.get(SESSION_COOKIE)!;
+    await env.call('/api/auth/logout', { method: 'POST' });
+    env.jar.set(SESSION_COOKIE, copied);
+    // The grant is confirmed every few minutes (and before every deploy): the replayed cookie is refused.
+    env.advance(GRANT_CHECK_INTERVAL_MS + 1000);
+    expect(await (await env.call('/api/me')).json()).toEqual({ connected: false, reason: 'revoked' });
+    expect(env.jar.get(SESSION_COOKIE)).toBeUndefined();
+    env.jar.set(SESSION_COOKIE, copied);
+    const crm = await env.call('/api/crm/object-types');
+    expect(crm.status).toBe(401);
+  });
 });
 
 describe('/api/health', () => {
@@ -344,8 +363,61 @@ describe('/api/health', () => {
       ok: true,
       version: env.config.version,
       oauthConfigured: true,
-      features: { crm: true, fetchProxy: false, deploy: true },
+      features: { crm: true, fetchProxy: false, deploy: true, deployNeedsSignIn: true },
       scopes: { required: env.config.requiredScopes, optional: env.config.optionalScopes },
+      missingSettings: [],
     });
+  });
+
+  it('says which settings are missing (names only) and why deploying is off', async () => {
+    const setup = createTestEnv({ env: { HUBSPOT_CLIENT_ID: '', SESSION_SECRET: 'short' } });
+    const body = await (await setup.call('/api/health')).json();
+    expect(body.oauthConfigured).toBe(false);
+    expect(body.missingSettings).toEqual(['HUBSPOT_CLIENT_ID', 'SESSION_SECRET']);
+    expect(body.features).toMatchObject({ deploy: false, deployUnavailableReason: 'session_secret' });
+    expect(body.features.deployNeedsSignIn).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain('short');
+    const off = createTestEnv({ env: { ENABLE_DEPLOY: 'false' } });
+    expect((await (await off.call('/api/health')).json()).features).toMatchObject({ deploy: false, deployUnavailableReason: 'disabled' });
+  });
+});
+
+describe('ALLOWED_PORTALS', () => {
+  it('turns away accounts that are not listed (and gives the grant back)', async () => {
+    const env = createTestEnv({ env: { ALLOWED_PORTALS: '111, 222' } });
+    const res = await env.signIn();
+    expect(res.status).toBe(403);
+    const page = await res.text();
+    expect(page).toContain('"error":"portal_not_allowed"');
+    expect(page).toContain('can’t be used here');
+    expect(env.jar.get(SESSION_COOKIE)).toBeUndefined();
+    expect(env.fake.requests.some((r) => r.method === 'DELETE' && r.path.startsWith('/oauth/v1/refresh-tokens/'))).toBe(true);
+    expect((await (await env.call('/api/me')).json()).connected).toBe(false);
+  });
+
+  it('lets listed accounts in, and signs out a session whose account was removed later', async () => {
+    const env = createTestEnv({ env: { ALLOWED_PORTALS: '12345678' } });
+    expect((await env.signIn()).status).toBe(200);
+    expect((await (await env.call('/api/me')).json()).connected).toBe(true);
+    const cookie = env.jar.get(SESSION_COOKIE)!;
+    const later = createTestEnv({ env: { ALLOWED_PORTALS: '999' } });
+    later.jar.set(SESSION_COOKIE, cookie);
+    expect(await (await later.call('/api/me')).json()).toEqual({ connected: false, reason: 'revoked' });
+    later.jar.set(SESSION_COOKIE, cookie);
+    const crm = await later.call('/api/crm/object-types');
+    expect(crm.status).toBe(403);
+    expect(((await crm.json()) as { error: { code: string } }).error.code).toBe('portal_not_allowed');
+  });
+});
+
+describe('sign-in rate limits', () => {
+  it('limits sign-in attempts per client address', async () => {
+    const env = createTestEnv();
+    let last: Response | null = null;
+    for (let i = 0; i < 25; i++) last = await env.call('/api/auth/start', { csrf: false, headers: html, clientIp: '198.51.100.7' });
+    expect(last!.status).toBe(429);
+    expect(last!.headers.get('retry-after')).toMatch(/^\d+$/);
+    // Someone else is not affected.
+    expect((await env.call('/api/auth/start', { csrf: false, headers: html, clientIp: '198.51.100.8' })).status).toBe(302);
   });
 });

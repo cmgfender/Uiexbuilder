@@ -39,12 +39,9 @@ export interface ConnectDialogProps {
 }
 
 export function ConnectDialog({ open, mode, onClose, onContinue }: ConnectDialogProps) {
-  const health = useConnection((s) => s.health);
   const error = useConnection((s) => s.error);
   const errorCode = useConnection((s) => s.errorCode);
   const errorSource = useConnection((s) => s.errorSource);
-  const [showScopes, setShowScopes] = useState(false);
-  const idBase = useId();
 
   if (mode === 'result' && errorSource === 'sign-out') {
     return (
@@ -101,8 +98,6 @@ export function ConnectDialog({ open, mode, onClose, onContinue }: ConnectDialog
     );
   }
 
-  const required = health?.scopes.required ?? [];
-  const optional = health?.scopes.optional ?? [];
   return (
     <Dialog
       open={open}
@@ -119,10 +114,31 @@ export function ConnectDialog({ open, mode, onClose, onContinue }: ConnectDialog
     >
       <div className="ub-cn-dialog">
         <p>
-          Connecting lets the builder preview your card with <strong>real records</strong> from your HubSpot account and fill the pickers with
-          your own properties, pipelines and record types.
+          Connecting lets the builder preview your card with <strong>real records</strong> from your HubSpot account and list your own
+          properties, pipelines and record types when you build.
         </p>
+        <ConsentDetails />
+        <p className="ub-cn-dialog__muted">
+          <ExternalLink size={12} aria-hidden /> A HubSpot window opens. Choose your account and approve — then come back here.
+        </p>
+      </div>
+    </Dialog>
+  );
+}
 
+/**
+ * What connecting allows and never does, how to stay in control, the exact permissions and the
+ * Super Admin note — shared by the consent dialog and the guided setup's Connect step.
+ */
+export function ConsentDetails({ compact = false }: { compact?: boolean }) {
+  const health = useConnection((s) => s.health);
+  const [showScopes, setShowScopes] = useState(false);
+  const idBase = useId();
+  const required = health?.scopes.required ?? [];
+  const optional = health?.scopes.optional ?? [];
+  return (
+    <div className={compact ? 'ub-cn-consent ub-cn-consent--compact' : 'ub-cn-consent'}>
+      <div className="ub-cn-consent__columns">
         <section className="ub-cn-dialog__section" aria-labelledby={`${idBase}-can`}>
           <h3 id={`${idBase}-can`} className="ub-cn-dialog__heading">
             The builder will be able to
@@ -132,7 +148,7 @@ export function ConnectDialog({ open, mode, onClose, onContinue }: ConnectDialog
               <Check size={14} aria-hidden /> <span>Read the records you pick as samples (contacts, companies, deals…) to show them in the preview</span>
             </li>
             <li>
-              <Check size={14} aria-hidden /> <span>Read your property definitions, dropdown options, pipelines and record types for the pickers</span>
+              <Check size={14} aria-hidden /> <span>Read your property definitions, dropdown options, pipelines and record types, so you can choose them by name</span>
             </li>
           </ul>
         </section>
@@ -150,56 +166,57 @@ export function ConnectDialog({ open, mode, onClose, onContinue }: ConnectDialog
             </li>
           </ul>
         </section>
-
-        <p className="ub-cn-dialog__note">
-          <ShieldCheck size={15} aria-hidden />
-          <span>
-            You stay in control: disconnect any time from the account menu, or remove access in HubSpot under{' '}
-            <strong>Settings › Integrations › Connected apps</strong>.
-          </span>
-        </p>
-
-        {required.length + optional.length > 0 && (
-          <div className="ub-cn-dialog__scopes">
-            <button type="button" className="ub-cn-disclosure" aria-expanded={showScopes} onClick={() => setShowScopes((v) => !v)}>
-              {showScopes ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
-              Exact permissions HubSpot will ask for
-            </button>
-            {showScopes && (
-              <div className="ub-cn-scope-groups">
-                {required.length > 0 && (
-                  <div>
-                    <div className="ub-cn-scope-groups__title">Needed</div>
-                    <ul className="ub-cn-scope-list">
-                      {required.map((s) => (
-                        <li key={s} title={s}>
-                          {scopeLabel(s)}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                {optional.length > 0 && (
-                  <div>
-                    <div className="ub-cn-scope-groups__title">Only if your account has them</div>
-                    <ul className="ub-cn-scope-list">
-                      {optional.map((s) => (
-                        <li key={s} title={s}>
-                          {scopeLabel(s)}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        <p className="ub-cn-dialog__muted">
-          <ExternalLink size={12} aria-hidden /> A HubSpot window opens. Choose your account and approve — then come back here.
-        </p>
       </div>
-    </Dialog>
+
+      <p className="ub-cn-dialog__note">
+        <ShieldCheck size={15} aria-hidden />
+        <span>
+          You stay in control: disconnect any time from the account menu, or remove access in HubSpot under{' '}
+          <strong>Settings › Integrations › Connected apps</strong>.
+        </span>
+      </p>
+
+      {required.length + optional.length > 0 && (
+        <div className="ub-cn-dialog__scopes">
+          <button type="button" className="ub-cn-disclosure" aria-expanded={showScopes} onClick={() => setShowScopes((v) => !v)}>
+            {showScopes ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
+            Exact permissions HubSpot will ask for
+          </button>
+          {showScopes && (
+            <div className="ub-cn-scope-groups">
+              {required.length > 0 && (
+                <div>
+                  <div className="ub-cn-scope-groups__title">Needed</div>
+                  <ul className="ub-cn-scope-list">
+                    {required.map((s) => (
+                      <li key={s} title={s}>
+                        {scopeLabel(s)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {optional.length > 0 && (
+                <div>
+                  <div className="ub-cn-scope-groups__title">Only if your account has them</div>
+                  <ul className="ub-cn-scope-list">
+                    {optional.map((s) => (
+                      <li key={s} title={s}>
+                        {scopeLabel(s)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      <p className="ub-cn-dialog__admins">
+        <strong>First time your company connects?</strong> HubSpot only lets Super Admins (or users with App Marketplace access) approve a new
+        app. If HubSpot says you can’t, ask one of them to connect once — after that everyone can.
+      </p>
+    </div>
   );
 }

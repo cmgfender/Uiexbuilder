@@ -296,12 +296,12 @@ function AuthTab() {
       )}
       <h3 className="ub-pn-h3">Scopes</h3>
       <Suggested
-        title="Suggested from your extensions"
+        title="Suggested from your cards"
         items={missingScopes}
         describe={scopeDescription}
         onAdd={(items) => updateApp({ requiredScopes: [...app.requiredScopes, ...items.filter((s) => !app.requiredScopes.includes(s))] })}
       />
-      <Field label="Required scopes" hint="Users must grant these to install the app. “oauth” is always included on export.">
+      <Field label="Required scopes" hint="Users must grant these to install the app. “oauth” is always included when you publish or download.">
         <ChipInput
           aria-label="Required scopes"
           values={app.requiredScopes}
@@ -364,7 +364,7 @@ function UrlsTab() {
           <section key={k.key} className="ub-pn-form" aria-label={`${k.label} URLs`}>
             <h3 className="ub-pn-h3">{k.label}</h3>
             <div className="ub-pn-muted">{k.hint}</div>
-            <Suggested title="Used by your extensions (added on export)" items={missing} onAdd={(items) => set([...values, ...items])} />
+            <Suggested title="Used by your cards (added when you publish or download)" items={missing} onAdd={(items) => set([...values, ...items])} />
             <ListEditor
               aria-label={`${k.label} URL`}
               values={values}

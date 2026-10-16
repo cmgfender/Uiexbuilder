@@ -1,12 +1,12 @@
 /**
- * Deploy job state for the panel: POST /api/deploy, then poll GET /api/deploy/:id every
+ * Deploy job state for the panel: POST /api/deploy, then poll POST /api/deploy/status every
  * `pollIntervalMs` (1.5 s) with the deployId of the latest answer until success / failed.
  * Polling stops when the component unmounts (the deploy itself keeps running in HubSpot).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DeployRequest, DeployStatus } from '../../connect/types';
 import { DeployClientError, isTransientDeployError, type DeployClient } from './client';
-import { KEY_ERROR_CODES, stepIndex } from './model';
+import { ACCOUNT_ERROR_CODES, KEY_ERROR_CODES, stepIndex } from './model';
 
 export const DEPLOY_POLL_INTERVAL_MS = 1500;
 /** Consecutive failed polls (network / 5xx) before the panel gives up. */
@@ -70,7 +70,7 @@ export function useDeployJob(client: DeployClient, pollIntervalMs = DEPLOY_POLL_
       } catch (err) {
         if (run.current !== id) return;
         const e = messageOf(err);
-        if (KEY_ERROR_CODES.has(e.code) || e.code === 'portal_mismatch') {
+        if (KEY_ERROR_CODES.has(e.code) || ACCOUNT_ERROR_CODES.has(e.code) || e.code === 'portal_mismatch') {
           setFormError(e);
           setState({ kind: 'idle' });
         } else {

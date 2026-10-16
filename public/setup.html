@@ -85,6 +85,14 @@
       .status.warn { color: var(--warn); }
       .status.bad { color: var(--bad); }
       .note { color: var(--muted); font-size: 14px; }
+      .callout {
+        border: 1px solid var(--warn);
+        border-left-width: 4px;
+        border-radius: 6px;
+        padding: 10px 14px;
+        margin: 0 0 12px;
+      }
+      .callout p { margin: 0; }
       .live { min-height: 1.5em; margin: 8px 0 0; font-weight: 600; color: var(--good); }
       code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
       ol, ul { padding-left: 22px; margin: 8px 0; }
@@ -130,6 +138,7 @@
           This file is the HubSpot app people approve when they click <em>Connect HubSpot</em>. It is already filled in with your
           redirect URL and asks only for <strong>read</strong> access.
         </p>
+        <div id="deploy-warning" class="callout" role="status" aria-live="polite" hidden></div>
         <div class="row">
           <button type="button" class="primary" id="download-app">Download the app file</button>
         </div>
@@ -137,14 +146,22 @@
         <ol>
           <li>
             In HubSpot, create a personal access key:
-            <a href="https://app.hubspot.com/l/personal-access-key" target="_blank" rel="noopener noreferrer">open the personal access key page</a>
-            and copy the key.
+            <a href="https://app.hubspot.com/l/personal-access-key" target="_blank" rel="noopener noreferrer">open the personal access key page</a>.
+            When you create it, make sure <strong>Developer projects</strong> is ticked, then click <strong>Copy</strong> next to the key.
+            It is a long code - not a private app token that starts with <code>pat-</code>.
           </li>
           <li><a href="/">Open the builder</a> → <strong>Project</strong> → <strong>Import .uiex.json…</strong> → choose the file you downloaded.</li>
-          <li>Click <strong>Deploy to HubSpot</strong>, paste the personal access key and deploy.</li>
           <li>
-            In HubSpot open <strong>Development → Projects → uiex-builder-connector → UI Extension Builder → Auth</strong> and copy
-            the <strong>Client ID</strong> and <strong>Client secret</strong>.
+            Click <strong>Export</strong> (top right) → open the <strong>Deploy to HubSpot</strong> tab → paste the personal access key →
+            click <strong>Deploy to HubSpot</strong>.
+          </li>
+          <li>
+            In HubSpot open <strong>Development → Projects → uiex-builder-connector</strong> → the app → <strong>Distribution</strong> →
+            <strong>Begin publishing</strong> and sign HubSpot's <strong>Acceptable Use Policy</strong> (no Marketplace listing needed).
+            Without it, nobody can connect.
+          </li>
+          <li>
+            On the app's <strong>Auth</strong> tab, copy the <strong>Client ID</strong> and <strong>Client secret</strong>.
           </li>
         </ol>
         <p class="note">Prefer the HubSpot CLI? Use the <code>hubspot-app/</code> folder of the project instead (see the guide).</p>
@@ -158,6 +175,10 @@
           <li><code>HUBSPOT_CLIENT_SECRET</code> - the Client secret from step 3</li>
           <li><code>SESSION_SECRET</code> - 48 random characters: <a href="/secret.html">make one here</a> (Render makes one for you)</li>
           <li><code>APP_URL</code> - <span id="app-url-hint">this address</span> (optional on Render and Vercel)</li>
+          <li>
+            <code>ALLOWED_PORTALS</code> - optional: your HubSpot account number(s), comma separated. Only those accounts can then
+            connect and deploy. Recommended.
+          </li>
         </ul>
         <p>Save, redeploy or restart, then click <strong>Check again</strong> in step 1.</p>
       </section>
@@ -195,6 +216,23 @@
 
         var statusEl = document.getElementById('status');
         var detailEl = document.getElementById('status-detail');
+        var deployWarning = document.getElementById('deploy-warning');
+        function escapeHtml(text) {
+          return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+        function showDeployWarning(features) {
+          var reason = features && features.deploy === false ? features.deployUnavailableReason || 'disabled' : null;
+          if (!reason) {
+            deployWarning.hidden = true;
+            deployWarning.innerHTML = '';
+            return;
+          }
+          deployWarning.hidden = false;
+          deployWarning.innerHTML =
+            reason === 'session_secret'
+              ? '<p><strong>Deploy to HubSpot needs SESSION_SECRET first.</strong> <a href="/secret.html">Make one here</a>, add it as <code>SESSION_SECRET</code> in your hosting settings (step 4), redeploy, then click <strong>Check again</strong> in step 1.</p>'
+              : '<p><strong>Deploying from the builder is turned off on this server</strong> (<code>ENABLE_DEPLOY=false</code>). Remove that setting and redeploy, or use the <code>hubspot-app/</code> folder with the HubSpot CLI (see the guide).</p>';
+        }
         function show(kind, text, detailHtml) {
           statusEl.className = 'status ' + kind;
           statusEl.textContent = text;
@@ -220,12 +258,16 @@
                   '<p class="note">Share this address with them: <code>' + origin.replace(/</g, '&lt;') + '</code></p>'
                 );
               } else {
+                var missing = Array.isArray(r.body.missingSettings) ? r.body.missingSettings.filter(function (m) { return typeof m === 'string'; }) : [];
                 show(
                   'warn',
                   'Almost there: HubSpot sign-in is not set up yet.',
-                  '<p class="note">The builder already works. Finish steps 3 and 4 below, then check again.</p>'
+                  '<p class="note">The builder already works. Finish steps 3 and 4 below, then check again.' +
+                    (missing.length ? ' Still missing: ' + missing.map(function (m) { return '<code>' + escapeHtml(m) + '</code>'; }).join(', ') + '.' : '') +
+                    '</p>'
                 );
               }
+              showDeployWarning(r.body && r.body.features);
             })
             .catch(function () {
               show(
@@ -250,7 +292,8 @@
               var urls = [redirectUrl];
               var existing = (doc.app && doc.app.redirectUrls) || [];
               for (var j = 0; j < existing.length; j++) {
-                if (existing[j].indexOf('YOUR-DOMAIN') === -1 && urls.indexOf(existing[j]) === -1) urls.push(existing[j]);
+                // Only real https addresses: never the placeholder, never a localhost development address.
+                if (/^https:\/\//.test(existing[j]) && existing[j].indexOf('YOUR-DOMAIN') === -1 && urls.indexOf(existing[j]) === -1) urls.push(existing[j]);
               }
               doc.app.redirectUrls = urls;
               var blob = new Blob([JSON.stringify(doc, null, 2) + '\n'], { type: 'application/json' });

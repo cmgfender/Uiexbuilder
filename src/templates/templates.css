@@ -749,3 +749,10 @@
   gap: 6px;
   padding: 3px;
 }
+
+.ub-tpl-nomatch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}

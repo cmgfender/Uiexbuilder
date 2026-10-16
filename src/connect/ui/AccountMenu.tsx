@@ -65,15 +65,18 @@ export function AccountMenu({ info, onDone }: AccountMenuProps) {
           </ul>
           {missingOptional.length > 0 && (
             <>
-              <div className="ub-cn-scope-groups__title">Not allowed (optional)</div>
-              <ul className="ub-cn-scope-list ub-cn-scope-list--missing" aria-label="Not allowed">
+              <div className="ub-cn-scope-groups__title">Not included in this connection</div>
+              <ul className="ub-cn-scope-list ub-cn-scope-list--missing" aria-label="Not included in this connection">
                 {missingOptional.map((s) => (
                   <li key={s} title={s}>
                     <Minus size={12} aria-hidden /> {scopeLabel(s)}
                   </li>
                 ))}
               </ul>
-              <p className="ub-cn-account__hint">To allow these, reconnect and approve them on the HubSpot screen.</p>
+              <p className="ub-cn-account__hint">
+                Usually your HubSpot plan or your user doesn’t include them. Reconnecting can add them if that changed; otherwise a Super Admin can
+                check your user’s permissions.
+              </p>
               <Button
                 size="sm"
                 icon={<RefreshCw size={13} aria-hidden />}
@@ -82,7 +85,7 @@ export function AccountMenu({ info, onDone }: AccountMenuProps) {
                   void useConnection.getState().connect();
                 }}
               >
-                Reconnect to allow more
+                Reconnect HubSpot
               </Button>
             </>
           )}

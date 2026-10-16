@@ -10,9 +10,9 @@ import { newId } from '../model/ids';
 import { canAccept } from '../model/rules';
 import { selectActiveExtension, unavailableComponents, useEditor } from '../model/store';
 import { insertSubtree, instantiateTemplate, type InsertTarget } from '../model/tree';
-import type { AppFunction, Extension, NodeId, NodeTemplate, Project, StateVar } from '../model/types';
+import type { AppFunction, DataSource, Extension, NodeId, NodeTemplate, Project, StateVar } from '../model/types';
 import { appFunctionsUnsupported } from '../model/validate';
-import { freshBlockTemplate, instantiateExtensionTemplate, templateConflict, type ExtensionTemplate } from './catalog';
+import { freshBlockTemplate, instantiateExtensionTemplate, templateConflict, type BlockTemplate, type ExtensionTemplate } from './catalog';
 
 export type FlowResult<T = undefined> = { ok: true; value: T; message: string } | { ok: false; message: string };
 
@@ -36,11 +36,34 @@ function listLabels(labels: string[]): string {
   return labels.length <= 1 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
 }
 
+/**
+ * A block ready to insert into the active card: data blocks (`create`) are built for it (their
+ * data sources get names that don't clash), other blocks are used as they are.
+ */
+export function prepareBlock(block: Pick<BlockTemplate, 'template' | 'state' | 'create'>): {
+  template: NodeTemplate;
+  state: Array<Omit<StateVar, 'id'>> | undefined;
+  dataSources: DataSource[];
+} {
+  const editor = useEditor.getState();
+  const ext = selectActiveExtension(editor);
+  if (block.create && ext) {
+    const built = block.create(ext, editor.project);
+    return { template: built.template, state: block.state, dataSources: built.dataSources };
+  }
+  return { template: block.template, state: block.state, dataSources: [] };
+}
+
+/**
+ * `dataSources`: data sources the block reads (from `prepareBlock`), added in the same undo step;
+ * one whose name is already declared is skipped.
+ */
 export function insertBlock(
   template: NodeTemplate,
   state: Array<Omit<StateVar, 'id'>> | undefined,
   label: string,
   at?: InsertTarget,
+  dataSources: DataSource[] = [],
 ): FlowResult<NodeId> {
   const editor = useEditor.getState();
   const ext = selectActiveExtension(editor);
@@ -64,6 +87,7 @@ export function insertBlock(
   }
   const taken = new Set([...ext.state.map((s) => s.name), ...ext.dataSources.map((d) => d.name), ...(ext.computed ?? []).map((c) => c.name)]);
   const missing = (state ?? []).filter((v) => !taken.has(v.name));
+  const sources = dataSources.filter((ds) => !taken.has(ds.name) && !ext.dataSources.some((x) => x.id === ds.id));
   const sub = instantiateTemplate(tpl);
   editor.commit((d) => {
     const draft = d.extensions.find((e) => e.id === ext.id);
@@ -71,6 +95,7 @@ export function insertBlock(
     for (const v of missing) {
       draft.state.push({ ...(JSON.parse(JSON.stringify(v)) as Omit<StateVar, 'id'>), id: newId('s') } as Draft<StateVar>);
     }
+    for (const ds of sources) draft.dataSources.push(JSON.parse(JSON.stringify(ds)) as Draft<DataSource>);
     insertSubtree(draft as Extension, sub, target);
   });
   useEditor.getState().select(sub.rootId);

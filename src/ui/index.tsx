@@ -713,26 +713,55 @@ export function useMenu() {
 // Toasts (builder notifications, not HubSpot alerts)
 // ---------------------------------------------------------------------------
 
+export interface ToastOptions {
+  /** A button in the toast (e.g. "Reconnect"); clicking it also dismisses the toast. */
+  action?: { label: string; onClick: () => void };
+  /** How long the toast stays (default 2.6 s; toasts with an action stay 8 s). */
+  durationMs?: number;
+}
+
 interface ToastCtx {
-  toast: (message: string) => void;
+  toast: (message: string, options?: ToastOptions) => void;
 }
 const ToastContext = createContext<ToastCtx>({ toast: () => {} });
 
+interface ToastItem {
+  id: number;
+  message: string;
+  action?: ToastOptions['action'];
+}
+
 export function ToastProvider({ children }: { children: ReactNode }) {
-  const [toasts, setToasts] = useState<Array<{ id: number; message: string }>>([]);
-  const toast = useCallback((message: string) => {
-    const id = Date.now() + Math.random();
-    setToasts((t) => [...t, { id, message }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 2600);
-  }, []);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const dismiss = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
+  const toast = useCallback(
+    (message: string, options: ToastOptions = {}) => {
+      const id = Date.now() + Math.random();
+      setToasts((t) => [...t, { id, message, action: options.action }]);
+      setTimeout(() => dismiss(id), options.durationMs ?? (options.action ? 8000 : 2600));
+    },
+    [dismiss],
+  );
   return (
     <ToastContext.Provider value={{ toast }}>
       {children}
       {createPortal(
         <div className="ub-toasts" role="status" aria-live="polite">
           {toasts.map((t) => (
-            <div key={t.id} className="ub-toast">
-              {t.message}
+            <div key={t.id} className={cx('ub-toast', t.action && 'ub-toast--action')}>
+              <span>{t.message}</span>
+              {t.action && (
+                <button
+                  type="button"
+                  className="ub-toast__action"
+                  onClick={() => {
+                    dismiss(t.id);
+                    t.action?.onClick();
+                  }}
+                >
+                  {t.action.label}
+                </button>
+              )}
             </div>
           ))}
         </div>,

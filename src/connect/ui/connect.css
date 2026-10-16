@@ -322,6 +322,25 @@
 .ub-cn-dialog p {
   margin: 0;
 }
+.ub-cn-consent {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ub-cn-consent p {
+  margin: 0;
+}
+.ub-cn-consent__columns {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+/* Guided setup: the two lists side by side when there is room. */
+.ub-cn-consent--compact .ub-cn-consent__columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
 .ub-cn-dialog__section {
   display: flex;
   flex-direction: column;
@@ -375,6 +394,15 @@
   gap: 6px;
   color: var(--ub-text-3);
   font-size: 12px;
+}
+.ub-cn-dialog__admins {
+  margin: 0;
+  color: var(--ub-text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.ub-cn-dialog__admins strong {
+  color: var(--ub-text-2);
 }
 .ub-cn-dialog__result {
   display: flex;
@@ -560,6 +588,10 @@
 .ub-cn-search__status--error {
   color: var(--ub-danger);
 }
+/* "Not included in this connection": nothing is broken, so amber rather than red. */
+.ub-cn-search__status--warning {
+  color: var(--ub-warning);
+}
 .ub-cn-search__actions {
   display: flex;
   gap: 6px;
@@ -585,9 +617,19 @@
   border-radius: var(--ub-radius);
   cursor: pointer;
 }
+/* The keyboard-active option: a hover-like tint, plus the focus ring only while the search box
+   has focus (otherwise the first row looked already picked). */
 .ub-cn-option--active {
   background: var(--ub-select-soft);
+}
+.ub-cn-search:focus-within .ub-cn-option--active {
   box-shadow: var(--ub-focus-inset);
+}
+.ub-cn-search:not(:focus-within) .ub-cn-option--active:not(:hover) {
+  background: transparent;
+}
+.ub-cn-option:hover {
+  background: var(--ub-select-soft);
 }
 .ub-cn-option__label {
   grid-column: 1;
@@ -639,6 +681,64 @@
 }
 .ub-cn-error__body span {
   color: var(--ub-text-2);
+}
+.ub-cn-error__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ub-cn-picker__hint {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--ub-radius);
+  background: var(--ub-warning-soft);
+  color: var(--ub-text-2);
+  font-size: 12px;
+}
+/* "Pick a sample record · mock values until then": the note goes first when space is short. */
+.ub-cn-chip__note {
+  color: var(--ub-text-3);
+  font-weight: 400;
+  white-space: pre;
+}
+@container (max-width: 1100px) {
+  .ub-cn-chip__note {
+    display: none;
+  }
+}
+
+/* ---------- Waiting for the HubSpot window ---------- */
+.ub-cn-waiting {
+  position: fixed;
+  z-index: 1100;
+  width: 300px;
+  padding: 12px;
+  border: 1px solid var(--ub-border);
+  border-radius: var(--ub-radius-lg, 8px);
+  background: var(--ub-surface, #fff);
+  box-shadow: var(--ub-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+.ub-cn-waiting p {
+  margin: 0;
+  color: var(--ub-text-2);
+}
+.ub-cn-waiting__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.ub-cn-waiting__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ub-cn-cancel-label {
+  margin-left: 2px;
 }
 
 /* ---------- Narrow layouts ---------- */

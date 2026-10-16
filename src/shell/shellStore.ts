@@ -84,6 +84,8 @@ interface ShellState {
   lastBottomTab: BottomTab;
   /** Incremented to ask the palette to focus its search box. */
   paletteFocusNonce: number;
+  /** Text to search for with that request ('' = keep the current search). Additive. */
+  paletteFocusQuery: string;
   saveStatus: SaveStatus;
   lastSavedAt: number | null;
   /** Why the last save failed (shown while saveStatus is 'error'). */
@@ -100,7 +102,7 @@ interface ShellState {
   setSidebarWidth: (side: 'left' | 'right', width: number) => void;
   setBottomHeight: (h: number) => void;
   setLastBottomTab: (t: BottomTab) => void;
-  requestPaletteFocus: () => void;
+  requestPaletteFocus: (query?: string) => void;
   setSaveStatus: (s: SaveStatus, error?: ShellState['saveError']) => void;
   setConflict: (c: { projectId: string; dismissed?: boolean } | null) => void;
   setCompact: (compact: boolean) => void;
@@ -114,6 +116,7 @@ export const useShell = create<ShellState>()((set) => ({
   bottomHeight: BOTTOM_DEFAULT_HEIGHT,
   lastBottomTab: 'code',
   paletteFocusNonce: 0,
+  paletteFocusQuery: '',
   saveStatus: 'idle',
   lastSavedAt: null,
   saveError: null,
@@ -126,7 +129,7 @@ export const useShell = create<ShellState>()((set) => ({
     set(side === 'left' ? { leftWidth: clampSidebarWidth(width, LEFT_WIDTH) } : { rightWidth: clampSidebarWidth(width, RIGHT_WIDTH) }),
   setBottomHeight: (h) => set({ bottomHeight: Math.max(BOTTOM_MIN_HEIGHT, Math.round(h)) }),
   setLastBottomTab: (lastBottomTab) => set({ lastBottomTab }),
-  requestPaletteFocus: () => set((s) => ({ paletteFocusNonce: s.paletteFocusNonce + 1 })),
+  requestPaletteFocus: (query = '') => set((s) => ({ paletteFocusNonce: s.paletteFocusNonce + 1, paletteFocusQuery: query })),
   setSaveStatus: (saveStatus, error = null) =>
     set(
       saveStatus === 'saved'
@@ -248,8 +251,8 @@ export function showRightTab(tab: RightPanelTab): void {
   if (useShell.getState().rightCollapsed) useShell.getState().setRightCollapsed(false);
 }
 
-/** Focuses the palette search (switching to the Components tab first). */
-export function focusPaletteSearch(): void {
+/** Focuses the palette search (switching to the Components tab first), optionally searching for `query`. */
+export function focusPaletteSearch(query?: string): void {
   showLeftTab('components');
-  useShell.getState().requestPaletteFocus();
+  useShell.getState().requestPaletteFocus(query);
 }

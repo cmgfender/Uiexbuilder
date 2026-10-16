@@ -20,7 +20,7 @@ test.describe('templates, export and persistence', () => {
     await setMode(page, 'Preview');
     await expect(cardNodes(page, 'StepperInput')).toHaveCount(1);
     await expect(cardRoot(page).locator('.hsp-rt-error')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'No problems — ready to export' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'No problems — ready to publish' })).toBeVisible();
     expect(watch.errors).toEqual([]);
   });
 
@@ -29,8 +29,8 @@ test.describe('templates, export and persistence', () => {
     await addFromPalette(page, 'Button');
     await inspector(page).getByRole('combobox', { name: 'Text content' }).fill('Export me');
 
-    await page.getByRole('banner', { name: 'Editor top bar' }).getByRole('button', { name: 'Export', exact: true }).click();
-    const dialog = page.getByRole('dialog', { name: /Export/ });
+    await page.getByRole('banner', { name: 'Editor top bar' }).getByRole('button', { name: 'Publish', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Publish to HubSpot' });
     await expect(dialog).toBeVisible();
     const downloadPromise = page.waitForEvent('download');
     await dialog.getByRole('button', { name: /Download project \(\.zip\)/ }).click();
@@ -72,8 +72,8 @@ test.describe('templates, export and persistence', () => {
 
     await page.reload();
     await expect(cardNodes(page, 'Button')).toHaveText('Persist me');
-    // The welcome card was dismissed on the first visit and stays hidden.
-    await expect(page.getByRole('region', { name: 'Welcome' })).toHaveCount(0);
+    // The welcome screen was skipped on the first visit and stays hidden.
+    await expect(page.getByRole('dialog', { name: 'Build your own HubSpot cards' })).toHaveCount(0);
   });
   test('builder document round trip: download .uiex.json, start a new project, import it back', async ({ page }, testInfo) => {
     await openEditor(page);

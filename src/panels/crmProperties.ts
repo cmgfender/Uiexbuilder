@@ -80,6 +80,7 @@ export const COMMON_PROPERTIES: Record<string, CrmPropertyInfo[]> = {
     p('hs_mrr', 'Monthly recurring revenue', 'number'),
     p('hs_tcv', 'Total contract value', 'number'),
     p('hs_is_closed_won', 'Is closed won', 'bool'),
+    p('hs_is_closed', 'Is closed', 'bool'),
     p('createdate', 'Create date', 'datetime'),
     p('hs_lastmodifieddate', 'Last modified date', 'datetime'),
     p('num_associated_contacts', 'Number of associated contacts', 'number'),

@@ -78,7 +78,7 @@ export function ProblemsPanel() {
   if (issues.length === 0) {
     return (
       <div className="ub-sh-prob ub-sh-prob--center">
-        <EmptyState icon={<CircleCheck size={24} className="ub-sh-sev--ok" />} title="No problems — ready to export">
+        <EmptyState icon={<CircleCheck size={24} className="ub-sh-sev--ok" />} title="No problems — ready to publish">
           Required props, names, references and permissions all check out.
         </EmptyState>
       </div>

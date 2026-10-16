@@ -5,7 +5,7 @@
  * Settings (Vercel → Project → Settings → Environment Variables): HUBSPOT_CLIENT_ID,
  * HUBSPOT_CLIENT_SECRET, SESSION_SECRET and APP_URL (optional on Vercel: defaults to the project's
  * production address). Placeholders such as "later" count as not set (server/hosting.ts). Optional: HUBSPOT_SCOPES, HUBSPOT_OPTIONAL_SCOPES, HUBSPOT_API_BASE,
- * HUBSPOT_APP_BASE, ENABLE_FETCH_PROXY, ENABLE_DEPLOY, ALLOWED_ORIGINS.
+ * HUBSPOT_APP_BASE, ENABLE_FETCH_PROXY, ENABLE_DEPLOY, ALLOWED_ORIGINS, ALLOWED_PORTALS.
  *
  * vercel.json rewrites /api/:path* here with `__uiex_path=:path*` so deep paths work whether or not
  * the platform matches this catch-all file directly; the original path is restored before routing.
@@ -36,6 +36,7 @@ export function vercelEnv(): Record<string, string | undefined> {
     ENABLE_FETCH_PROXY: e.ENABLE_FETCH_PROXY,
     ENABLE_DEPLOY: e.ENABLE_DEPLOY,
     ALLOWED_ORIGINS: e.ALLOWED_ORIGINS,
+    ALLOWED_PORTALS: e.ALLOWED_PORTALS,
     NODE_ENV: e.NODE_ENV ?? 'production',
     VERCEL_PROJECT_PRODUCTION_URL: e.VERCEL_PROJECT_PRODUCTION_URL,
     VERCEL_URL: e.VERCEL_URL,
@@ -71,9 +72,16 @@ export async function restoreOriginalPath(request: Request): Promise<Request> {
   return new Request(url.toString(), { method, headers: request.headers, body, redirect: 'manual' });
 }
 
+/** The caller's IP as Vercel reports it (x-real-ip; Vercel overwrites what the client sends). */
+export function vercelClientIp(request: Request): string | undefined {
+  const real = request.headers.get('x-real-ip')?.trim();
+  if (real) return real;
+  return request.headers.get('x-forwarded-for')?.split(',').map((p) => p.trim()).filter(Boolean).pop();
+}
+
 export default async function handler(request: Request): Promise<Response> {
   const req = allowPlainHealthCheck(await restoreOriginalPath(request));
-  const response = await connectorFor(req).handle(req);
+  const response = await connectorFor(req).handle(req, { clientIp: vercelClientIp(request) });
   if (response) return response;
   return new Response(JSON.stringify({ error: { code: 'not_found', message: 'There is no connector endpoint at this address.', status: 404 } }), {
     status: 404,

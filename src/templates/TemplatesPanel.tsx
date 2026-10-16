@@ -8,12 +8,13 @@
 import { useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { Bookmark, Check, Pencil, Plus, Replace, Search, Trash2, X, Zap } from 'lucide-react';
 import { endDrag, startDrag } from '../dnd/dragState';
+import { focusPaletteSearch } from '../shell/shellStore';
 import { selectActiveExtension, useEditor } from '../model/store';
-import type { Extension, NodeTemplate, StateVar } from '../model/types';
+import type { DataSource, Extension, NodeTemplate, StateVar } from '../model/types';
 import { getComponent } from '../registry';
 import { CRM_OBJECT_TYPES } from '../registry/constants';
 import { Badge, Button, Dialog, EmptyState, IconButton, Segmented, TextInput, cx, useToast } from '../ui';
-import { addTemplateToProject, insertBlock, replaceActiveWithTemplate } from './actions';
+import { addTemplateToProject, insertBlock, prepareBlock, replaceActiveWithTemplate } from './actions';
 import {
   BLOCK_TEMPLATES,
   freshBlockTemplate,
@@ -68,19 +69,33 @@ function countNodes(t: NodeTemplate): number {
 
 function useInsert() {
   const toast = useToast();
-  return (template: NodeTemplate, state: Array<Omit<StateVar, 'id'>> | undefined, label: string) => {
-    const result = insertBlock(template, state, label);
+  return (template: NodeTemplate, state: Array<Omit<StateVar, 'id'>> | undefined, label: string, dataSources?: DataSource[]) => {
+    const result = insertBlock(template, state, label, undefined, dataSources);
     toast(result.message);
     return result.ok;
   };
 }
 
-function dragHandlers(template: NodeTemplate, state: Array<Omit<StateVar, 'id'>> | undefined, label: string) {
+/** A gallery block: data blocks are built for the active card when they are used. */
+type InsertableBlock = Pick<BlockTemplate, 'template' | 'state' | 'create'>;
+
+function dragHandlers(block: InsertableBlock, label: string) {
   return {
     draggable: true,
     onDragStart: (e: DragEvent) => {
       const ext = selectActiveExtension(useEditor.getState());
-      startDrag(e, { kind: 'template', template: freshBlockTemplate(template, ext ?? null), label, ...(state?.length ? { state } : {}) }, label);
+      const { template, state, dataSources } = prepareBlock(block);
+      startDrag(
+        e,
+        {
+          kind: 'template',
+          template: freshBlockTemplate(template, ext ?? null),
+          label,
+          ...(state?.length ? { state } : {}),
+          ...(dataSources.length ? { dataSources } : {}),
+        },
+        label,
+      );
     },
     onDragEnd: () => endDrag(),
   };
@@ -167,11 +182,17 @@ export function TemplatesPanel() {
 // ---------------------------------------------------------------------------
 
 function NoMatches({ query, onClear }: { query: string; onClear: () => void }) {
+  const q = query.trim();
   return (
-    <EmptyState icon={<Search size={20} aria-hidden />} title={`No blocks match “${query.trim()}”`}>
-      <Button size="sm" variant="ghost" onClick={onClear}>
-        Show all blocks
-      </Button>
+    <EmptyState icon={<Search size={20} aria-hidden />} title={`No blocks match “${q}”`}>
+      <div className="ub-tpl-nomatch-actions">
+        <Button size="sm" variant="primary" onClick={() => focusPaletteSearch(q)}>
+          Search components for “{q}”
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onClear}>
+          Show all blocks
+        </Button>
+      </div>
     </EmptyState>
   );
 }
@@ -194,7 +215,10 @@ function BlockGallery({ query, onClearQuery }: { query: string; onClearQuery: ()
 function BlockCard({ block }: { block: BlockTemplate }) {
   const insert = useInsert();
   const Icon = block.icon;
-  const run = () => insert(block.template, block.state, block.name);
+  const run = () => {
+    const built = prepareBlock(block);
+    return insert(built.template, built.state, block.name, built.dataSources);
+  };
   return (
     <div
       role="button"
@@ -204,7 +228,7 @@ function BlockCard({ block }: { block: BlockTemplate }) {
       title={`${block.name} — click to insert, or drag onto the canvas`}
       onClick={run}
       onKeyDown={(e) => onActivateKey(e, run)}
-      {...dragHandlers(block.template, block.state, block.name)}
+      {...dragHandlers(block, block.name)}
     >
       <Wireframe nodes={[block.template]} size="sm" className="ub-tpl-block__thumb" />
       <span className="ub-tpl-block__name">
@@ -485,7 +509,7 @@ function UserBlockRow({ block, onDelete }: { block: UserBlock; onDelete: () => v
         aria-label={`Insert ${block.name}`}
         onClick={run}
         onKeyDown={(e) => onActivateKey(e, run)}
-        {...dragHandlers(block.template, block.state, block.name)}
+        {...dragHandlers(block, block.name)}
       >
         <Wireframe nodes={[block.template]} size="sm" className="ub-tpl-mine__thumb" />
         <span className="ub-tpl-mine__text">

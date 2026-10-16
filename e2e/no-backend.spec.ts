@@ -29,10 +29,10 @@ test.describe('without the HubSpot connector (static hosting)', () => {
     await expect(page.getByRole('group', { name: 'Preview data' })).toHaveCount(0);
 
     // Deploy to HubSpot falls back to the CLI steps.
-    await topBar.getByRole('button', { name: 'Export', exact: true }).click();
-    const dialog = page.getByRole('dialog', { name: /Export/ });
-    await dialog.getByRole('tab', { name: 'Deploy to HubSpot' }).click();
-    await expect(dialog.getByText('Deploying from the builder isn’t available here')).toBeVisible();
+    await topBar.getByRole('button', { name: 'Publish', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Publish to HubSpot' });
+    await dialog.getByRole('tab', { name: 'Publish to HubSpot' }).click();
+    await expect(dialog.getByText('Publishing from the builder isn’t available here')).toBeVisible();
 
     await page.waitForTimeout(300);
     expect(watch.errors).toEqual([]);

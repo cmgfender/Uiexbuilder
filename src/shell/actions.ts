@@ -140,7 +140,7 @@ export function applyDropPayload(payload: DragPayload, target: InsertTarget, not
   // Block template: the block and the state it needs are added in one undo step (nothing for a
   // rejected drop).
   if (!canAccept(ext, target.parentId, payload.template.type, target.slot).ok) return false;
-  const res = insertBlock(payload.template, payload.state, payload.label, target);
+  const res = insertBlock(payload.template, payload.state, payload.label, target, payload.dataSources);
   if (!res.ok) notify(res.message);
   return res.ok;
 }

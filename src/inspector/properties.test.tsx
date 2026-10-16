@@ -258,6 +258,9 @@ describe('Extension settings (no selection)', () => {
     await userEvent.type(name, 'Deal helper');
     expect(ext().name).toBe('Deal helper');
 
+    // Project-file details are tucked away until asked for.
+    expect(screen.queryByLabelText('uid')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: /Advanced: project files/ }));
     const uid = screen.getByLabelText('uid');
     const before = ext().uid;
     // HubSpot uids allow letters, digits, _, - and . — but no spaces.

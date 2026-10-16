@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { base64UrlToBytes, bytesToBase64Url, randomToken, seal, timingSafeEqual, unseal } from './crypto';
-import { parseCookies, serializeCookie } from './cookies';
-import { CookieSession, MAX_COOKIE_BYTES, SESSION_COOKIE, fromWire, toWire } from './session';
+import { parseCookieList, parseCookies, serializeCookie } from './cookies';
+import { CookieSession, MAX_COOKIE_BYTES, OAUTH_COOKIE, SESSION_COOKIE, fromWire, oauthCookieName, sessionCookieName, toWire } from './session';
 import { configFromEnv } from './config';
 import type { SessionData } from './types';
 
@@ -76,13 +76,18 @@ describe('seal / unseal (AES-256-GCM, HKDF key)', () => {
 
 describe('cookies', () => {
   it('parses and serialises', () => {
+    // A name sent twice is ambiguous (one copy may have been planted by a sibling subdomain): null.
     expect(parseCookies('a=1; b="2"; a=3; junk; c=')).toEqual(
-      new Map([
-        ['a', '1'],
+      new Map<string, string | null>([
+        ['a', null],
         ['b', '2'],
         ['c', ''],
       ]),
     );
+    expect(parseCookieList('a=1; a=3')).toEqual(new Map([['a', ['1', '3']]]));
+    expect(serializeCookie('__Host-n', 'v', { secure: true })).toBe('__Host-n=v; Path=/; Secure');
+    expect(() => serializeCookie('__Host-n', 'v', { secure: false })).toThrow(/__Host-/);
+    expect(() => serializeCookie('__Host-n', 'v', { secure: true, path: '/api' })).toThrow(/__Host-/);
     expect(serializeCookie('n', 'v', { httpOnly: true, secure: true, sameSite: 'Lax', maxAge: 10 })).toBe('n=v; Path=/; Max-Age=10; HttpOnly; Secure; SameSite=Lax');
     expect(serializeCookie('n', '', { maxAge: 0 })).toContain('Expires=Thu, 01 Jan 1970');
     expect(() => serializeCookie('bad name', 'v')).toThrow();
@@ -123,13 +128,24 @@ function bigSession(): SessionData {
       'crm.objects.invoices.read',
     ],
     appHost: 'app-eu1.hubspot.com',
-    personalAccessKey: `pat-eu1-${'k'.repeat(400)}`,
+    verifiedAt: NOW - 1000,
   };
 }
 
 describe('CookieSession', () => {
   const config = configFromEnv({ APP_URL: 'https://b.example.com', HUBSPOT_CLIENT_ID: 'c', HUBSPOT_CLIENT_SECRET: 's', SESSION_SECRET: SECRET }, { now: () => NOW });
   const request = (cookie?: string) => new Request('https://b.example.com/api/me', { headers: cookie ? { cookie } : {} });
+
+  const SESSION = sessionCookieName(config);
+  const OAUTH = oauthCookieName(config);
+
+  it('uses __Host- cookie names on https and plain names on http://localhost', () => {
+    expect(SESSION).toBe('__Host-uiex_session');
+    expect(OAUTH).toBe('__Host-uiex_oauth');
+    const local = configFromEnv({ APP_URL: 'http://localhost:5173', SESSION_SECRET: SECRET });
+    expect(sessionCookieName(local)).toBe(SESSION_COOKIE);
+    expect(oauthCookieName(local)).toBe(OAUTH_COOKIE);
+  });
 
   it('wire format round-trips', () => {
     const data = bigSession();
@@ -138,19 +154,25 @@ describe('CookieSession', () => {
     expect(fromWire(null)).toBeNull();
   });
 
+  it("never stores a personal access key (an old cookie's key is ignored)", () => {
+    const wire = toWire({ ...bigSession(), personalAccessKey: 'pat-eu1-secret-key' });
+    expect(JSON.stringify(wire)).not.toContain('pat-eu1-secret-key');
+    expect(fromWire({ ...wire, k: 'pat-eu1-old-key' })?.personalAccessKey).toBeUndefined();
+  });
+
   it('sets an HttpOnly, SameSite=Lax, Secure cookie that reads back', async () => {
     const s = new CookieSession(request(), config);
     expect(await s.get()).toBeNull();
     await s.set(bigSession());
     const [cookie] = s.setCookieHeaders();
-    expect(cookie).toMatch(/^uiex_session=v1\./);
+    expect(cookie).toMatch(/^__Host-uiex_session=v1\./);
     expect(cookie).toContain('HttpOnly');
     expect(cookie).toContain('SameSite=Lax');
     expect(cookie).toContain('Secure');
     expect(cookie).toContain('Path=/');
     expect(cookie).toContain(`Max-Age=${30 * 24 * 60 * 60}`);
-    const value = cookie.split(';')[0].slice(`${SESSION_COOKIE}=`.length);
-    const again = new CookieSession(request(`${SESSION_COOKIE}=${value}`), config);
+    const value = cookie.split(';')[0].slice(`${SESSION}=`.length);
+    const again = new CookieSession(request(`${SESSION}=${value}`), config);
     expect(await again.get()).toEqual(bigSession());
     expect(again.setCookieHeaders()).toEqual([]);
   });
@@ -170,25 +192,42 @@ describe('CookieSession', () => {
   it('treats tampered or rotated-secret cookies as signed out and clears them', async () => {
     const s = new CookieSession(request(), config);
     await s.set(bigSession());
-    const value = s.setCookieHeaders()[0].split(';')[0].slice(`${SESSION_COOKIE}=`.length);
+    const value = s.setCookieHeaders()[0].split(';')[0].slice(`${SESSION}=`.length);
     const tampered = value.slice(0, -2) + (value.endsWith('A') ? 'BB' : 'AA');
-    const t = new CookieSession(request(`${SESSION_COOKIE}=${tampered}`), config);
+    const t = new CookieSession(request(`${SESSION}=${tampered}`), config);
     expect(await t.get()).toBeNull();
     expect(t.invalidCookie).toBe(true);
-    expect(t.setCookieHeaders()[0]).toMatch(/^uiex_session=; Path=\/; Max-Age=0/);
+    expect(t.setCookieHeaders()[0]).toMatch(/^__Host-uiex_session=; Path=\/; Max-Age=0/);
 
     const rotated = configFromEnv({ APP_URL: 'https://b.example.com', HUBSPOT_CLIENT_ID: 'c', HUBSPOT_CLIENT_SECRET: 's', SESSION_SECRET: `${SECRET}-new` }, { now: () => NOW });
-    const r = new CookieSession(request(`${SESSION_COOKIE}=${value}`), rotated);
+    const r = new CookieSession(request(`${SESSION}=${value}`), rotated);
     expect(await r.get()).toBeNull();
     expect(r.setCookieHeaders()).toHaveLength(1);
+  });
+
+  it('trusts neither copy when the session cookie is sent twice (cookie tossing from a sibling subdomain)', async () => {
+    const victim = new CookieSession(request(), config);
+    await victim.set(bigSession());
+    const victimValue = victim.setCookieHeaders()[0].split(';')[0].slice(`${SESSION}=`.length);
+    const attacker = new CookieSession(request(), config);
+    await attacker.set({ ...bigSession(), portalId: 666 });
+    const attackerValue = attacker.setCookieHeaders()[0].split(';')[0].slice(`${SESSION}=`.length);
+    const both = new CookieSession(request(`${SESSION}=${attackerValue}; ${SESSION}=${victimValue}`), config);
+    expect(await both.get()).toBeNull();
+    expect(both.invalidCookie).toBe(true);
+    // The plain (unprefixed) name a sibling subdomain can plant is never read on https.
+    const tossed = new CookieSession(request(`${SESSION_COOKIE}=${attackerValue}`), config);
+    expect(await tossed.get()).toBeNull();
+    // …and it is deleted (Path=/), as a leftover of older versions would be.
+    expect(tossed.setCookieHeaders().some((c) => /^uiex_session=; Path=\/; Max-Age=0/.test(c))).toBe(true);
   });
 
   it('expires sessions after 30 days', async () => {
     const s = new CookieSession(request(), config);
     await s.set(bigSession());
-    const value = s.setCookieHeaders()[0].split(';')[0].slice(`${SESSION_COOKIE}=`.length);
+    const value = s.setCookieHeaders()[0].split(';')[0].slice(`${SESSION}=`.length);
     const later = { ...config, now: () => NOW + 31 * 24 * 3600 * 1000 };
-    expect(await new CookieSession(request(`${SESSION_COOKIE}=${value}`), later).get()).toBeNull();
+    expect(await new CookieSession(request(`${SESSION}=${value}`), later).get()).toBeNull();
   });
 
   it('omits Secure for http://localhost development', async () => {
@@ -198,18 +237,31 @@ describe('CookieSession', () => {
     expect(s.setCookieHeaders()[0]).not.toContain('Secure');
   });
 
-  it('scopes the OAuth state cookie to /api/auth with a 10 minute lifetime', async () => {
+  it('keeps the OAuth state in a __Host- cookie (Path=/) for 10 minutes, and ignores duplicates', async () => {
     const s = new CookieSession(request(), config);
     await s.setOAuthState({ state: 'abc', returnTo: 'https://b.example.com', mode: 'popup' });
     const [cookie] = s.setCookieHeaders();
-    expect(cookie).toMatch(/^uiex_oauth=v1\./);
-    expect(cookie).toContain('Path=/api/auth');
+    expect(cookie).toMatch(/^__Host-uiex_oauth=v1\./);
+    expect(cookie).toContain('Path=/;');
+    expect(cookie).toContain('Secure');
     expect(cookie).toContain('Max-Age=600');
-    const value = cookie.split(';')[0].slice('uiex_oauth='.length);
-    expect(await new CookieSession(request(`uiex_oauth=${value}`), config).getOAuthState()).toEqual({ state: 'abc', returnTo: 'https://b.example.com', mode: 'popup' });
+    const value = cookie.split(';')[0].slice(`${OAUTH}=`.length);
+    expect(await new CookieSession(request(`${OAUTH}=${value}`), config).getOAuthState()).toEqual({ state: 'abc', returnTo: 'https://b.example.com', mode: 'popup' });
     // An OAuth cookie value can't be replayed as the session cookie.
-    expect(await new CookieSession(request(`${SESSION_COOKIE}=${value}`), config).get()).toBeNull();
+    expect(await new CookieSession(request(`${SESSION}=${value}`), config).get()).toBeNull();
     const late = { ...config, now: () => NOW + 11 * 60 * 1000 };
-    expect(await new CookieSession(request(`uiex_oauth=${value}`), late).getOAuthState()).toBeNull();
+    expect(await new CookieSession(request(`${OAUTH}=${value}`), late).getOAuthState()).toBeNull();
+    // A second (planted) copy, or the old unprefixed name, gives no usable state (login CSRF).
+    expect(await new CookieSession(request(`${OAUTH}=${value}; ${OAUTH}=${value}`), config).getOAuthState()).toBeNull();
+    expect(await new CookieSession(request(`${OAUTH_COOKIE}=${value}`), config).getOAuthState()).toBeNull();
+  });
+
+  it('clears an OAuth cookie an older version scoped to /api/auth (http://localhost)', async () => {
+    const local = configFromEnv({ APP_URL: 'http://localhost:5173', SESSION_SECRET: SECRET });
+    const s = new CookieSession(request(), local);
+    await s.setOAuthState({ state: 'abc', returnTo: 'http://localhost:5173', mode: 'popup' });
+    const headers = s.setCookieHeaders();
+    expect(headers[0]).toMatch(/^uiex_oauth=v1\..*Path=\/;/);
+    expect(headers[1]).toMatch(/^uiex_oauth=; Path=\/api\/auth; Max-Age=0/);
   });
 });

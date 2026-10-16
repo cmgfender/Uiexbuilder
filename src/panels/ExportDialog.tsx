@@ -1,4 +1,7 @@
-/** Export: download the HubSpot project, browse every generated file, and deployment steps. */
+/**
+ * Publish dialog (the top bar's Publish button; `export` in code): publish to HubSpot without a
+ * terminal, download the HubSpot project, browse every generated file, or the HubSpot CLI steps.
+ */
 import { useEffect, useMemo, useState } from 'react';
 import {
   CircleCheck,
@@ -26,36 +29,42 @@ import { ExtensionIcon } from './icons';
 import { buildTree, deploySteps, exportAdditions, languageOf, type TreeDir } from './exportModel';
 import { CARD_LOCATIONS } from './locations';
 import { DeployToHubSpotPanel } from './deploy';
+import { useConnection } from '../connect/store';
 
 type Tab = 'download' | 'hubspot' | 'files' | 'deploy';
 
-function tabFromArg(arg: string | null | undefined): Tab {
-  return arg === 'files' || arg === 'deploy' || arg === 'hubspot' ? arg : 'download';
+/** The tab to open: the one asked for, else Publish to HubSpot when this builder can publish, else Download. */
+function tabFromArg(arg: string | null | undefined, canDeploy: boolean): Tab {
+  if (arg === 'files' || arg === 'deploy' || arg === 'hubspot' || arg === 'download') return arg;
+  return canDeploy ? 'hubspot' : 'download';
 }
 
 export function ExportDialog({ open, onClose, arg }: DialogComponentProps) {
-  const [tab, setTab] = useState<Tab>(tabFromArg(arg));
+  // With a connector that can deploy, putting the project live is the main job of this dialog.
+  const canDeploy = useConnection((s) => s.status !== 'unavailable' && s.status !== 'checking' && !!s.health?.features.deploy);
+  const [tab, setTab] = useState<Tab>(tabFromArg(arg, canDeploy));
   useEffect(() => {
-    if (open) setTab(tabFromArg(arg));
+    if (open) setTab(tabFromArg(arg, canDeploy));
+    // Only when the dialog opens (not when the connection check finishes while it is open).
   }, [open, arg]);
   if (!open) return null;
   return (
-    <Dialog open={open} onClose={onClose} title="Export project" wide>
+    <Dialog open={open} onClose={onClose} title="Publish to HubSpot" wide>
       <Tabs<Tab>
         className="ub-pn-dialog-tabs"
         idBase="ub-pn-export"
-        aria-label="Export sections"
+        aria-label="Publish options"
         value={tab}
         onChange={setTab}
         tabs={[
+          { value: 'hubspot', label: 'Publish to HubSpot' },
           { value: 'download', label: 'Download' },
-          { value: 'hubspot', label: 'Deploy to HubSpot' },
           { value: 'files', label: 'Files' },
-          { value: 'deploy', label: 'Deploy with CLI' },
+          { value: 'deploy', label: 'Use the HubSpot CLI' },
         ]}
       />
       <div className="ub-pn-dialog-pane" {...tabPanelProps('ub-pn-export', tab)}>
-        {tab === 'download' && <DownloadTab onClose={onClose} onShowDeploy={() => setTab('deploy')} />}
+        {tab === 'download' && <DownloadTab onClose={onClose} onShowDeploy={() => setTab(canDeploy ? 'hubspot' : 'deploy')} />}
         {tab === 'hubspot' && <DeployToHubSpotPanel cliFallback={<DeployTab />} onShowCli={() => setTab('deploy')} onClose={onClose} />}
         {tab === 'files' && <FilesTab />}
         {tab === 'deploy' && <DeployTab />}
@@ -124,19 +133,19 @@ function DownloadTab({ onClose, onShowDeploy }: { onClose: () => void; onShowDep
               Show problems
             </button>
             <span className="ub-pn-spacer" />
-            <Switch checked={ack} onChange={setAck} label="Export anyway" />
+            <Switch checked={ack} onChange={setAck} label="Download anyway" />
           </div>
         </Callout>
       ) : warnings.length > 0 ? (
         <Callout tone="warning" icon={<TriangleAlert size={14} aria-hidden />}>
-          {warnings.length} warning{warnings.length === 1 ? '' : 's'} — the project can be exported.{' '}
+          {warnings.length} warning{warnings.length === 1 ? '' : 's'} — you can still download the project.{' '}
           <button type="button" className="ub-pn-link" onClick={showProblems}>
             Show problems
           </button>
         </Callout>
       ) : (
         <Callout tone="success" icon={<CircleCheck size={14} aria-hidden />}>
-          No problems found — ready to export.
+          No problems found — ready to download.
         </Callout>
       )}
 
@@ -158,7 +167,7 @@ function DownloadTab({ onClose, onShowDeploy }: { onClose: () => void; onShowDep
             </dd>
           </dl>
         </section>
-        <section className="ub-pn-card" aria-label="Extensions">
+        <section className="ub-pn-card" aria-label="Cards and pages">
           <h3 className="ub-pn-h3">
             Extensions <Badge>{project.extensions.length}</Badge>
           </h3>
@@ -196,7 +205,7 @@ function DownloadTab({ onClose, onShowDeploy }: { onClose: () => void; onShowDep
         <section className="ub-pn-card" aria-label="Added automatically">
           <h3 className="ub-pn-h3">Added automatically</h3>
           {additions.scopes.length === 0 && urlAdds.length === 0 ? (
-            <div className="ub-pn-muted">Your app settings already include everything the extensions need.</div>
+            <div className="ub-pn-muted">Your app settings already include everything your cards need.</div>
           ) : (
             <>
               {additions.scopes.length > 0 && (
@@ -236,7 +245,7 @@ function DownloadTab({ onClose, onShowDeploy }: { onClose: () => void; onShowDep
 
       <div className="ub-pn-row ub-pn-row--between ub-pn-export-actions">
         <button type="button" className="ub-pn-link" onClick={onShowDeploy}>
-          How do I deploy it?
+          How do I put it in HubSpot?
         </button>
         <span className="ub-pn-row">
           <Button
@@ -253,7 +262,7 @@ function DownloadTab({ onClose, onShowDeploy }: { onClose: () => void; onShowDep
             variant="primary"
             icon={<Download size={14} aria-hidden />}
             disabled={busy || blocked}
-            title={blocked ? 'Fix the errors or turn on “Export anyway”' : undefined}
+            title={blocked ? 'Fix the errors or turn on “Download anyway”' : undefined}
             onClick={() => void downloadZip()}
           >
             {busy ? 'Building…' : 'Download project (.zip)'}
@@ -418,7 +427,8 @@ function DeployTab() {
   return (
     <div className="ub-pn-form">
       <Callout tone="info" icon={<Info size={14} aria-hidden />}>
-        Deploy with the HubSpot CLI from a terminal. You need a HubSpot account with developer projects enabled.
+        For developers: publish with the HubSpot CLI from a terminal. You need a HubSpot account with developer projects enabled. (The
+        Publish to HubSpot tab does the same without a terminal.)
       </Callout>
       <ol className="ub-pn-steps">
         {steps.map((s, i) => (

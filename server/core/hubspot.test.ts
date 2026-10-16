@@ -3,9 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { createTestEnv } from './testing';
 import { mapHubSpotError, missingScopeMessage, SessionHubSpotApi } from './hubspot';
 import { RateLimitedError } from './http';
-import { SESSION_COOKIE } from './session';
+import { sessionCookieName } from './session';
 import { HubSpotApiError } from './types';
 
+const SESSION_COOKIE = sessionCookieName({ secureCookies: true });
 const tokenCalls = (env: ReturnType<typeof createTestEnv>) => env.fake.requests.filter((r) => r.method === 'POST' && r.path === '/oauth/v1/token').length;
 
 describe('HubSpotApi via ctx.hubspot()', () => {
@@ -162,6 +163,17 @@ describe('mapHubSpotError', () => {
 });
 
 describe('SessionHubSpotApi.request', () => {
+  it('confirms the grant with HubSpot every few minutes even while the token is fresh', async () => {
+    const env = createTestEnv();
+    await env.signIn();
+    env.advance(6 * 60 * 1000);
+    expect((await env.call('/api/crm/owners')).status).toBe(200);
+    expect(tokenCalls(env)).toBe(2);
+    env.advance(60 * 1000);
+    expect((await env.call('/api/crm/owners')).status).toBe(200);
+    expect(tokenCalls(env)).toBe(2);
+  });
+
   it('encodes query parameters, skips undefined and parses JSON', async () => {
     const env = createTestEnv();
     const { accessToken, refreshToken } = env.fake.issueTokens();
@@ -175,6 +187,7 @@ describe('SessionHubSpotApi.request', () => {
       userEmail: 'x@y.z',
       scopes: [],
       appHost: 'app.hubspot.com',
+      verifiedAt: env.now(),
     });
     const res = await api.request<{ id: string; properties: Record<string, string> }>('GET', '/crm/v3/objects/contacts/1001', { query: { properties: 'firstname', archived: undefined } });
     expect(res.properties.firstname).toBe('Ada');

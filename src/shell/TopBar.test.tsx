@@ -38,13 +38,13 @@ describe('<TopBar>', () => {
     expect(s.activeExtensionId).toBe(s.project.extensions[1].id);
     expect(screen.getByText(/Added “Settings”/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /switch or add extensions/i }));
+    fireEvent.click(screen.getByRole('button', { name: /switch or add cards and pages/i }));
     expect(screen.getByRole('menuitem', { name: /Add settings page \(already added\)/ })).toBeDisabled();
     fireEvent.click(screen.getByRole('menuitem', { name: /Contact Overview/ }));
     expect(useEditor.getState().activeExtensionId).toBe(useEditor.getState().project.extensions[0].id);
 
-    fireEvent.click(screen.getByRole('button', { name: /switch or add extensions/i }));
-    fireEvent.click(screen.getByRole('menuitem', { name: /Manage extensions/ }));
+    fireEvent.click(screen.getByRole('button', { name: /switch or add cards and pages/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Manage cards and pages/ }));
     expect(useDialogs.getState().current).toBe('extensionSettings');
   });
 
@@ -98,7 +98,7 @@ describe('<TopBar>', () => {
     renderBar();
     fireEvent.click(screen.getByRole('button', { name: /Functions/ }));
     expect(useDialogs.getState().current).toBe('functions');
-    fireEvent.click(screen.getByRole('button', { name: /^Export/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Publish/ }));
     expect(useDialogs.getState().current).toBe('export');
 
     fireEvent.click(screen.getByRole('button', { name: /^Project/ }));
@@ -112,6 +112,40 @@ describe('<TopBar>', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Help' }));
     fireEvent.click(screen.getByRole('menuitem', { name: /Keyboard shortcuts/ }));
     expect(useDialogs.getState().current).toBe('shortcuts');
+  });
+
+  it('a menu opens again right after one of its items was chosen (only a press on the trigger closes and swallows)', () => {
+    resetEditor();
+    renderBar();
+    const trigger = screen.getByRole('button', { name: /^Project/ });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('menuitem', { name: /Save/ }));
+    expect(screen.queryByRole('menu')).toBeNull();
+    // Immediately again (well within 100 ms): it opens.
+    fireEvent.mouseDown(trigger);
+    fireEvent.click(trigger);
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    // A press on the trigger while it is open closes it (and the click that follows doesn't reopen it).
+    fireEvent.mouseDown(trigger);
+    fireEvent.click(trigger);
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('Help offers Getting started and the tour', async () => {
+    resetEditor();
+    const { useOnboarding, resetOnboardingForTests } = await import('../onboarding/store');
+    resetOnboardingForTests();
+    renderBar();
+    fireEvent.click(screen.getByRole('button', { name: 'Help' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Getting started' }));
+    expect(useOnboarding.getState()).toMatchObject({ open: true, view: 'welcome' });
+    act(() => useOnboarding.setState({ open: false }));
+    useEditor.getState().setMode('preview');
+    fireEvent.click(screen.getByRole('button', { name: 'Help' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Take the tour' }));
+    await waitFor(() => expect(useOnboarding.getState().tour).toEqual({ active: true, step: 0 }));
+    expect(useEditor.getState().mode).toBe('design');
+    resetOnboardingForTests();
   });
 
   it('imports a .uiex.json document and reports invalid files', async () => {

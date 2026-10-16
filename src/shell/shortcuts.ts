@@ -46,7 +46,7 @@ export interface ShortcutDef {
 export const SHORTCUTS: ShortcutDef[] = [
   { id: 'commandPalette', keys: 'Cmd+K', description: 'Open the command palette', group: 'General' },
   { id: 'save', keys: 'Cmd+S', description: 'Save the project in this browser', group: 'General' },
-  { id: 'export', keys: 'Shift+Cmd+E', description: 'Export the HubSpot project', group: 'General' },
+  { id: 'export', keys: 'Shift+Cmd+E', description: 'Publish to HubSpot (or download the project)', group: 'General' },
   { id: 'shortcuts', keys: '?', description: 'Show keyboard shortcuts', group: 'General' },
   { id: 'togglePreview', keys: 'Cmd+Enter', description: 'Switch between Design and Preview', group: 'General' },
 
@@ -167,13 +167,14 @@ function ownsArrowKeys(el: EventTarget | null): boolean {
 
 /**
  * A builder dialog, menu or the command palette is open. Dialogs drawn by HubSpot component
- * previews (Modal / Panel / date pickers inside the card) don't count.
+ * previews (Modal / Panel / date pickers inside the card) don't count, and neither do popovers
+ * that never block the editor (`data-uiex-nonblocking`, e.g. the coach-mark tour).
  */
 export function isOverlayOpen(): boolean {
   if (useDialogs.getState().current) return true;
   if (typeof document === 'undefined') return false;
   return Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], [role="menu"]')).some(
-    (el) => !el.closest('.hsp-overlay-host, [data-node-id], [class*="hsp-"]'),
+    (el) => !el.closest('.hsp-overlay-host, [data-node-id], [class*="hsp-"], [data-uiex-nonblocking]'),
   );
 }
 

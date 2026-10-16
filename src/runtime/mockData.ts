@@ -19,8 +19,10 @@ import type {
   CrmSearchSource,
   DataSource,
   Extension,
+  FormattedSetting,
   JsonValue,
 } from '../model/types';
+import { isFormatted } from '../model/types';
 
 /** Number of generated rows for associations / CRM search sources (capped by pageLength). */
 export const MOCK_ROW_COUNT = 3;
@@ -245,6 +247,11 @@ export function sampleValue(property: string, ctx: SampleContext): string | null
       return deal.amount;
     case 'dealstage':
       return deal.stage;
+    // HubSpot's calculated deal flags (any pipeline).
+    case 'hs_is_closed':
+      return String(deal.stage === 'closedwon' || deal.stage === 'closedlost');
+    case 'hs_is_closed_won':
+      return String(deal.stage === 'closedwon');
     case 'pipeline':
     case 'hs_pipeline':
       return objectType === 'tickets' ? '0' : 'default';
@@ -433,22 +440,24 @@ export function formatPropertyValue(property: string, value: string | null): str
   return raw;
 }
 
-function formatProperties(props: unknown): unknown {
+function formatProperties(props: unknown, setting: FormattedSetting): unknown {
   if (!props || typeof props !== 'object' || Array.isArray(props)) return props;
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(props as Record<string, unknown>)) out[k] = typeof v === 'string' ? formatPropertyValue(k, v) : v;
+  for (const [k, v] of Object.entries(props as Record<string, unknown>)) out[k] = typeof v === 'string' && isFormatted(setting, k) ? formatPropertyValue(k, v) : v;
   return out;
 }
 
 /** Applies formatPropertyValue to `properties` of association / search result rows. */
-function formatRows(rows: unknown): unknown {
+function formatRows(rows: unknown, setting: FormattedSetting): unknown {
   if (!Array.isArray(rows)) return rows;
   return rows.map((row) =>
     row && typeof row === 'object' && !Array.isArray(row) && 'properties' in row
-      ? { ...(row as Record<string, unknown>), properties: formatProperties((row as { properties: unknown }).properties) }
+      ? { ...(row as Record<string, unknown>), properties: formatProperties((row as { properties: unknown }).properties, setting) }
       : row,
   );
 }
+
+const hasFormatting = (setting: FormattedSetting | undefined): setting is FormattedSetting => setting === true || (Array.isArray(setting) && setting.length > 0);
 
 /** Deep copy of a JSON mock so previews / custom code can never mutate the (frozen) document. */
 function cloneJson<T extends JsonValue | undefined>(value: T): T {
@@ -479,17 +488,17 @@ export function mockDataForSource(ext: Extension, ds: DataSource): unknown {
         if (!prop) continue;
         const v = mock?.properties?.[prop];
         out[prop] = v === undefined || v === null ? null : String(v);
-        if (ds.formatted) out[prop] = formatPropertyValue(prop, out[prop]);
+        if (isFormatted(ds.formatted, prop)) out[prop] = formatPropertyValue(prop, out[prop]);
       }
       return out;
     }
     case 'associations': {
       const rows = configured !== undefined ? cloneJson(configured) : generateAssociationRows(ds, ext);
-      return ds.formatted ? formatRows(rows) : rows;
+      return hasFormatting(ds.formatted) ? formatRows(rows, ds.formatted) : rows;
     }
     case 'crmSearch': {
       const rows = configured !== undefined ? cloneJson(configured) : generateSearchRows(ds);
-      return ds.formatted ? formatRows(rows) : rows;
+      return hasFormatting(ds.formatted) ? formatRows(rows, ds.formatted) : rows;
     }
     case 'fetch':
       return configured !== undefined ? cloneJson(configured) : null;

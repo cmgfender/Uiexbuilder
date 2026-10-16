@@ -1,7 +1,8 @@
 // @vitest-environment node
 /**
  * Terminal-free deploy against the fake HubSpot: key exchange, project create, upload (zip + IR),
- * the stepped build → deploy state machine, failures, expired access and the remembered key.
+ * the stepped build → deploy state machine, failures, expired access, who may deploy (sign-in,
+ * ALLOWED_PORTALS) and the browser binding / replay safety of deploy jobs.
  */
 import { describe, expect, it } from 'vitest';
 import { createTestEnv, type TestEnv } from '../testing';
@@ -9,12 +10,24 @@ import type { ConnectorErrorBody, DeployKeyInfo, DeployRequest, DeployStatus } f
 import { FAKE_PERSONAL_ACCESS_KEY } from '../../fake-hubspot/handler';
 import { fakeProjects } from '../../fake-hubspot/projects';
 import { sampleProjectFiles, type SampleProjectOptions } from './testFixtures';
-import { AUTODEPLOY_WAIT_POLLS, MAX_TRANSIENT_ERRORS, unsealJob } from './job';
+import { AUTODEPLOY_WAIT_POLLS, MAX_TRANSIENT_ERRORS, PRIVATE_APP_TOKEN_HELP, unsealJob } from './job';
 
 const PORTAL = 12345678;
+/** The browser-binding cookie on https (TEST_APP_URL). */
+const BINDING_COOKIE = '__Host-uiex_deploy';
+const SESSION_COOKIE = '__Host-uiex_session';
 
-function setup(opts: Parameters<typeof createTestEnv>[0] = {}): TestEnv {
+/** A connector with HubSpot sign-in set up and a signed-in browser (deploying needs both). */
+async function setup(opts: Parameters<typeof createTestEnv>[0] = {}): Promise<TestEnv> {
   const env = createTestEnv(opts);
+  fakeProjects(env.fake.projects).setNow(env.now);
+  await env.signIn();
+  return env;
+}
+
+/** A connector before HubSpot sign-in is set up (the host deploys the connector's own app). */
+function setupMode(opts: Parameters<typeof createTestEnv>[0] = {}): TestEnv {
+  const env = createTestEnv({ ...opts, env: { HUBSPOT_CLIENT_ID: '', HUBSPOT_CLIENT_SECRET: '', ...opts.env } });
   fakeProjects(env.fake.projects).setNow(env.now);
   return env;
 }
@@ -34,10 +47,12 @@ async function start(env: TestEnv, body: unknown): Promise<{ status: number; bod
   return { status: res.status, body: (await res.json()) as DeployStatus & ConnectorErrorBody };
 }
 
-async function poll(env: TestEnv, deployId: string): Promise<{ status: number; body: DeployStatus & ConnectorErrorBody }> {
-  const res = await env.call(`/api/deploy/${encodeURIComponent(deployId)}`);
+async function poll(env: TestEnv, deployId: string, init: { cookies?: boolean } = {}): Promise<{ status: number; body: DeployStatus & ConnectorErrorBody }> {
+  const res = await env.call('/api/deploy/status', { json: { deployId }, ...init });
   return { status: res.status, body: (await res.json()) as DeployStatus & ConnectorErrorBody };
 }
+
+const queueCalls = (env: TestEnv) => env.fake.requests.filter((r) => r.method === 'POST' && r.path === '/dfs/deploy/v3/deploys/queue/async').length;
 
 /** Poll until success / failed; returns the final status and the phases seen. */
 async function runToEnd(env: TestEnv, first: DeployStatus, max = 40): Promise<{ final: DeployStatus; phases: string[]; ids: string[] }> {
@@ -57,7 +72,7 @@ async function runToEnd(env: TestEnv, first: DeployStatus, max = 40): Promise<{ 
 
 describe('POST /api/deploy + polling (success)', () => {
   it('uploads the project like `hs project upload` and follows the automatic deploy to the end', async () => {
-    const env = setup();
+    const env = await setup();
     const { status, body } = await start(env, request());
     expect(status, JSON.stringify(body)).toBe(200);
     expect(body).toMatchObject({
@@ -121,7 +136,7 @@ describe('POST /api/deploy + polling (success)', () => {
   });
 
   it('deploys the build itself when automatic deploys are off (like `hs project deploy`)', async () => {
-    const env = setup();
+    const env = await setup();
     const { body } = await start(env, request({ personalAccessKey: 'pat-na1-fake-no-autodeploy-0000000000' }));
     const { final } = await runToEnd(env, body);
     expect(final.phase).toBe('success');
@@ -130,14 +145,14 @@ describe('POST /api/deploy + polling (success)', () => {
   });
 
   it('waits for a slow automatic deploy to start', async () => {
-    const env = setup();
+    const env = await setup();
     const { body } = await start(env, request({ personalAccessKey: 'pat-na1-fake-slow-autodeploy-000000000' }));
     const { final } = await runToEnd(env, body);
     expect(final.phase).toBe('success');
   });
 
   it('collects build and deploy warnings (deduplicated) into the log', async () => {
-    const env = setup();
+    const env = await setup();
     const { body } = await start(env, request({ personalAccessKey: 'pat-na1-fake-warn-00000000000000000000' }));
     const { final } = await runToEnd(env, body);
     expect(final.phase).toBe('success');
@@ -149,7 +164,7 @@ describe('POST /api/deploy + polling (success)', () => {
   });
 
   it('gives no install link for OAuth / marketplace apps', async () => {
-    const env = setup();
+    const env = await setup();
     const { body } = await start(env, request({}, { authType: 'oauth', distribution: 'marketplace' }));
     const { final, phases } = await runToEnd(env, body);
     expect(final.phase).toBe('success');
@@ -158,7 +173,7 @@ describe('POST /api/deploy + polling (success)', () => {
   });
 
   it('survives HubSpot hiccups while polling, but gives up after a while', async () => {
-    const env = setup();
+    const env = await setup();
     const { body } = await start(env, request());
     env.fake.failNext({ match: '/builds/', status: 503, times: 2 });
     const r1 = await poll(env, body.deployId);
@@ -167,7 +182,7 @@ describe('POST /api/deploy + polling (success)', () => {
     const { final } = await runToEnd(env, r1.body);
     expect(final.phase).toBe('success');
 
-    const env2 = setup();
+    const env2 = await setup();
     const s2 = await start(env2, request());
     env2.fake.failNext({ match: '/builds/', status: 429, headers: { 'Retry-After': '1' }, times: 50 });
     let s = s2.body;
@@ -179,7 +194,7 @@ describe('POST /api/deploy + polling (success)', () => {
 
 describe('deploy failures', () => {
   it('reports a failed build with the errors HubSpot gave (dependents skipped)', async () => {
-    const env = setup();
+    const env = await setup();
     const { body } = await start(env, request({ personalAccessKey: 'fail-build-key-00000000000000' }));
     expect(body.phase).toBe('building');
     const { final } = await runToEnd(env, body);
@@ -193,7 +208,7 @@ describe('deploy failures', () => {
   });
 
   it('reports a failed deploy', async () => {
-    const env = setup();
+    const env = await setup();
     const { body } = await start(env, request({ personalAccessKey: 'pat-na1-fake-fail-deploy-000000000000' }));
     const { final } = await runToEnd(env, body);
     expect(final).toMatchObject({ phase: 'failed', error: 'deploy_failed' });
@@ -201,7 +216,7 @@ describe('deploy failures', () => {
   });
 
   it('explains a blocked deploy', async () => {
-    const env = setup();
+    const env = await setup();
     const { body } = await start(env, request({ personalAccessKey: 'pat-na1-fake-blocked-deploy-0000000000' }));
     const { final } = await runToEnd(env, body);
     expect(final).toMatchObject({ phase: 'failed', error: 'deploy_blocked' });
@@ -210,7 +225,7 @@ describe('deploy failures', () => {
   });
 
   it('gives up when HubSpot never starts the automatic deploy', async () => {
-    const env = setup();
+    const env = await setup();
     const { body } = await start(env, request({ personalAccessKey: 'pat-na1-fake-skip-autodeploy-000000000' }));
     const { final, phases } = await runToEnd(env, body);
     expect(final).toMatchObject({ phase: 'failed', error: 'autodeploy_missing' });
@@ -218,8 +233,8 @@ describe('deploy failures', () => {
   });
 
   it('rejects an invalid or malformed key before uploading anything', async () => {
-    const env = setup();
-    const r = await start(env, request({ personalAccessKey: 'pat-na1-00000000-not-a-real-key-0000' }));
+    const env = await setup();
+    const r = await start(env, request({ personalAccessKey: 'CiRuYTEt-00000000-not-a-real-key-0000' }));
     expect(r.status).toBe(400);
     expect(r.body.error.code).toBe('invalid_key');
     expect(r.body.error.message).toMatch(/didn't accept this personal access key/);
@@ -231,7 +246,7 @@ describe('deploy failures', () => {
   });
 
   it('explains a key without the developer projects permission', async () => {
-    const env = setup();
+    const env = await setup();
     const r = await start(env, request({ personalAccessKey: 'pat-na1-fake-no-projects-scope-00000000' }));
     expect(r.status).toBe(403);
     expect(r.body.error.code).toBe('missing_scope');
@@ -240,7 +255,7 @@ describe('deploy failures', () => {
   });
 
   it('explains a locked project', async () => {
-    const env = setup();
+    const env = await setup();
     const r = await start(env, request({ personalAccessKey: 'pat-na1-fake-project-locked-0000000000' }));
     expect(r.status).toBe(409);
     expect(r.body.error.code).toBe('project_locked');
@@ -248,7 +263,7 @@ describe('deploy failures', () => {
   });
 
   it('refuses unsafe or inconsistent projects before contacting HubSpot', async () => {
-    const env = setup();
+    const env = await setup();
     const files = sampleProjectFiles();
     const cases: Array<[unknown, number, string]> = [
       [{ ...request(), files: [...files, { path: '../../etc/passwd', contents: 'x' }] }, 400, 'invalid_files'],
@@ -264,6 +279,7 @@ describe('deploy failures', () => {
       [[], 400, 'bad_request'],
     ];
     for (const [body, status, code] of cases) {
+      env.advance(60_000); // stay under the deploy rate limit
       const r = await start(env, body);
       expect(r.status, JSON.stringify(r.body)).toBe(status);
       expect(r.body.error.code, JSON.stringify(r.body)).toBe(code);
@@ -274,28 +290,28 @@ describe('deploy failures', () => {
   });
 
   it('refuses a platform version HubSpot has no schemas for', async () => {
-    const env = setup();
+    const env = await setup();
     const r = await start(env, request({}, { platformVersion: '2027.03' }));
     expect(r.status).toBe(400);
     expect(r.body.error.code).toBe('platform_unavailable');
   });
 
   it('needs the CSRF header, the feature switch and a session secret', async () => {
-    const env = setup();
+    const env = await setup();
     const res = await env.call('/api/deploy', { json: request(), csrf: false });
     expect(res.status).toBe(403);
-    const off = setup({ config: { enableDeploy: false } });
+    const off = setupMode({ config: { enableDeploy: false } });
     const r = await start(off, request());
     expect(r.status).toBe(404);
     expect(r.body.error.code).toBe('feature_disabled');
-    const noSecret = setup({ env: { SESSION_SECRET: '' } });
+    const noSecret = setupMode({ env: { SESSION_SECRET: '' } });
     const r2 = await start(noSecret, request());
     expect(r2.status).toBe(503);
     expect(r2.body.error.code).toBe('not_configured');
   });
 
   it('refuses huge request bodies', async () => {
-    const env = setup();
+    const env = await setup();
     const big = 'x'.repeat(6 * 1024 * 1024);
     const r = await start(env, { ...request(), files: [{ path: 'big.txt', contents: big }] });
     expect(r.status).toBe(413);
@@ -304,7 +320,7 @@ describe('deploy failures', () => {
 
 describe('deployId tokens and expiry', () => {
   it('rejects tampered and expired deployIds', async () => {
-    const env = setup();
+    const env = await setup();
     const { body } = await start(env, request());
     const tampered = `${body.deployId.slice(0, -4)}AAAA`;
     const r = await poll(env, tampered);
@@ -317,8 +333,8 @@ describe('deployId tokens and expiry', () => {
     expect(late.body.error.message).toMatch(/expire after an hour/);
   });
 
-  it('fails clearly when HubSpot access expires and no key is remembered', async () => {
-    const env = setup();
+  it('fails clearly when HubSpot access expires mid-deploy', async () => {
+    const env = await setup();
     const { body } = await start(env, request());
     fakeProjects(env.fake.projects).expireAccessTokens();
     const r = await poll(env, body.deployId);
@@ -329,69 +345,146 @@ describe('deployId tokens and expiry', () => {
   });
 });
 
-describe('connected portal and the remembered key', () => {
-  it('remembers the key in the session, renews expired access with it, and forgets it on request', async () => {
-    const env = setup();
-    await env.signIn();
-    expect(((await (await env.call('/api/deploy/key')).json()) as DeployKeyInfo).remembered).toBe(false);
+describe('who may deploy', () => {
+  it('needs a HubSpot sign-in once sign-in is set up', async () => {
+    const env = createTestEnv();
+    fakeProjects(env.fake.projects).setNow(env.now);
+    const r = await start(env, request());
+    expect(r.status).toBe(401);
+    expect(r.body.error.code).toBe('not_connected');
+    expect(r.body.error.message).toMatch(/Connect HubSpot first/);
+    // Refused before the key is sent anywhere.
+    expect(env.fake.requests.filter((q) => q.path.startsWith('/localdevauth/'))).toHaveLength(0);
+  });
 
-    const { status, body } = await start(env, request({ remember: true }));
-    expect(status).toBe(200);
-    expect(body.log).toContain('Saved the key on this browser (encrypted) for next time.');
-    expect(await (await env.call('/api/deploy/key')).json()).toEqual({ remembered: true, portalId: PORTAL });
-    // The session cookie is sealed: the key is not readable in it.
-    expect(env.jar.get('uiex_session')).not.toContain(FAKE_PERSONAL_ACCESS_KEY);
+  it('confirms the sign-in with HubSpot before deploying: a copied cookie of a signed-out session cannot deploy', async () => {
+    const env = await setup();
+    const copied = env.jar.get(SESSION_COOKIE)!;
+    await env.call('/api/auth/logout', { method: 'POST' });
+    env.jar.set(SESSION_COOKIE, copied);
+    const r = await start(env, request());
+    expect(r.status).toBe(401);
+    expect(r.body.error.code).toBe('not_connected');
+    expect(fakeProjects(env.fake.projects).uploads).toHaveLength(0);
+  });
 
-    fakeProjects(env.fake.projects).expireAccessTokens();
-    const r = await poll(env, body.deployId);
-    expect(r.body.phase).toBe('building');
-    expect(r.body.log).toContain('Renewed HubSpot access with the key saved on this browser.');
-    const { final } = await runToEnd(env, r.body);
+  it('only deploys to the connected account', async () => {
+    const otherKey = 'CiRuYTEt-other-portal-key-000000000000';
+    const env = await setup({ fake: { personalAccessKeys: { [otherKey]: 999 } } });
+    const r = await start(env, request({ personalAccessKey: otherKey }));
+    expect(r.status).toBe(409);
+    expect(r.body.error).toMatchObject({ code: 'portal_mismatch', portalId: 999 });
+    expect(r.body.error.message).toMatch(/belongs to HubSpot account 999 \(Fake account 999\), but you're connected to account 12345678/);
+    // Asking for the other account does not help while connected to this one.
+    const forced = await start(env, request({ personalAccessKey: otherKey, portalId: 999 }));
+    expect(forced.status).toBe(409);
+    expect(fakeProjects(env.fake.projects).uploads).toHaveLength(0);
+  });
+
+  it('before sign-in is set up, deploys with the key alone (first-time setup), rate limited per client', async () => {
+    const env = setupMode();
+    const first = await start(env, request());
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    const { final } = await runToEnd(env, first.body);
     expect(final.phase).toBe('success');
+    for (let i = 0; i < 3; i++) expect((await start(env, request())).status).toBe(200);
+    const limited = await env.call('/api/deploy', { json: request() });
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get('retry-after')).toMatch(/^\d+$/);
+    expect(((await limited.json()) as ConnectorErrorBody).error.code).toBe('rate_limited');
+    // Another client has its own allowance.
+    const other = await env.call('/api/deploy', { json: request(), clientIp: '203.0.113.9' });
+    expect(other.status).toBe(200);
+  });
 
-    // Deploy again with the remembered key (no key in the request).
-    const again = await start(env, { ...request({ personalAccessKey: undefined }), useRememberedKey: true });
-    expect(again.status).toBe(200);
-    expect(again.body.log[0]).toMatch(/Signed in to HubSpot account/);
+  it('refuses accounts that are not on ALLOWED_PORTALS', async () => {
+    const env = setupMode({ env: { ALLOWED_PORTALS: '111, 222' } });
+    const r = await start(env, request());
+    expect(r.status).toBe(403);
+    expect(r.body.error.code).toBe('portal_not_allowed');
+    expect(fakeProjects(env.fake.projects).uploads).toHaveLength(0);
+    const ok = setupMode({ env: { ALLOWED_PORTALS: `111, ${PORTAL}` } });
+    expect((await start(ok, request())).status).toBe(200);
+  });
 
-    const del = await env.call('/api/deploy/key', { method: 'DELETE' });
-    expect(await del.json()).toEqual({ remembered: false });
+  it('never stores a personal access key', async () => {
+    const env = await setup();
+    const { body } = await start(env, request({ remember: true }));
+    expect(body.phase).toBe('building');
+    expect(body.log.join('\n')).not.toMatch(/saved|remember/i);
     expect(((await (await env.call('/api/deploy/key')).json()) as DeployKeyInfo).remembered).toBe(false);
+    for (const name of env.jar.names()) expect(env.jar.get(name)).not.toContain(FAKE_PERSONAL_ACCESS_KEY);
     const none = await start(env, { ...request({ personalAccessKey: undefined }), useRememberedKey: true });
     expect(none.status).toBe(400);
     expect(none.body.error.code).toBe('no_remembered_key');
-    // Still signed in after forgetting the key.
-    expect(((await (await env.call('/api/me')).json()) as { connected: boolean }).connected).toBe(true);
+    expect((await env.call('/api/deploy/key', { method: 'DELETE' })).status).toBe(200);
   });
 
-  it('does not remember a key when not connected', async () => {
-    const env = setup();
-    const { body } = await start(env, request({ remember: true }));
-    expect(body.log).toContain("The key wasn't saved: connect HubSpot first to remember it on this browser.");
-    expect(((await (await env.call('/api/deploy/key')).json()) as DeployKeyInfo).remembered).toBe(false);
-  });
-
-  it('warns when the key belongs to another portal than the connected one, and deploys there when asked', async () => {
-    const otherKey = 'pat-na1-other-portal-key-000000000000';
-    const env = setup({ fake: { personalAccessKeys: { [otherKey]: 999 } } });
-    await env.signIn();
-    const r = await start(env, request({ personalAccessKey: otherKey, remember: true }));
-    expect(r.status).toBe(409);
-    expect(r.body.error).toMatchObject({ code: 'portal_mismatch', portalId: 999 });
-    expect(r.body.error.message).toMatch(/belongs to HubSpot account 999 \(Fake account 999\), but the deploy is going to account 12345678/);
-    expect(fakeProjects(env.fake.projects).uploads).toHaveLength(0);
-
-    const ok = await start(env, request({ personalAccessKey: otherKey, remember: true, portalId: 999 }));
-    expect(ok.status).toBe(200);
-    expect(ok.body.portalId).toBe(999);
-    expect(ok.body.log).toContain("The key wasn't saved because it belongs to a different HubSpot account than the one you're connected to.");
-    expect(ok.body.projectUrl).toBe('https://app.hubspot.com/developer-projects/999/project/deal-desk');
+  it('explains a private app token pasted instead of a personal access key', async () => {
+    const env = await setup();
+    const r = await start(env, request({ personalAccessKey: ['pat', 'na1', '11111111-2222-3333-4444-555555555555'].join('-') }));
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatchObject({ code: 'invalid_key', message: PRIVATE_APP_TOKEN_HELP });
   });
 
   it('uses the EU app host for EU keys', async () => {
     const euKey = 'pat-eu1-fake0000-0000-4000-8000-000000000009';
-    const env = setup({ fake: { personalAccessKeys: { [euKey]: PORTAL } } });
+    const env = setupMode({ fake: { personalAccessKeys: { [euKey]: PORTAL } } });
     const { body } = await start(env, request({ personalAccessKey: euKey }));
     expect(body.projectUrl).toBe(`https://app-eu1.hubspot.com/developer-projects/${PORTAL}/project/deal-desk`);
+  });
+});
+
+describe('deploy jobs are bound to the browser and safe to replay', () => {
+  it('can only be followed by the browser that started it (the deployId alone is not enough)', async () => {
+    const env = await setup();
+    const { body } = await start(env, request());
+    const set = env.jar.get(BINDING_COOKIE);
+    expect(set).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    // Someone who only has the deployId (e.g. from a log line): refused.
+    const stranger = await poll(env, body.deployId, { cookies: false });
+    expect(stranger.status).toBe(404);
+    expect(stranger.body.error.code).toBe('deploy_not_found');
+    // Another browser (its own binding cookie): refused.
+    const other = createTestEnv();
+    other.jar.set(BINDING_COOKIE, 'x'.repeat(43));
+    const res = await other.call('/api/deploy/status', { json: { deployId: body.deployId } });
+    expect(res.status).toBe(404);
+    // The browser that started it: fine (and the old GET form still works for older clients).
+    expect((await poll(env, body.deployId)).status).toBe(200);
+    const legacy = await env.call(`/api/deploy/${encodeURIComponent(body.deployId)}`);
+    expect(legacy.status).toBe(200);
+    // Every deploy from this browser reuses its binding.
+    await start(env, request());
+    expect(env.jar.get(BINDING_COOKIE)).toBe(set);
+  });
+
+  it('never queues a build twice or rolls back to an older one when an old deployId is replayed', async () => {
+    const key = 'CiRuYTEt-fake-no-autodeploy-000000000000';
+    const env = await setup();
+    const first = await start(env, request({ personalAccessKey: key }));
+    const run1 = await runToEnd(env, first.body);
+    expect(run1.final.phase).toBe('success');
+    expect(queueCalls(env)).toBe(1);
+    const states = await Promise.all(run1.ids.map((id) => unsealJob(env.config, id)));
+    const queueId = run1.ids[states.findIndex((st) => st?.s === 'queue')];
+    expect(queueId).toBeTruthy();
+
+    // Replaying the queue step after the build went live: no second deploy.
+    const replay = await poll(env, queueId);
+    expect(replay.body.log).toContain(`Build #${first.body.buildId} is already deployed.`);
+    expect((await runToEnd(env, replay.body)).final.phase).toBe('success');
+    expect(queueCalls(env)).toBe(1);
+
+    // A newer build goes live; replaying the old queue step must not roll it back.
+    const second = await start(env, request({ personalAccessKey: key }));
+    const run2 = await runToEnd(env, second.body);
+    expect(run2.final.phase).toBe('success');
+    expect(queueCalls(env)).toBe(2);
+    const rollback = await poll(env, queueId);
+    expect(rollback.body).toMatchObject({ phase: 'failed', error: 'superseded' });
+    expect(rollback.body.message).toMatch(new RegExp(`newer build \\(#${second.body.buildId}\\)`));
+    expect(queueCalls(env)).toBe(2);
+    expect(fakeProjects(env.fake.projects).project('deal-desk')?.deployedBuildId).toBe(second.body.buildId);
   });
 });

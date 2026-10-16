@@ -10,7 +10,8 @@ import type { DragEvent as ReactDragEvent } from 'react';
 import type { InsertTarget } from '../model/tree';
 import { findParent } from '../model/tree';
 import { canAccept } from '../model/rules';
-import type { Extension, NodeId, NodeTemplate, StateVar, UINode } from '../model/types';
+import type { DataSource, Extension, NodeId, NodeTemplate, StateVar, UINode } from '../model/types';
+import { getComponent } from '../registry';
 
 export const DND_MIME = 'application/x-uiex-dnd';
 
@@ -21,7 +22,14 @@ export type DragPayload =
    * A prebuilt block / snippet. `state` lists state variables the block relies on; the drop
    * handler adds any that the extension does not already have (matched by name).
    */
-  | { kind: 'template'; template: NodeTemplate; label: string; state?: Array<Omit<StateVar, 'id'>> }
+  | {
+      kind: 'template';
+      template: NodeTemplate;
+      label: string;
+      state?: Array<Omit<StateVar, 'id'>>;
+      /** Data sources the block reads (e.g. "Associated records"), added with it (additive). */
+      dataSources?: DataSource[];
+    }
   /** An existing node being moved. */
   | { kind: 'move'; nodeId: NodeId };
 
@@ -205,10 +213,45 @@ function intoForm(ext: Extension, formId: NodeId, type: string): InsertTarget {
   return target;
 }
 
+/** Component categories that want the card's full width (tables, CRM data, charts, lists of facts). */
+const FULL_WIDTH_CATEGORIES = new Set(['CRM data', 'Charts', 'Tables', 'Data display']);
+const FULL_WIDTH_TYPES = new Set(['Form', 'Tabs', 'Accordion', 'Alert', 'EmptyState', 'ErrorState', 'Divider', 'Tile']);
+
+/** A component that reads best across the card's width (it shouldn't squeeze into a row's cell). */
+export function isFullWidthComponent(type: string): boolean {
+  if (FULL_WIDTH_TYPES.has(type)) return true;
+  const category = getComponent(type)?.category;
+  return !!category && FULL_WIDTH_CATEGORIES.has(category);
+}
+
+/** A container that lays its children out side by side (a Flex row — HubSpot's default — Inline, AutoGrid). */
+export function isSideBySide(node: UINode | undefined): boolean {
+  if (!node) return false;
+  if (node.type === 'Inline' || node.type === 'AutoGrid') return true;
+  if (node.type !== 'Flex') return false;
+  const direction = node.props?.direction;
+  return direction === undefined || direction === 'row';
+}
+
+/**
+ * The card's main column: the root's only child when it is a Flex column (how starters and most
+ * cards are laid out). New content belongs at its end rather than after it.
+ */
+export function mainColumn(ext: Extension): NodeId | null {
+  const root = ext.nodes[ext.rootId];
+  if (!root || root.children.length !== 1) return null;
+  const only = ext.nodes[root.children[0]];
+  return only && only.type === 'Flex' && only.props?.direction === 'column' ? only.id : null;
+}
+
 /**
  * Where a click-to-add (palette click, paste-like insert) should go:
  * into the selected node if it is a container accepting the type, else after the selected node
- * in its parent, else at the end of the root. Returns null if nowhere accepts it.
+ * in its parent, else at the end of the card's main column (or of the root). Returns null if
+ * nowhere accepts it.
+ *
+ * Full-width components (tables, CRM data, charts, forms…) added next to something inside a row
+ * (e.g. a name beside a status tag) go after the row instead of squeezing into it.
  *
  * Forms get special care: adding to a Form goes into its fields' layout Flex, and inside a form
  * new content goes before the trailing submit / reset buttons.
@@ -220,18 +263,49 @@ export function smartInsertTarget(ext: Extension, selectedId: NodeId | null, typ
       if (sel.type === 'Form') return intoForm(ext, selectedId, type);
       return beforeFormActions(ext, { parentId: selectedId, index: sel.children.length }, type);
     }
+    const wide = isFullWidthComponent(type);
+    let fallback: InsertTarget | null = null;
     let cur: NodeId | null = selectedId;
     // Walk up: after the selected node, then after its ancestors.
     while (cur) {
       const ref = findParent(ext, cur);
       if (!ref) break;
       if (!ref.slot && canAccept(ext, ref.parentId, type).ok) {
-        return beforeFormActions(ext, { parentId: ref.parentId, index: ref.index + 1 }, type);
+        const target = beforeFormActions(ext, { parentId: ref.parentId, index: ref.index + 1 }, type);
+        if (!wide || !insideSideBySide(ext, ref.parentId)) return target;
+        fallback ??= target;
       }
       cur = ref.parentId;
     }
+    if (fallback) return fallback;
   }
+  const main = mainColumn(ext);
+  if (main && canAccept(ext, main, type).ok) return beforeFormActions(ext, { parentId: main, index: ext.nodes[main].children.length }, type);
   const root = ext.nodes[ext.rootId];
   if (canAccept(ext, ext.rootId, type).ok) return { parentId: ext.rootId, index: root.children.length };
   return null;
+}
+
+const COLUMN_TYPES = new Set(['Flex', 'Box', 'Tile']);
+
+/**
+ * A row of columns the admin laid out on purpose (e.g. the "Two columns" block: every child is a
+ * container). Its columns are real places for content; other rows (a name next to a status tag,
+ * a row of buttons) are not.
+ */
+function isColumnsLayout(ext: Extension, row: UINode): boolean {
+  return row.children.length >= 2 && row.children.every((id) => COLUMN_TYPES.has(ext.nodes[id]?.type ?? ''));
+}
+
+/** `id` is a side-by-side row, or sits inside one that isn't a deliberate columns layout. */
+function insideSideBySide(ext: Extension, id: NodeId): boolean {
+  let cur: NodeId | null = id;
+  while (cur && cur !== ext.rootId) {
+    const node = ext.nodes[cur];
+    if (isSideBySide(node)) return cur === id || !isColumnsLayout(ext, node);
+    const ref = findParent(ext, cur);
+    if (!ref || ref.slot) return false;
+    cur = ref.parentId;
+  }
+  return false;
 }

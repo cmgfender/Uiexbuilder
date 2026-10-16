@@ -131,6 +131,8 @@ export interface DropPlaceholderProps {
  *  - crmSearch      -> search(objectType, request)
  *  - context        -> portal / user / crm come from `context` (other fields keep their mock values)
  *  - fetch actions & fetch data sources -> proxyFetch (when provided), avoiding browser CORS limits
+ * CRM components (CrmPropertyList, CrmDataHighlight, CrmStageTracker, CrmAssociationTable, …) read the
+ * sample record through the same adapter (src/preview/liveCrm.tsx) instead of their sample values.
  * fetch/function data sources without a live equivalent keep using mock data. Requests are real and
  * asynchronous, so the preview shows genuine loading and error states. Errors surface as
  * `<name>Error` values and console log entries — they never crash the editor.
@@ -148,12 +150,13 @@ export interface LiveDataAdapter {
     objectTypeId: string,
     objectId: number,
     properties: string[],
-    formatted: boolean,
+    /** true = every property formatted; a list = only those (HubSpot's propertiesToFormat). */
+    formatted: boolean | string[],
   ) => Promise<Record<string, string | null>>;
   getAssociations: (
     objectTypeId: string,
     objectId: number,
-    request: { toObjectType: string; properties: string[]; pageLength: number; formatted: boolean },
+    request: { toObjectType: string; properties: string[]; pageLength: number; formatted: boolean | string[] },
   ) => Promise<import('../connect/types').AssociationResultDTO[]>;
   search: (
     objectType: string,
@@ -161,4 +164,11 @@ export interface LiveDataAdapter {
   ) => Promise<import('../connect/types').CrmSearchResponseDTO>;
   /** Server-side fetch for preview `hubspot.fetch` calls (optional). */
   proxyFetch?: (request: import('../connect/types').ProxyFetchRequest) => Promise<import('../connect/types').ProxyFetchResponse>;
+  /**
+   * Property definitions of an object type (labels for the CRM component previews). Optional;
+   * additive to the original contract.
+   */
+  getPropertyDefinitions?: (objectType: string) => Promise<import('../connect/types').CrmPropertyDef[]>;
+  /** Pipelines of an object type (stage trackers). Optional; additive. */
+  getPipelines?: (objectType: string) => Promise<import('../connect/types').CrmPipeline[]>;
 }

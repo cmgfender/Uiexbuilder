@@ -36,7 +36,7 @@ export function FunctionsSection() {
           <Server size={18} aria-hidden />
           <div>
             <div className="ub-pn-strong">No app functions</div>
-            <div className="ub-pn-muted">Run server-side JavaScript with secrets and the HubSpot API, called from any extension.</div>
+            <div className="ub-pn-muted">Run server-side JavaScript with secrets and the HubSpot API, called from any card.</div>
           </div>
         </div>
       ) : (

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createExtension, createProject } from '../../model/factory';
 import { useEditor } from '../../model/store';
@@ -7,7 +7,7 @@ import { resetLiveDataForTests, useLiveData } from '../records';
 import { resetConnectionForTests, useConnection } from '../store';
 import type { CrmRecordSummary } from '../types';
 import { OBJECT_TYPES, PORTAL_ID, connectedInfo, errorBody, healthFixture, json, routedFetch } from '../testUtils';
-import { PreviewDataNote, RecordPicker } from './RecordPicker';
+import { PreviewDataNote, RecordPicker, extensionUsesRecord } from './RecordPicker';
 
 const CONTACTS: CrmRecordSummary[] = [
   { id: '101', objectType: 'contacts', objectTypeId: '0-1', label: 'Ada Lovelace', secondary: 'ada@example.com', url: 'https://app.hubspot.com/contacts/12345678/record/0-1/101' },
@@ -71,6 +71,51 @@ describe('RecordPicker', () => {
     expect(useLiveData.getState().mode).toBe('live');
     expect(live).toHaveAttribute('aria-pressed', 'true');
     expect(chip()).toHaveAccessibleName('Pick a sample record to preview with real data');
+  });
+
+  it('choosing Live data on a card without a sample record opens the picker, and the chip says mock values show until then', async () => {
+    setup();
+    render(<RecordPicker />);
+    fireEvent.click(within(screen.getByRole('group', { name: 'Preview data' })).getByRole('button', { name: /Live/ }));
+    expect(await screen.findByRole('dialog', { name: 'Sample record' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Sample record' })).toHaveTextContent('Until then the card shows mock values.');
+    expect(chip()).toHaveTextContent('mock values until then');
+  });
+
+  it('says when the card shows nothing of the picked record', async () => {
+    const { card } = setup();
+    useLiveData.getState().setMode('live');
+    useLiveData.getState().setRecord(card.id, CONTACTS[0]);
+    const { unmount } = render(<RecordPicker />);
+    fireEvent.click(chip());
+    expect(screen.getByRole('note')).toHaveTextContent('This card doesn’t show any record details yet');
+    unmount();
+    // A card with a record data source does show it: no hint.
+    useEditor.getState().addDataSource?.({ kind: 'crmProperties', name: 'contact', properties: ['firstname'] } as never);
+    const ext = useEditor.getState().project.extensions.find((e) => e.id === card.id)!;
+    if (extensionUsesRecord(ext)) {
+      render(<RecordPicker />);
+      fireEvent.click(chip());
+      expect(screen.queryByRole('note')).toBeNull();
+    }
+    expect(extensionUsesRecord({ ...ext, dataSources: [{ id: 'd', kind: 'crmProperties', name: 'c', properties: [] }] })).toBe(true);
+    expect(extensionUsesRecord({ ...ext, dataSources: [] })).toBe(false);
+  });
+
+  it('opens the picker again after "Reconnect to grant access" finished', async () => {
+    setup({ searchError: true });
+    const connect = vi.fn(async () => {});
+    useConnection.setState({ connect });
+    useLiveData.getState().setMode('live');
+    render(<RecordPicker />);
+    fireEvent.click(chip());
+    const panel = screen.getByRole('dialog', { name: 'Sample record' });
+    fireEvent.click(await within(panel).findByRole('button', { name: 'Reconnect to grant access' }));
+    expect(connect).toHaveBeenCalled();
+    fireEvent.keyDown(panel, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Sample record' })).toBeNull();
+    act(() => useConnection.setState({ connectedAt: Date.now() }));
+    expect(await screen.findByRole('dialog', { name: 'Sample record' })).toBeInTheDocument();
   });
 
   it('picks a sample record with the keyboard', async () => {
@@ -196,9 +241,14 @@ describe('RecordPicker', () => {
     render(<RecordPicker />);
     fireEvent.click(chip());
     const panel = screen.getByRole('dialog', { name: 'Sample record' });
-    await waitFor(() => expect(within(panel).getByRole('status')).toHaveTextContent('Permission needed'));
-    expect(within(panel).getByRole('status')).toHaveTextContent(/allow “See contacts”/);
-    expect(within(panel).getByRole('button', { name: 'Reconnect HubSpot' })).toBeInTheDocument();
+    await waitFor(() => expect(within(panel).getByRole('status')).toHaveTextContent('Contacts aren’t available in this connection'));
+    const status = within(panel).getByRole('status');
+    expect(status).toHaveTextContent(/your HubSpot plan or user doesn’t include them/);
+    expect(status).toHaveClass('ub-cn-search__status--warning');
+    expect(within(panel).getByRole('button', { name: 'Reconnect to grant access' })).toBeInTheDocument();
+    // The way out: keep designing with mock data.
+    fireEvent.click(within(panel).getByRole('button', { name: 'Use mock data' }));
+    expect(useLiveData.getState().mode).toBe('mock');
   });
 
   it('shows live-data problems reported by the preview on the chip', () => {

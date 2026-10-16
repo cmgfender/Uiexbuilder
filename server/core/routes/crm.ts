@@ -76,6 +76,31 @@ function truthy(value: string | null): boolean {
   return value === '1' || value === 'true' || value === 'yes';
 }
 
+/**
+ * `formatted` of a request: true (every property), a list of property names (only those, like
+ * HubSpot's `propertiesToFormat: ['dealstage']`) or false.
+ */
+export type FormatSelection = boolean | string[];
+
+/** `?formatted=1` → true; `?formatted=dealstage,amount` → ['dealstage', 'amount']; else false. */
+export function formatParam(value: string | null): FormatSelection {
+  if (value === null || value === '') return false;
+  if (truthy(value)) return true;
+  const list = value
+    .split(',')
+    .map((p) => p.trim())
+    .filter((p) => /^[A-Za-z0-9_.-]{1,100}$/.test(p));
+  return list.length ? list.slice(0, 200) : false;
+}
+
+/** Formats the selected properties (all when true). */
+function applyFormat(props: Record<string, string | null>, defs: Map<string, CrmPropertyDef> | null, selection: FormatSelection): Record<string, string | null> {
+  if (!defs || selection === false) return props;
+  if (selection === true) return formatProperties(props, defs);
+  const only = new Map([...defs].filter(([name]) => selection.includes(name)));
+  return formatProperties(props, only);
+}
+
 function pick(props: Record<string, string | null | undefined> | undefined, names: string[]): Record<string, string | null> {
   const out: Record<string, string | null> = {};
   for (const n of names) out[n] = props?.[n] ?? null;
@@ -298,7 +323,7 @@ function primitive(v: unknown, what: string): string | number | boolean {
 }
 
 /** Validate a CrmSearchRequestDTO and build the HubSpot search body. */
-export function buildSearchBody(input: unknown): { body: Record<string, unknown>; properties: string[]; formatted: boolean } {
+export function buildSearchBody(input: unknown): { body: Record<string, unknown>; properties: string[]; formatted: FormatSelection } {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw badRequest('The search request must be a JSON object.');
   const req = input as CrmSearchRequestDTO;
   const body: Record<string, unknown> = {};
@@ -355,7 +380,10 @@ export function buildSearchBody(input: unknown): { body: Record<string, unknown>
     if (typeof req.after !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(req.after)) throw badRequest('"after" is not a valid paging token.');
     body.after = req.after;
   }
-  return { body, properties, formatted: req.formatted === true };
+  let formatted: FormatSelection = req.formatted === true;
+  if (Array.isArray(req.formatted)) formatted = parsePropertyList(req.formatted.map((p) => assertPropertyName(p)));
+  if (Array.isArray(formatted) && formatted.length === 0) formatted = false;
+  return { body, properties, formatted };
 }
 
 interface HsSearchResponse {
@@ -474,7 +502,7 @@ export function crmRoutes(): Route[] {
     handler: async (ctx) => {
       const id = assertRecordId(ctx.params.id);
       const requested = propertiesParam(ctx);
-      const formatted = truthy(ctx.url.searchParams.get('formatted'));
+      const formatted = formatParam(ctx.url.searchParams.get('formatted'));
       const crm = await CrmContext.create(ctx);
       const t = await crm.resolver.resolve(ctx.params.objectType);
       const [obj, defs] = await Promise.all([
@@ -485,7 +513,7 @@ export function crmRoutes(): Route[] {
       ]);
       let props = normalizeProps(obj?.properties);
       for (const name of requested) if (!(name in props)) props[name] = null;
-      if (defs) props = formatProperties(props, defs);
+      props = applyFormat(props, defs, formatted);
       const body: CrmRecord = { id: String(obj?.id ?? id), objectType: t.objectType, objectTypeId: t.objectTypeId, properties: props };
       return json(body);
     },
@@ -498,7 +526,7 @@ export function crmRoutes(): Route[] {
       const id = assertRecordId(ctx.params.id);
       const requested = propertiesParam(ctx);
       const limit = clampInt(ctx.url.searchParams.get('limit') ?? ctx.url.searchParams.get('pageLength'), 1, 500, 100);
-      const formatted = truthy(ctx.url.searchParams.get('formatted'));
+      const formatted = formatParam(ctx.url.searchParams.get('formatted'));
       const crm = await CrmContext.create(ctx);
       const [from, to] = await Promise.all([crm.resolver.resolve(ctx.params.objectType), crm.resolver.resolve(ctx.params.toObjectType)]);
       const res = await crm.api.request<{
@@ -519,8 +547,7 @@ export function crmRoutes(): Route[] {
         ]);
         for (const batch of batches) {
           for (const obj of batch?.results ?? []) {
-            let props = pick(normalizeProps(obj.properties), requested);
-            if (defs) props = formatProperties(props, defs);
+            const props = applyFormat(pick(normalizeProps(obj.properties), requested), defs, formatted);
             propsById.set(String(obj.id), props);
           }
         }
@@ -550,7 +577,7 @@ export function crmRoutes(): Route[] {
       const out: CrmSearchResponseDTO = {
         results: (res?.results ?? []).map((o) => {
           const props = normalizeProps(o.properties);
-          return { objectId: Number(o.id), properties: defs ? formatProperties(props, defs) : props };
+          return { objectId: Number(o.id), properties: applyFormat(props, defs, formatted) };
         }),
         total: typeof res?.total === 'number' ? res.total : (res?.results ?? []).length,
         hasMore: Boolean(after),

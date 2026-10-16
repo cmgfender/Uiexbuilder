@@ -50,9 +50,18 @@ function Breadcrumbs() {
   const crumbs: Crumb[] = key ? (JSON.parse(key) as Crumb[]) : [];
   const listRef = useRef<HTMLOListElement>(null);
   useEffect(() => {
-    // Keep the selected (last) crumb visible when the trail is long.
+    // Keep the selected (last) crumb visible when the trail is long, and fade the cut-off start
+    // (rather than slicing a word in half) while it doesn't fit.
     const el = listRef.current;
-    if (el) el.scrollLeft = el.scrollWidth;
+    if (!el) return;
+    const update = () => {
+      el.scrollLeft = el.scrollWidth;
+      el.toggleAttribute('data-overflow', el.scrollWidth > el.clientWidth + 1);
+    };
+    update();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null;
+    ro?.observe(el);
+    return () => ro?.disconnect();
   }, [key]);
 
   return (

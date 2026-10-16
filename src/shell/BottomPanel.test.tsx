@@ -73,7 +73,7 @@ describe('<BottomPanel>', () => {
     expect(screen.queryByRole('tabpanel')).toBeNull();
     fireEvent.click(screen.getByRole('tab', { name: /Problems/ }));
     expect(useEditor.getState().bottomPanel).toBe('problems');
-    expect(screen.getByText('No problems — ready to export')).toBeInTheDocument();
+    expect(screen.getByText('No problems — ready to publish')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Hide panel/ }));
     expect(useEditor.getState().bottomPanel).toBeNull();
   });

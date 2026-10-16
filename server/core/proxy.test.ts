@@ -1,8 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
 import { createTestEnv, type TestEnv } from './testing';
-import { checkHostname, checkProxyUrl, isBlockedIPv4, isBlockedIPv6 } from './ssrf';
-import { sanitizeRequestHeaders, validateProxyRequest, PROXY_MAX_RESPONSE_BYTES } from './routes/proxy';
+import { BlockedAddressError, addressBlocked, checkHostname, checkProxyUrl, isBlockedIPv4, isBlockedIPv6, isLoopbackAddress } from './ssrf';
+import { devLocalAllowed, sanitizeRequestHeaders, validateProxyRequest, PROXY_MAX_RESPONSE_BYTES } from './routes/proxy';
+import { RATE_RULES } from './rateLimit';
 import type { ProxyFetchResponse } from '../../src/connect/types';
 
 describe('SSRF guard', () => {
@@ -64,6 +65,52 @@ describe('SSRF guard', () => {
     expect(checkProxyUrl('http://example.com/', dev).ok).toBe(false);
     expect(checkProxyUrl('https://10.0.0.1/', dev).ok).toBe(false);
     expect(checkProxyUrl('https://169.254.169.254/', dev).ok).toBe(false);
+  });
+
+  it('blocks IPv6 outside global unicast and its special ranges (NAT64, IPv4-translated, Teredo, 6to4, docs)', () => {
+    for (const bad of [
+      'https://[64:ff9b:1::a00:1]/', // local-use NAT64 for 10.0.0.1
+      'https://[64:ff9b::808:808]/', // well-known NAT64 (even of a public address)
+      'https://[::ffff:0:a00:1]/', // IPv4-translated 10.0.0.1
+      'https://[2001:0:4136:e378:8000:63bf:3fff:fdd2]/', // Teredo
+      'https://[2001:2::1]/', // benchmarking
+      'https://[2001:10::1]/', // ORCHID
+      'https://[2001:db8::1]/', // documentation
+      'https://[2002:808:808::1]/', // 6to4
+      'https://[3fff::1]/', // documentation (RFC 9637)
+      'https://[100::1]/', // discard-only
+      'https://[::a00:1]/', // IPv4-compatible
+    ]) {
+      expect(checkProxyUrl(bad, prod).ok, bad).toBe(false);
+    }
+    expect(checkProxyUrl('https://[2606:4700:4700::1111]/', prod).ok).toBe(true);
+    expect(checkProxyUrl('https://[::ffff:8.8.8.8]/', prod).ok).toBe(true); // IPv4-mapped public address
+  });
+
+  it("refuses the ports browsers refuse (SMTP, SSH, …) but allows other https ports", () => {
+    for (const port of [22, 25, 53, 110, 143, 587, 6667]) expect(checkProxyUrl(`https://api.example.com:${port}/`, prod).ok, String(port)).toBe(false);
+    expect(checkProxyUrl('https://api.example.com:8443/', prod).ok).toBe(true);
+  });
+
+  it('checks resolved addresses (what the Node guarded fetch connects to)', () => {
+    for (const bad of ['127.0.0.1', '10.0.0.5', '169.254.169.254', '::1', 'fd00::1', '64:ff9b:1::a00:1', '::ffff:10.0.0.1', '::ffff:0:a00:1', 'not-an-ip']) {
+      expect(addressBlocked(bad), bad).toBe(true);
+    }
+    for (const ok of ['8.8.8.8', '2606:4700:4700::1111', '::ffff:8.8.8.8']) expect(addressBlocked(ok), ok).toBe(false);
+    expect(addressBlocked('127.0.0.1', { allowLoopback: true })).toBe(false);
+    expect(addressBlocked('10.0.0.5', { allowLoopback: true })).toBe(true);
+  });
+
+  it('allows loopback targets only for local development with the browser on the same computer', () => {
+    const local = { appUrl: 'http://localhost:5173' };
+    expect(devLocalAllowed(local, '127.0.0.1')).toBe(true);
+    expect(devLocalAllowed(local, '::1')).toBe(true);
+    expect(devLocalAllowed(local, '::ffff:127.0.0.1')).toBe(true);
+    expect(devLocalAllowed(local, '192.168.1.20')).toBe(false); // someone on the same network
+    expect(devLocalAllowed(local, undefined)).toBe(false);
+    expect(devLocalAllowed({ appUrl: 'https://builder.example.com' }, '127.0.0.1')).toBe(false);
+    expect(isLoopbackAddress('127.8.9.10')).toBe(true);
+    expect(isLoopbackAddress('10.0.0.1')).toBe(false);
   });
 
   it('range helpers', () => {
@@ -228,10 +275,47 @@ describe('POST /api/proxy/fetch', () => {
     expect(res.body.error?.message).not.toContain('ENOTFOUND');
   });
 
-  it('allows a local backend during local development', async () => {
+  it('allows a local backend during local development, from a browser on the same computer only', async () => {
     const env = await signedIn(createTestEnv({ env: { APP_URL: 'http://localhost:5173' } }));
     env.setExternalFetch((async () => new Response('local ok')) as typeof fetch);
-    const res = await proxy(env, { url: 'http://localhost:3000/api/data', method: 'GET' });
-    expect(res.body).toMatchObject({ status: 200, body: 'local ok' });
+    const local = await env.call('/api/proxy/fetch', { json: { url: 'http://localhost:3000/api/data', method: 'GET' }, clientIp: '127.0.0.1' });
+    expect(await local.json()).toMatchObject({ status: 200, body: 'local ok' });
+    // The same dev server reached from another machine on the network: no loopback access.
+    const lan = await env.call('/api/proxy/fetch', { json: { url: 'http://127.0.0.1:2375/containers/json', method: 'GET' }, clientIp: '192.168.1.50' });
+    expect(lan.status).toBe(400);
+    expect(((await lan.json()) as { error: { code: string } }).error.code).toBe('url_not_allowed');
+  });
+
+  it('uses ServerConfig.proxyFetch when set and reports names that resolve to private addresses as not allowed', async () => {
+    const calls: Array<{ url: string; allowLoopback: boolean }> = [];
+    const env = await signedIn(
+      createTestEnv({
+        config: {
+          proxyFetch: async (url, init) => {
+            calls.push({ url, allowLoopback: init.allowLoopback });
+            if (url.includes('nip.io')) throw new BlockedAddressError('127.0.0.1.nip.io points to a private or internal network address, which the preview proxy does not reach.');
+            return new Response('public ok');
+          },
+        },
+      }),
+    );
+    expect((await proxy(env, { url: 'https://api.example.com/x', method: 'GET' })).body).toMatchObject({ status: 200, body: 'public ok' });
+    const blocked = await proxy(env, { url: 'https://127.0.0.1.nip.io/', method: 'GET' });
+    expect(blocked.status).toBe(400);
+    expect(blocked.body.error).toMatchObject({ code: 'url_not_allowed' });
+    expect(blocked.body.error?.message).toMatch(/private or internal network/);
+    expect(calls).toEqual([
+      { url: 'https://api.example.com/x', allowLoopback: false },
+      { url: 'https://127.0.0.1.nip.io/', allowLoopback: false },
+    ]);
+  });
+
+  it('is rate limited per signed-in user', async () => {
+    const env = await signedIn();
+    env.setExternalFetch((async () => new Response('ok')) as typeof fetch);
+    for (let i = 0; i < RATE_RULES.proxy.capacity; i++) expect((await proxy(env, { url: 'https://api.example.com/', method: 'GET' })).status).toBe(200);
+    const limited = await proxy(env, { url: 'https://api.example.com/', method: 'GET' });
+    expect(limited.status).toBe(429);
+    expect(limited.body.error?.code).toBe('rate_limited');
   });
 });

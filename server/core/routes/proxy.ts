@@ -3,14 +3,20 @@
  * with ENABLE_FETCH_PROXY, requires a HubSpot sign-in so it is never an anonymous open proxy).
  *
  * Guards: SSRF host checks (ssrf.ts) on the first URL and on every redirect (manual handling, at
- * most 3 hops), timeout ≤ 10 s, response body capped at 1 MB (`truncated: true`), hop-by-hop and
- * Set-Cookie headers stripped. Only headers listed in `request.headers` are sent — the caller's
- * own cookies / authorization are never forwarded.
+ * most 3 hops); on Node every hop goes through ServerConfig.proxyFetch (server/guardedFetch.ts),
+ * which also checks the addresses a name resolves to and connects only to a checked address.
+ * Timeout ≤ 10 s, response body capped at 1 MB (`truncated: true`), hop-by-hop and Set-Cookie
+ * headers stripped. Only headers listed in `request.headers` are sent — the caller's own cookies /
+ * authorization are never forwarded. Rate limited per signed-in user (index.ts).
+ *
+ * http:// and loopback hosts are allowed only in local development: APP_URL on localhost AND the
+ * request coming from a browser on the same computer (RequestContext.clientIp is a loopback
+ * address), so a dev server opened to the network can't be used to reach the developer's machine.
  */
 import { CONNECTOR_ROUTES, type ProxyFetchRequest, type ProxyFetchResponse } from '../../../src/connect/types';
-import type { Route } from '../types';
+import type { ProxyFetchInit, Route, ServerConfig } from '../types';
 import { ConnectorError, badRequest, json, readJsonBody } from '../http';
-import { checkProxyUrl } from '../ssrf';
+import { BlockedAddressError, checkProxyUrl, isLoopbackAddress } from '../ssrf';
 import { isLocalAppUrl } from '../config';
 
 export const PROXY_MAX_TIMEOUT_MS = 10_000;
@@ -123,6 +129,15 @@ export function validateProxyRequest(input: unknown): ProxyFetchRequest & { time
   };
 }
 
+/** Loopback targets only for local development with the browser on the same computer. */
+export function devLocalAllowed(config: Pick<ServerConfig, 'appUrl'>, clientIp: string | undefined): boolean {
+  return isLocalAppUrl(config.appUrl) && isLoopbackAddress(clientIp);
+}
+
+function isBlocked(err: unknown): err is BlockedAddressError {
+  return err instanceof BlockedAddressError || (!!err && typeof err === 'object' && (err as { code?: unknown }).code === 'EUIEX_BLOCKED_ADDRESS');
+}
+
 export function proxyRoutes(): Route[] {
   const route: Route = {
     method: 'POST',
@@ -135,8 +150,12 @@ export function proxyRoutes(): Route[] {
       // Signed-in users only (throws 401 / 503 otherwise).
       await ctx.hubspot();
       const req = validateProxyRequest(await readJsonBody(ctx.request, 1024 * 1024 + 4096));
-      const devLocal = isLocalAppUrl(config.appUrl);
+      const devLocal = devLocalAllowed(config, ctx.clientIp);
       const first = checkProxyUrl(req.url, { devLocal });
+      const send = (target: string, init: ProxyFetchInit): Promise<Response> =>
+        config.proxyFetch
+          ? config.proxyFetch(target, init)
+          : config.fetch(target, { method: init.method, headers: init.headers, body: init.body, redirect: 'manual', signal: init.signal });
       if (!first.ok) throw new ConnectorError(400, 'url_not_allowed', first.reason);
 
       const controller = new AbortController();
@@ -151,8 +170,9 @@ export function proxyRoutes(): Route[] {
         for (let hop = 0; ; hop++) {
           let res: Response;
           try {
-            res = await config.fetch(url.toString(), { method, headers, body, redirect: 'manual', signal: controller.signal });
-          } catch {
+            res = await send(url.toString(), { method, headers: { ...headers }, body, signal: controller.signal, allowLoopback: devLocal });
+          } catch (err) {
+            if (isBlocked(err)) throw new ConnectorError(400, 'url_not_allowed', err instanceof Error ? err.message : 'That address is not allowed.');
             if (controller.signal.aborted) {
               throw new ConnectorError(504, 'timeout', `The URL didn't answer within ${Math.round(req.timeoutMs / 1000)} seconds.`);
             }

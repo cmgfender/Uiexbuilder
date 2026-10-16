@@ -9,7 +9,7 @@
  */
 import type { LucideIcon } from 'lucide-react';
 import { newId, uniqueName } from '../model/ids';
-import type { AppFunction, CardLocation, Extension, ExtensionKind, NodeTemplate, Project, StateVar } from '../model/types';
+import type { AppFunction, CardLocation, DataSource, Extension, ExtensionKind, NodeTemplate, Project, StateVar } from '../model/types';
 
 export interface ExtensionTemplate {
   id: string;
@@ -39,6 +39,18 @@ export interface BlockTemplate {
   state?: Array<Omit<StateVar, 'id'>>;
   /** Extra search words for the blocks gallery. */
   keywords?: string[];
+  /**
+   * Blocks that bring their own data (e.g. "Associated records"): builds the block and the data
+   * sources it reads for the card it goes into (names that don't clash, the card's record type).
+   * `template` is still what the gallery's thumbnail shows. Additive.
+   */
+  create?: (ext: Extension, project: Pick<Project, 'functions'>) => BuiltBlock;
+}
+
+/** A block built for a specific card: its nodes and the data sources they read. */
+export interface BuiltBlock {
+  template: NodeTemplate;
+  dataSources: DataSource[];
 }
 
 export { PROJECT_TEMPLATES } from './projectTemplates';

@@ -54,11 +54,11 @@ beforeEach(() => {
 describe('<ExportDialog> download', () => {
   it('summarises the project and what export adds', () => {
     setup();
-    expect(screen.getByText('No problems found — ready to export.')).toBeInTheDocument();
+    expect(screen.getByText('No problems found — ready to download.')).toBeInTheDocument();
     const project = screen.getByRole('region', { name: 'Project' });
     expect(within(project).getByText('deal-desk')).toBeInTheDocument();
     expect(within(project).getByText('2026.03')).toBeInTheDocument();
-    const exts = screen.getByRole('region', { name: 'Extensions' });
+    const exts = screen.getByRole('region', { name: 'Cards and pages' });
     expect(within(exts).getByText('src/app/cards/DealCard.tsx')).toBeInTheDocument();
     expect(within(exts).getByText('Settings page')).toBeInTheDocument();
     const added = screen.getByRole('region', { name: 'Added automatically' });
@@ -96,7 +96,7 @@ describe('<ExportDialog> download', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('1 error and 1 warning');
     const download = screen.getByRole('button', { name: 'Download project (.zip)' });
     expect(download).toBeDisabled();
-    fireEvent.click(screen.getByLabelText('Export anyway'));
+    fireEvent.click(screen.getByLabelText('Download anyway'));
     expect(download).not.toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Show problems' }));
     expect(useEditor.getState().bottomPanel).toBe('problems');

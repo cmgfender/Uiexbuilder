@@ -110,7 +110,7 @@ export function LeftSidebar() {
   }
 
   return (
-    <aside className="ub-sh-left" aria-label="Components, layers, templates and data">
+    <aside className="ub-sh-left" aria-label="Components, layers, templates and data" data-tour="palette">
       <SidebarResizeHandle side="left" />
       <div className="ub-sh-left-head">
         <Tabs<LeftPanelTab>
@@ -168,7 +168,7 @@ export function RightSidebar() {
     );
   }
   return (
-    <aside className="ub-sh-right" aria-label="Inspector">
+    <aside className="ub-sh-right" aria-label="Inspector" data-tour="inspector">
       <SidebarResizeHandle side="right" />
       <div className="ub-sh-right-body">
         <Inspector />

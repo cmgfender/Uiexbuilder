@@ -96,6 +96,13 @@ export interface CatalogRequestOptions extends RequestOptions {
 
 export type CatalogKind = 'objectTypes' | 'properties' | 'pipelines' | 'owners';
 
+/** `formatted` query value: 1 (all), "a,b" (only those) or nothing. */
+function formattedParam(formatted: boolean | string[] | undefined): string | number | undefined {
+  if (formatted === true) return 1;
+  if (Array.isArray(formatted) && formatted.length) return formatted.join(',');
+  return undefined;
+}
+
 export interface ConnectorClientOptions {
   /** Connector base URL ('' = same origin). Defaults to VITE_CONNECTOR_URL. */
   baseUrl?: string;
@@ -447,21 +454,21 @@ export class ConnectorClient {
     return this.get<CrmRecordSummary[]>(path, { q: q.trim(), limit: opts.limit }, { signal: opts.signal });
   }
 
-  getRecord(objectType: string, id: string, opts: RequestOptions & { properties?: string[]; formatted?: boolean } = {}): Promise<CrmRecord> {
+  getRecord(objectType: string, id: string, opts: RequestOptions & { properties?: string[]; formatted?: boolean | string[] } = {}): Promise<CrmRecord> {
     const path = fill(CONNECTOR_ROUTES.record, { objectType: this.apiObjectType(objectType), id });
-    return this.get<CrmRecord>(path, { properties: opts.properties?.length ? opts.properties.join(',') : undefined, formatted: opts.formatted ? 1 : undefined }, { signal: opts.signal });
+    return this.get<CrmRecord>(path, { properties: opts.properties?.length ? opts.properties.join(',') : undefined, formatted: formattedParam(opts.formatted) }, { signal: opts.signal });
   }
 
   getAssociations(
     objectType: string,
     id: string,
     toObjectType: string,
-    opts: RequestOptions & { properties?: string[]; limit?: number; formatted?: boolean } = {},
+    opts: RequestOptions & { properties?: string[]; limit?: number; formatted?: boolean | string[] } = {},
   ): Promise<AssociationResultDTO[]> {
     const path = fill(CONNECTOR_ROUTES.associations, { objectType: this.apiObjectType(objectType), id, toObjectType: this.apiObjectType(toObjectType) });
     return this.get<AssociationResultDTO[]>(
       path,
-      { properties: opts.properties?.length ? opts.properties.join(',') : undefined, limit: opts.limit, formatted: opts.formatted ? 1 : undefined },
+      { properties: opts.properties?.length ? opts.properties.join(',') : undefined, limit: opts.limit, formatted: formattedParam(opts.formatted) },
       { signal: opts.signal },
     );
   }

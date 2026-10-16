@@ -11,8 +11,11 @@ import {
   computedValue,
   CURRENT_RECORD_CONTEXT,
   dataSource,
+  DEAL_ROW_PROPERTIES,
+  DEAL_STAGE_FORMAT,
   dealStageLabel,
   dealStageVariant,
+  wonCount,
   makeExtension,
   mockRecord,
   money,
@@ -30,14 +33,14 @@ import type { NodeTemplate } from '../model/types';
 const LIFECYCLE_LABEL =
   "new Map([['subscriber', 'Subscriber'], ['lead', 'Lead'], ['marketingqualifiedlead', 'Marketing qualified lead'], " +
   "['salesqualifiedlead', 'Sales qualified lead'], ['opportunity', 'Opportunity'], ['customer', 'Customer'], " +
-  "['evangelist', 'Evangelist'], ['other', 'Other']]).get(contact.lifecyclestage) || 'No lifecycle stage'";
+  "['evangelist', 'Evangelist'], ['other', 'Other']]).get(contact.lifecyclestage) || contact.lifecyclestage || 'No lifecycle stage'";
 const LIFECYCLE_VARIANT =
   "contact.lifecyclestage === 'customer' || contact.lifecyclestage === 'evangelist' ? 'success' : " +
   "contact.lifecyclestage === 'opportunity' ? 'warning' : contact.lifecyclestage ? 'info' : 'default'";
 const LEAD_STATUS_LABEL =
   "new Map([['NEW', 'New'], ['OPEN', 'Open'], ['IN_PROGRESS', 'In progress'], ['OPEN_DEAL', 'Open deal'], " +
   "['UNQUALIFIED', 'Unqualified'], ['ATTEMPTED_TO_CONTACT', 'Attempted to contact'], ['CONNECTED', 'Connected'], " +
-  "['BAD_TIMING', 'Bad timing']]).get(contact.hs_lead_status) || '—'";
+  "['BAD_TIMING', 'Bad timing']]).get(contact.hs_lead_status) || contact.hs_lead_status || '—'";
 const PRIORITY_LABEL =
   "new Map([['URGENT', 'Urgent'], ['HIGH', 'High priority'], ['MEDIUM', 'Medium priority'], ['LOW', 'Low priority']])" +
   ".get(ticket.hs_ticket_priority) || 'No priority'";
@@ -71,7 +74,7 @@ function dealsTable(items: string, itemName: string, key: string, dateProp: stri
               t.cell(`{{ ${itemName}.properties.dealname || 'Untitled deal' }}`),
               t.cell({
                 type: 'Tag',
-                props: { variant: { $expr: dealStageVariant(`${itemName}.properties.dealstage`) } },
+                props: { variant: { $expr: dealStageVariant(`${itemName}.properties`) } },
                 text: `{{ ${dealStageLabel(`${itemName}.properties.dealstage`)} }}`,
               }),
               t.cell(`{{ ${shortDate(`${itemName}.properties.${dateProp}`)} }}`),
@@ -166,6 +169,16 @@ export const PROJECT_TEMPLATES: ExtensionTemplate[] = [
         location: 'crm.record.tab',
         objectTypes: ['contacts'],
         dataSources: [contact],
+        // Named values keep the card readable: clicking the name shows {{ fullName }}, not the
+        // expression behind it (Data › Computed has the details).
+        computed: [
+          computedValue('fullName', "[contact.firstname, contact.lastname].filter(Boolean).join(' ') || 'Unnamed contact'", 'First and last name'),
+          computedValue('jobLine', "[contact.jobtitle, contact.company].filter(Boolean).join(' at ') || 'No job title yet'", 'Job title and company'),
+          computedValue('lifecycleStage', LIFECYCLE_LABEL, 'Lifecycle stage label'),
+          computedValue('lifecycleColor', LIFECYCLE_VARIANT, 'Status tag color for the lifecycle stage'),
+          computedValue('leadStatus', LEAD_STATUS_LABEL, 'Lead status label'),
+          computedValue('cityAndCountry', "[contact.city, contact.country].filter(Boolean).join(', ') || '—'", 'City and country'),
+        ],
         content: [
           t.column(
             [
@@ -173,12 +186,12 @@ export const PROJECT_TEMPLATES: ExtensionTemplate[] = [
                 [
                   t.column(
                     [
-                      t.heading("{{ [contact.firstname, contact.lastname].filter(Boolean).join(' ') || 'Unnamed contact' }}", { name: 'Full name' }),
-                      t.micro("{{ [contact.jobtitle, contact.company].filter(Boolean).join(' at ') || 'No job title yet' }}"),
+                      t.heading('{{ fullName }}', { name: 'Full name' }),
+                      t.micro('{{ jobLine }}', { name: 'Job title' }),
                     ],
                     'flush',
                   ),
-                  { type: 'StatusTag', name: 'Lifecycle stage', props: { variant: { $expr: LIFECYCLE_VARIANT } }, text: `{{ ${LIFECYCLE_LABEL} }}` },
+                  { type: 'StatusTag', name: 'Lifecycle stage', props: { variant: { $expr: 'lifecycleColor' } }, text: '{{ lifecycleStage }}' },
                 ],
                 { justify: 'between', align: 'start' },
               ),
@@ -188,8 +201,8 @@ export const PROJECT_TEMPLATES: ExtensionTemplate[] = [
                 children: [
                   t.item('Email', { type: 'Link', props: { href: 'mailto:{{ contact.email }}' }, text: "{{ contact.email || '—' }}" }),
                   t.item('Phone', "{{ contact.phone || '—' }}"),
-                  t.item('Lead status', `{{ ${LEAD_STATUS_LABEL} }}`),
-                  t.item('Location', "{{ [contact.city, contact.country].filter(Boolean).join(', ') || '—' }}"),
+                  t.item('Lead status', '{{ leadStatus }}'),
+                  t.item('Location', '{{ cityAndCountry }}'),
                 ],
               },
               {
@@ -487,8 +500,9 @@ export const PROJECT_TEMPLATES: ExtensionTemplate[] = [
         kind: 'associations',
         name: 'deals',
         toObjectType: '0-3',
-        properties: ['dealname', 'amount', 'dealstage', 'closedate'],
+        properties: [...DEAL_ROW_PROPERTIES, 'closedate'],
         pageLength: 25,
+        formatted: [...DEAL_STAGE_FORMAT],
       });
       return makeExtension({
         existing,
@@ -499,7 +513,7 @@ export const PROJECT_TEMPLATES: ExtensionTemplate[] = [
         dataSources: [deals],
         computed: [
           computedValue('totalValue', sumAmounts('deals'), 'Sum of all deal amounts'),
-          computedValue('wonDeals', "deals.filter((d) => d.properties.dealstage === 'closedwon').length", 'Number of closed won deals'),
+          computedValue('wonDeals', wonCount('deals'), 'Number of closed won deals (any pipeline)'),
         ],
         mock: (m) => mockRecord(m, '0-2', 2201, { name: 'Analytical Engines Ltd', domain: 'analytical.example' }),
         content: [
@@ -1381,10 +1395,11 @@ export const PROJECT_TEMPLATES: ExtensionTemplate[] = [
         kind: 'crmSearch',
         name: 'recentDeals',
         objectType: 'deals',
-        properties: ['dealname', 'amount', 'dealstage', 'createdate'],
+        properties: [...DEAL_ROW_PROPERTIES, 'createdate'],
         filters: [],
         sorts: [{ propertyName: 'createdate', direction: 'DESCENDING' }],
         pageLength: 10,
+        formatted: [...DEAL_STAGE_FORMAT],
       });
       return makeExtension({
         existing,
@@ -1402,7 +1417,7 @@ export const PROJECT_TEMPLATES: ExtensionTemplate[] = [
                 children: [
                   t.stat('New deals', '{{ recentDeals.length }}'),
                   t.stat('Pipeline value', `{{ ${money('pipelineValue')} }}`),
-                  t.stat('Closed won', "{{ recentDeals.filter((d) => d.properties.dealstage === 'closedwon').length }}"),
+                  t.stat('Closed won', `{{ ${wonCount('recentDeals')} }}`),
                 ],
               },
               {

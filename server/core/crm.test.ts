@@ -136,8 +136,8 @@ describe('GET /api/crm/owners', () => {
     const { status, body } = await get('/api/crm/owners');
     expect(status).toBe(200);
     expect(body).toEqual([
-      { id: '101', email: 'jordan.lee@acmedemo.com', firstName: 'Jordan', lastName: 'Lee', userId: 9001 },
-      { id: '102', email: 'sam.rivera@acmedemo.com', firstName: 'Sam', lastName: 'Rivera', userId: 9002 },
+      { id: '101', email: 'sam.rivera@acmedemo.com', firstName: 'Sam', lastName: 'Rivera', userId: 9001 },
+      { id: '102', email: 'morgan.blake@acmedemo.com', firstName: 'Morgan', lastName: 'Blake', userId: 9002 },
       { id: '103', email: 'alex.morgan@acmedemo.com', firstName: 'Alex', lastName: 'Morgan', userId: 9003 },
     ]);
   });
@@ -238,7 +238,17 @@ describe('GET /api/crm/records/:objectType/:id', () => {
       not_a_property: null,
     });
     const deal = await get<CrmRecord>('/api/crm/records/deals/3001?properties=amount,closedate,dealstage,hubspot_owner_id&formatted=1');
-    expect(deal.body.properties).toMatchObject({ amount: '48,000', closedate: 'Feb 28, 2025, 5:00 PM UTC', dealstage: 'Closed Won (Sales Pipeline)', hubspot_owner_id: 'Jordan Lee' });
+    expect(deal.body.properties).toMatchObject({ amount: '48,000', closedate: 'Feb 28, 2025, 5:00 PM UTC', dealstage: 'Closed Won', hubspot_owner_id: 'Sam Rivera' });
+  });
+
+  it('formats only the listed properties with formatted=a,b (like propertiesToFormat: [...])', async () => {
+    const deal = await get<CrmRecord>('/api/crm/records/deals/3004?properties=amount,dealstage,hs_is_closed_won&formatted=dealstage');
+    // A stage of a custom pipeline gets its label; the amount stays a number.
+    expect(deal.body.properties).toMatchObject({ amount: '36000', dealstage: 'In negotiation', hs_is_closed_won: 'false' });
+    const res = await env.call('/api/crm/search/deals', { method: 'POST', json: { properties: ['dealstage', 'amount'], formatted: ['dealstage'], pageLength: 50 } });
+    const search = (await res.json()) as CrmSearchResponseDTO;
+    const northwind = search.results.find((r) => r.objectId === 3004)!;
+    expect(northwind.properties).toMatchObject({ dealstage: 'In negotiation', amount: '36000' });
   });
 
   it('accepts repeated properties params and custom objects', async () => {

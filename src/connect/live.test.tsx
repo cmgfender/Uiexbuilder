@@ -155,8 +155,16 @@ describe('useLiveData: per-project selection', () => {
 
   it('describes problems in plain language', () => {
     useLiveData.getState().reportError(new ConnectorError({ code: 'missing_scope', status: 403, message: 'x', requiredScopes: ['tickets'] }));
-    expect(useLiveData.getState().error).toMatchObject({ code: 'missing_scope', title: 'Permission needed', action: 'reconnect', requiredScopes: ['tickets'] });
-    expect(useLiveData.getState().error?.message).toMatch(/See tickets/);
+    expect(useLiveData.getState().error).toMatchObject({
+      code: 'missing_scope',
+      title: 'Tickets aren’t available in this connection',
+      action: 'reconnect',
+      tone: 'warning',
+      offerMock: true,
+      requiredScopes: ['tickets'],
+    });
+    expect(useLiveData.getState().error?.message).toMatch(/your HubSpot plan or user doesn’t include them/);
+    expect(useLiveData.getState().error?.message).not.toMatch(/allow “See/);
     useLiveData.getState().reportError(new DOMException('aborted', 'AbortError'));
     expect(useLiveData.getState().error?.code).toBe('missing_scope');
   });

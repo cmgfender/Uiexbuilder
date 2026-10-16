@@ -142,6 +142,7 @@ function apiEnv(fileEnv, fakeUrl) {
       'ENABLE_FETCH_PROXY',
       'ENABLE_DEPLOY',
       'ALLOWED_ORIGINS',
+      'ALLOWED_PORTALS',
     ]) {
       if (fileEnv[key] !== undefined && process.env[key] === undefined) env[key] = fileEnv[key];
     }

@@ -159,7 +159,7 @@ export function ProjectsDialog({ open, onClose }: DialogComponentProps) {
                     {current && <Badge tone="select">Current</Badge>}
                   </span>
                   <span className="ub-pn-muted">
-                    <code>{p.name}</code> · {p.extensionCount} extension{p.extensionCount === 1 ? '' : 's'} · updated{' '}
+                    <code>{p.name}</code> · {p.extensionCount} {p.extensionCount === 1 ? 'card or page' : 'cards and pages'} · updated{' '}
                     <time dateTime={p.updatedAt} title={new Date(p.updatedAt).toLocaleString()}>
                       {formatRelativeTime(p.updatedAt)}
                     </time>

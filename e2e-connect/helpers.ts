@@ -17,7 +17,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const PORTAL_ID = 12345678;
 export const HUB_DOMAIN = 'acmedemo.com';
 /** The fake's demo personal access key (server/fake-hubspot/handler.ts FAKE_PERSONAL_ACCESS_KEY). */
-export const DEMO_ACCESS_KEY = 'pat-na1-fake0000-0000-4000-8000-000000000001';
+export const DEMO_ACCESS_KEY = 'CiRuYTEtZmFrZS1kZW1vLWtleS1hY21lZGVtby0wMDAwMDAwMRIYdWlleC1kZW1vLWZha2UtcGFrLTAwMDAwMQ';
 
 export const topBar = (page: Page): Locator => page.getByRole('banner', { name: 'Editor top bar' });
 export const connectButton = (page: Page): Locator => topBar(page).getByRole('button', { name: 'Connect HubSpot' });
@@ -82,7 +82,48 @@ export async function disconnectHubSpot(page: Page): Promise<void> {
  * `deals`. Built with the real model code, so it always matches the current document format.
  */
 export async function liveContactDocument(): Promise<{ name: string; mimeType: string; buffer: Buffer }> {
-  const entry = `
+  return builderDocument(LIVE_CONTACT_ENTRY, 'live-data-demo.uiex.json');
+}
+
+/**
+ * A builder document whose card runs code (an expression with a call), like a file someone sent:
+ * imported, its code is paused until the admin trusts it.
+ */
+export async function codeDocument(): Promise<{ name: string; mimeType: string; buffer: Buffer }> {
+  return builderDocument(
+    `
+    import { createExtension, createProject } from './src/model/factory';
+    import { newId } from './src/model/ids';
+    import { serializeProject } from './src/model/persistence';
+
+    export function make() {
+      const card = createExtension({
+        name: 'Shared Card',
+        objectTypes: ['contacts'],
+        content: [{ type: 'Text', name: 'Full name', text: "Full name: {{ [record.firstname, record.lastname].join(' ') }}" }],
+      });
+      card.dataSources.push({ id: newId('d'), kind: 'crmProperties', name: 'record', properties: ['firstname', 'lastname'] });
+      return serializeProject(createProject('Shared Project', [card]));
+    }
+  `,
+    'shared-project.uiex.json',
+  );
+}
+
+async function builderDocument(entry: string, name: string): Promise<{ name: string; mimeType: string; buffer: Buffer }> {
+  const result = await build({
+    stdin: { contents: entry, resolveDir: ROOT, sourcefile: name.replace(/\.uiex\.json$/, '-fixture.ts'), loader: 'ts' },
+    bundle: true,
+    write: false,
+    format: 'esm',
+    platform: 'node',
+    logLevel: 'warning',
+  });
+  const mod = (await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`)) as { make: () => string };
+  return { name, mimeType: 'application/json', buffer: Buffer.from(mod.make()) };
+}
+
+const LIVE_CONTACT_ENTRY = `
     import { createExtension, createProject } from './src/model/factory';
     import { newId } from './src/model/ids';
     import { serializeProject } from './src/model/persistence';
@@ -131,14 +172,3 @@ export async function liveContactDocument(): Promise<{ name: string; mimeType: s
       return serializeProject(project);
     }
   `;
-  const result = await build({
-    stdin: { contents: entry, resolveDir: ROOT, sourcefile: 'live-contact-fixture.ts', loader: 'ts' },
-    bundle: true,
-    write: false,
-    format: 'esm',
-    platform: 'node',
-    logLevel: 'warning',
-  });
-  const mod = (await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`)) as { make: () => string };
-  return { name: 'live-data-demo.uiex.json', mimeType: 'application/json', buffer: Buffer.from(mod.make()) };
-}

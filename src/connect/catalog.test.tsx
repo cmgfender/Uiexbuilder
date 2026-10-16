@@ -72,7 +72,8 @@ describe('catalog hooks', () => {
     const { result } = renderHook(() => usePropertyCatalog('tickets'));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.properties).toEqual([]);
-    expect(result.current.error).toMatch(/Reconnect HubSpot/);
+    // One line for the field (the picker's full note has the Reconnect / mock data way out).
+    expect(result.current.error).toBe('Tickets aren’t included in this HubSpot connection.');
   });
 
   it('load object types, pipelines and owners', async () => {

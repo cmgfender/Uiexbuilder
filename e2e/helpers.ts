@@ -16,13 +16,20 @@ export function watchConsole(page: Page): ConsoleWatch {
   return watch;
 }
 
-/** Opens the editor on a fresh browser context (empty storage) and dismisses the welcome card. */
+/** The first-run welcome screen (full window, shown on a first visit). */
+export const firstRun = (page: Page): Locator => page.getByTestId('first-run');
+
+/**
+ * Opens the editor on a fresh browser context (empty storage), skipping the first-run welcome with
+ * "I know what I’m doing → open the editor" (remembered, so reloads open the editor directly).
+ */
 export async function openEditor(page: Page): Promise<void> {
   await page.goto('/');
-  await expect(page.getByTestId('canvas')).toBeVisible();
+  await expect(page.getByTestId('canvas')).toBeAttached();
+  const skip = page.getByRole('button', { name: /I know what I’m doing/ });
+  if (await skip.isVisible().catch(() => false)) await skip.click();
+  await expect(firstRun(page)).toHaveCount(0);
   await expect(cardRoot(page)).toBeVisible();
-  const dismiss = page.getByRole('region', { name: 'Welcome' }).getByRole('button', { name: 'Dismiss' });
-  if (await dismiss.isVisible().catch(() => false)) await dismiss.click();
 }
 
 export const cardRoot = (page: Page): Locator => page.getByTestId('card-root');

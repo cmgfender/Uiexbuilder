@@ -20,6 +20,12 @@ export interface LiveDataError {
   code: string;
   requiredScopes?: string[];
   action?: 'reconnect' | 'retry' | 'none';
+  /** Label of the fix button ("Reconnect to grant access" / "Reconnect"). */
+  actionLabel?: string;
+  /** Amber (not included in the connection) vs red. */
+  tone?: 'warning' | 'error';
+  /** Offer "Use mock data". */
+  offerMock?: boolean;
 }
 
 export interface LiveDataState {
@@ -158,7 +164,9 @@ export const useLiveData = create<LiveDataState>()((set, get) => ({
     const code = isConnectorError(err) ? err.code : 'unknown_error';
     const prev = get().error;
     if (prev && prev.code === code && prev.message === d.message) return;
-    set({ error: { title: d.title, message: d.message, code, requiredScopes: d.requiredScopes, action: d.action } });
+    set({
+      error: { title: d.title, message: d.message, code, requiredScopes: d.requiredScopes, action: d.action, actionLabel: d.actionLabel, tone: d.tone, offerMock: d.offerMock },
+    });
   },
 
   clearError: () => {

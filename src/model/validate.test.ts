@@ -839,7 +839,7 @@ describe('requirements', () => {
       ['missing-scope', 'info', 'app.requiredScopes'],
       ['missing-permitted-url', 'info', 'app.permittedUrls.fetch'],
     ]);
-    expect(issues[0].message).toContain('added automatically on export');
+    expect(issues[0].message).toContain('added automatically when you publish or download');
     project.app.requiredScopes.push('crm.objects.deals.read');
     project.app.permittedUrls.fetch.push('https://api.example.com/');
     expect(validateProject(project)).toEqual([]);

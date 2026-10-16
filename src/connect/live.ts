@@ -69,6 +69,9 @@ export function buildLiveAdapter(
         }),
       ),
     search: (objectType, request) => report(client.search(objectType, request)),
+    // Catalog answers are cached by the client; failures here only mean "no labels" (not reported).
+    getPropertyDefinitions: (objectType) => client.properties(objectType),
+    getPipelines: (objectType) => client.pipelines(objectType),
   };
   if (connection.health?.features?.fetchProxy) {
     adapter.proxyFetch = (request) => report(client.proxyFetch(request));

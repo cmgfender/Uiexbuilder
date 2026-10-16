@@ -153,7 +153,7 @@ export function resultsTableBlock(ds: Extract<DataSource, { kind: 'associations'
       },
       {
         type: 'EmptyState',
-        props: { title: nothing, layout: 'vertical' },
+        props: { title: nothing, layout: 'vertical', imageWidth: 120 },
         condition: `${loaded} && ${name}.length === 0`,
         children: [
           text(

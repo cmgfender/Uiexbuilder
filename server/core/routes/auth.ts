@@ -4,7 +4,7 @@
 import { CONNECTOR_ROUTES, type ConnectionInfo, type ConnectorHealth } from '../../../src/connect/types';
 import type { RequestContext, Route } from '../types';
 import { ConnectorError, errorJson, json } from '../http';
-import { type ConfigStatus, notConfiguredMessage, portalAllowed } from '../config';
+import { DEFAULT_APP_BASE, type ConfigStatus, notConfiguredMessage, portalAllowed } from '../config';
 import { CookieSession, sessionSecretUsable } from '../session';
 import { randomToken, timingSafeEqual } from '../crypto';
 import { validateReturnTo } from '../security';
@@ -215,6 +215,7 @@ export function authRoutes(status: ConfigStatus): Route[] {
       if (!config.enableDeploy) body.features.deployUnavailableReason = 'disabled';
       else if (!secretOk) body.features.deployUnavailableReason = 'session_secret';
       if (status.oauthConfigured) body.features.deployNeedsSignIn = true;
+      if (config.hubspotAppBase && config.hubspotAppBase !== DEFAULT_APP_BASE) body.appBase = config.hubspotAppBase;
       return json(body);
     },
   };

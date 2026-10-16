@@ -36,7 +36,7 @@ export function ExtensionsDialog({ open, onClose, arg }: DialogComponentProps) {
     <Dialog
       open={open}
       onClose={onClose}
-      title="Extensions"
+      title="Cards and pages"
       wide
       footer={
         <>
@@ -69,7 +69,7 @@ export function ExtensionsDialog({ open, onClose, arg }: DialogComponentProps) {
         </Button>
       </div>
       <div className="ub-pn-table-wrap">
-        <table className="ub-pn-table" aria-label="Extensions">
+        <table className="ub-pn-table" aria-label="Cards and pages">
           <thead>
             <tr>
               <th scope="col">Name</th>
@@ -252,7 +252,7 @@ function ExtensionRow({
             <CopyPlus size={13} aria-hidden />
           </IconButton>
           <IconButton
-            label={last ? 'A project needs at least one extension' : `Delete ${ext.name}`}
+            label={last ? 'A project needs at least one card or page' : `Delete ${ext.name}`}
             size="sm"
             disabled={last}
             onClick={() => setConfirming(true)}

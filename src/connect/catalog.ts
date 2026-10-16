@@ -84,7 +84,9 @@ function useCatalogResource<T>(kind: CatalogKind, objectType: string | null | un
       (data) => setState({ key, data, loading: false, error: null }),
       (err: unknown) => {
         if (isAbortError(err) || controller.signal.aborted) return;
-        setState({ key, data: null, loading: false, error: describeError(err).message });
+        const d = describeError(err);
+        // Pickers show it in one line under the field.
+        setState({ key, data: null, loading: false, error: d.short ?? d.message });
       },
     );
     return () => controller.abort();

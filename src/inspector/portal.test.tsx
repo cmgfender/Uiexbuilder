@@ -59,7 +59,7 @@ describe('Inspector with a connected HubSpot account', () => {
     fireEvent.keyDown(columns, { key: 'Escape' });
 
     // The object type select lists the account's custom objects.
-    const select = within(row('objectTypeId')).getByRole('combobox', { name: 'Object type ID' });
+    const select = within(row('objectTypeId')).getByRole('combobox', { name: /^(Record type|Associated records)$/ });
     const customGroup = select.querySelector('optgroup[label="Your custom objects"]');
     expect(customGroup).not.toBeNull();
     expect(within(customGroup as HTMLElement).getByRole('option', { name: 'Projects (2-555)' })).toBeInTheDocument();
@@ -184,7 +184,7 @@ describe('Inspector without HubSpot', () => {
     // Without an account, names can't be checked: custom names are fine.
     expect(screen.queryByText(/Not found in your portal/)).toBeNull();
     // No custom objects to offer in the object type select.
-    const select = within(row('objectTypeId')).getByRole('combobox', { name: 'Object type ID' });
+    const select = within(row('objectTypeId')).getByRole('combobox', { name: /^(Record type|Associated records)$/ });
     expect(select.querySelector('optgroup[label="Your custom objects"]')).toBeNull();
   });
 

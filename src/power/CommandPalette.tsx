@@ -31,6 +31,8 @@ export function CommandPalette() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!isPaletteShortcut(e)) return;
+      // A full-window screen (the first-run welcome) owns the keyboard while it is up.
+      if (document.querySelector('[data-uiex-exclusive]')) return;
       // Capture phase: runs before inputs, editors and the shell's shortcut handler.
       e.preventDefault();
       e.stopPropagation();
@@ -94,6 +96,7 @@ function PaletteDialog() {
         template: b.template,
         state: b.state,
         keywords: (b as { keywords?: string[] }).keywords,
+        create: b.create,
       })),
       ...userBlocks.map((b) => ({ id: b.id, name: b.name, template: b.template, state: b.state, user: true })),
     ],

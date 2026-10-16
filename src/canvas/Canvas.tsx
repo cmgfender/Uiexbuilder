@@ -249,7 +249,7 @@ export function applyDrop(payload: DragPayload, target: InsertTarget): NodeId | 
   if (payload.kind === 'new') return st.insertNode(payload.componentType, target);
   if (payload.kind === 'template') {
     // One undo step for the block and any state variables it needs.
-    const res = insertBlock(payload.template, payload.state, payload.label, target);
+    const res = insertBlock(payload.template, payload.state, payload.label, target, payload.dataSources);
     return res.ok ? res.value : null;
   }
   const ok = st.moveNode(payload.nodeId, target);

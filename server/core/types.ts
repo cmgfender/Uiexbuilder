@@ -35,15 +35,28 @@ export interface ServerConfig {
   /**
    * Fetch used by the preview fetch proxy for arbitrary public URLs. The Node adapter passes a
    * DNS-checked fetch (server/guardedFetch.ts) that refuses host names resolving to private
-   * addresses and pins the connection to the checked address. Defaults to `fetch`.
+   * addresses (throwing ssrf.BlockedAddressError) and connects to exactly the address it checked.
+   * Defaults to `fetch` (Edge runtimes have no DNS API, and no private network to reach).
    */
-  proxyFetch?: typeof fetch;
+  proxyFetch?: ProxyFetch;
   /** Clock (tests). Defaults to Date.now. */
   now: () => number;
   version: string;
 }
 
 /** Decrypted contents of the session cookie. Keep small (cookie ≤ 4 KB). */
+/** What the preview fetch proxy hands to ServerConfig.proxyFetch (one hop; redirects are not followed). */
+export interface ProxyFetchInit {
+  method: string;
+  headers: Record<string, string>;
+  body?: string;
+  signal?: AbortSignal;
+  /** Loopback addresses may be reached (local development, browser on the same computer). */
+  allowLoopback: boolean;
+}
+
+export type ProxyFetch = (url: string, init: ProxyFetchInit) => Promise<Response>;
+
 export interface SessionData {
   accessToken: string;
   refreshToken: string;
@@ -102,9 +115,11 @@ export interface RequestContext {
   /**
    * The signed-in session after confirming with HubSpot that the grant is still live when that is
    * due (token about to expire, or not checked for a few minutes). Throws 401 when signed out, 503
-   * when sign-in isn't set up. Optional for backwards compatibility; createConnector provides it.
+   * when sign-in isn't set up. `confirm: true` always asks HubSpot (refreshes the token), e.g.
+   * before a deploy, so a copied cookie of a signed-out session stops working right away.
+   * Optional for backwards compatibility; createConnector provides it.
    */
-  signedIn?: () => Promise<SessionData>;
+  signedIn?: (opts?: { confirm?: boolean }) => Promise<SessionData>;
   /** Client IP address when the hosting adapter knows it (rate limits, local-development checks). */
   clientIp?: string;
 }

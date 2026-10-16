@@ -17,6 +17,7 @@ import {
   requestPathname,
   requestTarget,
   resolveStaticPath,
+  pickClientAddress,
   toWebRequest,
   wantsSpaFallback,
   writeWebResponse,
@@ -353,6 +354,63 @@ describe('static files', () => {
     const big = await raw(base, { method: 'POST', path: '/api/deploy', headers: { 'content-type': 'application/json' }, body: 'x'.repeat(5000) });
     expect(big.status).toBe(413);
     expect(JSON.parse(big.body.toString()).error.code).toBe('payload_too_large');
+  });
+});
+
+describe('client address and access log', () => {
+  it('passes the client address to the connector (last X-Forwarded-For entry behind a proxy) and keeps deploy ids out of the log', async () => {
+    const seen: Array<string | undefined> = [];
+    const lines: string[] = [];
+    const mk = (trustProxy: boolean) =>
+      createServer(
+        createRequestListener({
+          connector: {
+            handle: async (_req, meta) => {
+              seen.push(meta?.clientIp);
+              return new Response('{}', { headers: { 'content-type': 'application/json' } });
+            },
+          },
+          staticRoot: null,
+          origin: 'http://localhost:5173',
+          log: (l) => lines.push(l),
+          trustProxy,
+        }),
+      );
+    const proxied = mk(true);
+    const direct = mk(false);
+    const pBase = await listen(proxied);
+    const dBase = await listen(direct);
+    try {
+      // The client claims 127.0.0.1; the proxy in front appended the real address last.
+      await raw(pBase, { path: '/api/me', headers: { 'x-forwarded-for': '127.0.0.1, 192.168.1.50' } });
+      await raw(pBase, { path: '/api/me' });
+      await raw(dBase, { path: '/api/me', headers: { 'x-forwarded-for': '127.0.0.1' } });
+      expect(seen).toEqual(['192.168.1.50', '127.0.0.1', '127.0.0.1']);
+      await raw(pBase, { path: '/api/deploy/v1.SECRETJOBTOKEN.abc' });
+      await raw(pBase, { path: '/api/deploy/status', method: 'POST' });
+      const log = lines.join('\n');
+      expect(log).not.toContain('SECRETJOBTOKEN');
+      expect(log).toContain('GET /api/deploy/… 200');
+      expect(log).toContain('POST /api/deploy/status 200');
+    } finally {
+      await close(proxied);
+      await close(direct);
+    }
+  });
+});
+
+describe('pickClientAddress', () => {
+  it('believes a loopback X-Forwarded-For only from a proxy on this computer', () => {
+    // The Vite dev proxy (on loopback) forwards a browser on this computer.
+    expect(pickClientAddress('127.0.0.1', '127.0.0.1', true)).toBe('127.0.0.1');
+    expect(pickClientAddress('::1', '::ffff:127.0.0.1', true)).toBe('::1');
+    // A LAN machine talking to the server directly can't claim to be on this computer.
+    expect(pickClientAddress('127.0.0.1', '192.168.1.77', true)).toBe('192.168.1.77');
+    expect(pickClientAddress('203.0.113.9, ::1', '::ffff:10.0.0.5', true)).toBe('10.0.0.5');
+    // Behind a hosting proxy the last entry is the real client.
+    expect(pickClientAddress(['1.2.3.4', '198.51.100.7'], '10.0.0.5', true)).toBe('198.51.100.7');
+    expect(pickClientAddress('198.51.100.7', '10.0.0.5', false)).toBe('10.0.0.5');
+    expect(pickClientAddress(undefined, '::ffff:192.168.1.2', true)).toBe('192.168.1.2');
   });
 });
 

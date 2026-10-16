@@ -166,7 +166,7 @@ describe('connect(): the HubSpot sign-in window', () => {
     expect(open).toHaveBeenCalledTimes(1);
     const [url, name, features] = open.mock.calls[0] as unknown as [string, string, string];
     expect(url).toBe(`/api/auth/start?returnTo=${encodeURIComponent(ORIGIN)}&mode=popup`);
-    expect(name).toBe('uiex-hubspot-connect');
+    expect(name).toMatch(/^uiex-hubspot-connect-\d+$/);
     expect(features).toMatch(/popup=yes,width=560,height=720,left=\d+,top=\d+/);
 
     // A message from another origin is ignored.
@@ -251,6 +251,66 @@ describe('connect(): the HubSpot sign-in window', () => {
     expect(useConnection.getState().status).toBe('connected');
   });
 
+  it('stops waiting for a cut-off window after a minute without a result (instead of five)', async () => {
+    await ready();
+    vi.useFakeTimers();
+    const popup = fakePopup();
+    connectEnv.open = () => popup as unknown as Window;
+    const done = useConnection.getState().connect();
+    popup.closed = true;
+    await vi.advanceTimersByTimeAsync(CONNECT_TIMINGS.cutOffGiveUpMs - CONNECT_TIMINGS.waitPollMs);
+    expect(useConnection.getState().status).toBe('connecting');
+    await vi.advanceTimersByTimeAsync(CONNECT_TIMINGS.waitPollMs * 2 + CONNECT_TIMINGS.popupPollMs);
+    await done;
+    expect(useConnection.getState().status).toBe('disconnected');
+    expect(useConnection.getState().errorCode).toBe('popup_closed');
+    expect(CONNECT_TIMINGS.cutOffGiveUpMs).toBeLessThanOrEqual(60_000);
+  });
+
+  it('checks again as soon as the builder window regains focus while waiting for a cut-off window', async () => {
+    let signedIn = false;
+    const r = await ready(() => json(signedIn ? connectedInfo() : { connected: false }));
+    vi.useFakeTimers();
+    const popup = fakePopup();
+    connectEnv.open = () => popup as unknown as Window;
+    const done = useConnection.getState().connect();
+    popup.closed = true;
+    await vi.advanceTimersByTimeAsync(CONNECT_TIMINGS.popupPollMs * 2);
+    const before = r.calls.filter((c) => c.path === '/api/me').length;
+    signedIn = true;
+    window.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(CONNECT_TIMINGS.popupPollMs);
+    await done;
+    expect(useConnection.getState().status).toBe('connected');
+    expect(r.calls.filter((c) => c.path === '/api/me').length).toBe(before + 1);
+  });
+
+  it('"Start again" closes the stuck window and opens a fresh one', async () => {
+    let signedIn = false;
+    await ready(() => json(signedIn ? connectedInfo() : { connected: false }));
+    const first = fakePopup();
+    const second = fakePopup();
+    const names: string[] = [];
+    const windows = [first, second];
+    connectEnv.open = (_url, name) => {
+      names.push(name);
+      return windows.shift() as unknown as Window;
+    };
+    void useConnection.getState().connect();
+    expect(useConnection.getState().connectingSince).not.toBeNull();
+    const again = useConnection.getState().restartConnect();
+    expect(first.closed).toBe(true);
+    expect(second.closed).toBe(false);
+    expect(new Set(names).size).toBe(2); // never the same window name (it would reuse the old window)
+    await Promise.resolve();
+    expect(useConnection.getState().status).toBe('connecting');
+    signedIn = true;
+    postAuth({ ok: true });
+    await again;
+    expect(useConnection.getState().status).toBe('connected');
+    expect(useConnection.getState().connectingSince).toBeNull();
+  });
+
   it('gives up after the timeout', async () => {
     await ready();
     vi.useFakeTimers();
@@ -287,6 +347,51 @@ describe('connect(): the HubSpot sign-in window', () => {
     await useConnection.getState().connect();
     expect(open).not.toHaveBeenCalled();
     expect(useConnection.getState().status).toBe('not-configured');
+  });
+});
+
+describe('notices (toasts)', () => {
+  it('reports connected, disconnected and an expired sign-in once each', async () => {
+    let me: Response | (() => Response) = () => json({ connected: false });
+    setup({ 'GET /api/health': () => json(healthFixture()), 'GET /api/me': () => (typeof me === 'function' ? me() : me), 'POST /api/auth/logout': () => json({ ok: true }) });
+    await useConnection.getState().init();
+    expect(useConnection.getState().notice).toBeNull();
+    const popup = fakePopup();
+    connectEnv.open = () => popup as unknown as Window;
+    me = () => json(connectedInfo());
+    const done = useConnection.getState().connect();
+    postAuth({ ok: true });
+    await done;
+    expect(useConnection.getState().notice).toMatchObject({ kind: 'connected', account: 'acme.com' });
+    await useConnection.getState().disconnect();
+    expect(useConnection.getState().notice).toMatchObject({ kind: 'disconnected' });
+
+    // Signed in again, then the sign-in expires while working (seen on a focus re-check).
+    me = () => json(connectedInfo());
+    await useConnection.getState().refresh();
+    expect(useConnection.getState().status).toBe('connected');
+    const id = useConnection.getState().notice?.id;
+    me = () => json({ connected: false, reason: 'expired' });
+    await useConnection.getState().refresh();
+    expect(useConnection.getState().notice).toMatchObject({ kind: 'expired' });
+    expect(useConnection.getState().notice?.id).not.toBe(id);
+  });
+
+  it('keeps the health details the builder explains (deploy reason, missing settings, HubSpot address)', async () => {
+    setup({
+      'GET /api/health': () =>
+        json({
+          ...healthFixture({ oauthConfigured: false }),
+          features: { crm: false, fetchProxy: false, deploy: false, deployUnavailableReason: 'session_secret' },
+          missingSettings: ['HUBSPOT_CLIENT_ID', 'bad name!'],
+          appBase: 'http://localhost:4011/',
+        }),
+    });
+    await useConnection.getState().init();
+    const h = useConnection.getState().health!;
+    expect(h.features.deployUnavailableReason).toBe('session_secret');
+    expect(h.missingSettings).toEqual(['HUBSPOT_CLIENT_ID']);
+    expect(h.appBase).toBe('http://localhost:4011');
   });
 });
 

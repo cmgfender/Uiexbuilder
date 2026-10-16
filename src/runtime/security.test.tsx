@@ -8,7 +8,18 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createExtension, createProject } from '../model/factory';
 import { loadSavedProject, parseProjectJson, saveProject, serializeProject } from '../model/persistence';
 import { useEditor } from '../model/store';
-import { codeExecutionAllowed, isProjectTrusted, resetCodeTrustForTests, setActiveCodeProject, trustProject } from '../model/trust';
+import {
+  codeExecutionAllowed,
+  codeTrustState,
+  copyCodeTrust,
+  isProjectTrusted,
+  resetCodeTrustForTests,
+  restoreCodeTrust,
+  setActiveCodeProject,
+  setHubSpotAccess,
+  snapshotCodeTrust,
+  trustProject,
+} from '../model/trust';
 import type { Project } from '../model/types';
 import { CODE_PAUSED_MESSAGE, evaluate, runStatements } from './expr';
 import { guardLoops, LOOP_STOPPED_MESSAGE } from './loopGuard';
@@ -85,6 +96,62 @@ describe('untrusted (imported) projects', () => {
     });
     expect(calls.length).toBeGreaterThan(0);
     expect(screen.queryByRole('region', { name: 'Paused code' })).toBeNull();
+  });
+
+  it('with HubSpot connected, says trusted code can read HubSpot data before running it', async () => {
+    setHubSpotAccess(true);
+    const parsed = parseProjectJson(serializeProject(hostileProject()));
+    if (!parsed.ok) throw new Error(parsed.error);
+    const project = parsed.project;
+    useEditor.getState().loadProject(project);
+    const ext = project.extensions[0];
+    renderDoc(project, ext, { mode: 'preview' });
+    const notice = screen.getByRole('region', { name: 'Paused code' });
+    expect(notice).toHaveTextContent(/could read the contacts, companies, deals and other records your connection can see, and send them to someone else/);
+    await userEvent.click(screen.getByRole('button', { name: 'Trust it with my HubSpot data' }));
+    expect(codeTrustState(project.id)).toBe('trusted');
+    expect(screen.queryByRole('region', { name: 'Paused code' })).toBeNull();
+  });
+
+  it('asks again once HubSpot is connected when the code was trusted without it', async () => {
+    const parsed = parseProjectJson(serializeProject(hostileProject()));
+    if (!parsed.ok) throw new Error(parsed.error);
+    const project = parsed.project;
+    useEditor.getState().loadProject(project);
+    const ext = project.extensions[0];
+    renderDoc(project, ext, { mode: 'preview' });
+    expect(screen.getByRole('region', { name: 'Paused code' })).toHaveTextContent(/If you connect HubSpot, it could also read your HubSpot data/);
+    await userEvent.click(screen.getByRole('button', { name: 'Trust and run code' }));
+    expect(codeExecutionAllowed()).toBe(true);
+
+    // Connecting HubSpot pauses it again until the person confirms with the HubSpot warning.
+    act(() => setHubSpotAccess(true));
+    expect(codeTrustState(project.id)).toBe('needs-hubspot-confirmation');
+    expect(codeExecutionAllowed()).toBe(false);
+    expect(evaluate(beacon('later'), {})).toMatchObject({ ok: false, blocked: true });
+    const notice = screen.getByRole('region', { name: 'Paused code' });
+    expect(notice).toHaveTextContent('HubSpot is connected: confirm this imported project’s code');
+    await userEvent.click(screen.getByRole('button', { name: 'Trust it with my HubSpot data' }));
+    expect(codeExecutionAllowed()).toBe(true);
+    // Remembered: disconnecting and connecting again doesn't ask a third time.
+    act(() => setHubSpotAccess(false));
+    act(() => setHubSpotAccess(true));
+    expect(codeTrustState(project.id)).toBe('trusted');
+  });
+
+  it('projects made in this browser never need the HubSpot confirmation; copies keep their provenance', () => {
+    const own = createProject('Mine', [createExtension({ name: 'Card' })]);
+    setHubSpotAccess(true);
+    expect(codeTrustState(own.id)).toBe('trusted');
+    const parsed = parseProjectJson(serializeProject(hostileProject()));
+    if (!parsed.ok) throw new Error(parsed.error);
+    copyCodeTrust(parsed.project.id, 'p_copy');
+    expect(codeTrustState('p_copy')).toBe('untrusted');
+    const snap = snapshotCodeTrust(own.id);
+    parseProjectJson(serializeProject(own)); // the same id arrives from a file…
+    expect(codeTrustState(own.id)).toBe('untrusted');
+    restoreCodeTrust(snap); // …and the import is cancelled
+    expect(codeTrustState(own.id)).toBe('trusted');
   });
 
   it('stays untrusted after saving and reloading', () => {

@@ -16,7 +16,7 @@ export * from './types';
 export { useOwners } from './catalog';
 export { ConnectorClient, ConnectorError, getConnectorClient, setConnectorClient, isConnectorError, isAbortError } from './client';
 export type { ConnectorClientOptions, RequestOptions, CatalogRequestOptions } from './client';
-export { describeError, describeAuthResult, scopeLabel, scopeList } from './describe';
+export { describeError, describeAuthResult, scopeLabel, scopeList, isMissingAccessMessage } from './describe';
 export type { FriendlyError } from './describe';
 export { canonicalObjectType, findStandardType, findObjectTypeInfo, objectTypeLabel, objectTypeIdOf, sameObjectType } from './objectTypes';
 export { useLiveData, LIVE_DATA_KEY_PREFIX } from './records';

@@ -4,6 +4,7 @@ import {
   PORTAL_ID,
   accountChip,
   cardRoot,
+  codeDocument,
   connectButton,
   connectHubSpot,
   disconnectHubSpot,
@@ -32,8 +33,10 @@ async function pickSampleContact(page: Page, query: string, name: string, screen
   await previewData(page).getByRole('button', { name: /Live/ }).click();
   const chip = page.getByRole('button', { name: 'Pick a sample record to preview with real data' });
   await expect(chip).toBeVisible();
-  await chip.click();
+  await expect(chip).toContainText('mock values until then');
+  // Choosing Live data on a card without a sample record opens the record picker by itself.
   const picker = page.getByRole('dialog', { name: 'Sample record' });
+  await expect(picker).toBeVisible();
   const search = picker.getByRole('combobox', { name: 'Find a contact' });
   await expect(search).toBeFocused();
   // Without a query it lists recently updated contacts from the portal.
@@ -53,13 +56,15 @@ test.describe('Connect HubSpot (fake portal)', () => {
     await openEditor(page);
     await expect(connectButton(page)).toBeVisible();
     await connectHubSpot(page, { screenshots: true });
+    // A short note says what to do next.
+    await expect(page.getByText(`Connected to ${HUB_DOMAIN}. Pick a sample record above the card to see real data.`)).toBeVisible();
 
     // The account menu explains what is connected, in plain language.
     await accountChip(page).click();
     const menu = page.getByRole('dialog', { name: 'HubSpot account' });
     await expect(menu).toContainText(HUB_DOMAIN);
     await expect(menu).toContainText(String(PORTAL_ID));
-    await expect(menu).toContainText('jordan.lee@acmedemo.com');
+    await expect(menu).toContainText('sam.rivera@acmedemo.com');
     await expect(menu.getByRole('button', { name: 'Disconnect' })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(menu).toBeHidden();
@@ -143,11 +148,38 @@ test.describe('Connect HubSpot (fake portal)', () => {
     await expect(cardRoot(page).getByText('First name: Priya')).toBeVisible();
 
     await disconnectHubSpot(page);
+    await expect(page.getByText(/Disconnected from HubSpot\. Previews use mock data again/)).toBeVisible();
     await expect(cardRoot(page).getByText('First name: Ada')).toBeVisible();
     await expect(previewData(page)).toHaveCount(0);
     // Signed out on the server too: a reload stays disconnected.
     await page.reload();
     await expect(connectButton(page)).toHaveAttribute('data-status', 'disconnected');
+    expect(watch.errors).toEqual([]);
+  });
+
+  test('f: code in a file someone sent stays paused, and trusting it while connected names the HubSpot data', async ({ page }) => {
+    const watch = watchConsole(page);
+    await openEditor(page);
+    await page.getByLabel('Import .uiex.json file').setInputFiles(await codeDocument());
+    await expect(topBar(page).getByRole('button', { name: 'Shared Project' })).toBeVisible();
+    const notice = page.getByRole('region', { name: 'Paused code' });
+    await expect(notice).toContainText('Code in this imported project is paused');
+    await expect(notice).toContainText('If you connect HubSpot, it could also read your HubSpot data');
+    await expect(cardRoot(page).getByText(/Full name: \{\{/)).toBeVisible();
+    // Trusted before connecting: the code runs (with mock data).
+    await notice.getByRole('button', { name: 'Trust and run code' }).click();
+    await expect(cardRoot(page).getByText('Full name: Ada Lovelace')).toBeVisible();
+    await expect(notice).toBeHidden();
+
+    // Connecting HubSpot pauses it again and asks once more, naming what the code could reach.
+    await connectHubSpot(page);
+    await expect(notice).toContainText('HubSpot is connected: confirm this imported project’s code');
+    await expect(notice).toContainText('could read the contacts, companies, deals');
+    await expect(cardRoot(page).getByText(/Full name: \{\{/)).toBeVisible();
+    await snap(page, '08-trust-hubspot-data');
+    await notice.getByRole('button', { name: 'Trust it with my HubSpot data' }).click();
+    await expect(notice).toBeHidden();
+    await expect(cardRoot(page).getByText(/^Full name: [A-Z]/)).toBeVisible();
     expect(watch.errors).toEqual([]);
   });
 });

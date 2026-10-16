@@ -191,7 +191,7 @@ export function ExtensionSettings({ ext, project }: { ext: Extension; project: P
           </span>
           <div className="ub-insp-head__titles">
             <div className="ub-insp-head__title">
-              <span className="ub-insp-head__label">{ext.name || 'Untitled extension'}</span>
+              <span className="ub-insp-head__label">{ext.name || (ext.kind === 'card' ? 'Untitled card' : 'Untitled page')}</span>
               <Badge tone="accent">{kind.label}</Badge>
             </div>
             <div className="ub-insp-muted ub-insp-head__sub">
@@ -201,7 +201,7 @@ export function ExtensionSettings({ ext, project }: { ext: Extension; project: P
         </div>
       </div>
       <div className="ub-insp-body ub-scroll">
-        <InspectorSection id="ext:general" title="Extension">
+        <InspectorSection id="ext:general" title={ext.kind === 'card' ? 'Card' : 'Page'}>
           <div className="ub-insp-field">
             <div className="ub-insp-field__label">
               <label htmlFor="ext-name">Name</label>
@@ -222,7 +222,7 @@ export function ExtensionSettings({ ext, project }: { ext: Extension; project: P
               rows={2}
               value={ext.description ?? ''}
               onChange={(description) => updateExtension(ext.id, { description })}
-              placeholder="What this extension does (optional)"
+              placeholder={`What this ${ext.kind === 'card' ? 'card' : 'page'} does (optional)`}
             />
           </div>
           {ext.kind === 'card' ? (
@@ -243,14 +243,14 @@ export function ExtensionSettings({ ext, project }: { ext: Extension; project: P
           )}
           {ext.kind === 'card' && <ObjectTypesEditor ext={ext} />}
         </InspectorSection>
-        <InspectorSection id="ext:files" title="Project files">
+        <InspectorSection id="ext:files" title="Advanced: project files" defaultOpen={false}>
           <ValidatedField
             label="uid"
             code
             value={ext.uid}
             validate={(v) => uidError(v, ext, project)}
             onCommit={(uid) => updateExtension(ext.id, { uid })}
-            hint="Identifies the extension in the HubSpot project (hsmeta uid)."
+            hint={`HubSpot’s internal ID for this ${ext.kind === 'card' ? 'card' : 'page'} (the uid in its -hsmeta.json file). Keep it the same once published — a new ID makes HubSpot treat it as a new ${ext.kind === 'card' ? 'card' : 'page'}.`}
           />
           <ValidatedField
             label="Component file name"
@@ -294,7 +294,7 @@ export function ExtensionSettings({ ext, project }: { ext: Extension; project: P
               onClick={() => useDialogs.getState().open('extensionSettings', ext.id)}
               title="Add or manage cards, settings page and app home"
             >
-              Extensions
+              Cards &amp; pages
             </Button>
           </div>
         </InspectorSection>

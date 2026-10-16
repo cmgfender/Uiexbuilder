@@ -16,14 +16,18 @@
  *   window saved it: the save is held back and the shell asks which version to keep (see
  *   ProjectConflictDialog). A `storage` event raises the same question as soon as the other tab
  *   saves. A first-visit flag drives the welcome card.
+ * * **Live data choice**: choosing Live data or a sample record saves a project that was never
+ *   saved (the untouched starter project), so the choice — stored per project id — survives a
+ *   reload. Choices stored for projects that no longer exist are removed at startup.
  */
 import { useEffect } from 'react';
 import { createProject } from '../model/factory';
 import { newId } from '../model/ids';
 import { loadLastProject, loadSavedProject, saveProjectResult } from '../model/persistence';
 import { useEditor } from '../model/store';
-import { markProjectUntrusted, isProjectTrusted } from '../model/trust';
+import { copyCodeTrust } from '../model/trust';
 import type { Project } from '../model/types';
+import { LIVE_DATA_KEY_PREFIX, useLiveData } from '../connect/records';
 import { PREF_KEYS, readPref, removePref, writePref } from './prefs';
 import { applyStoredLayout, persistLayoutChanges, useShell } from './shellStore';
 
@@ -119,6 +123,19 @@ export type BootResult =
 
 let bootstrapped = false;
 let lastBoot: BootResult = { kind: 'fresh' };
+/** The starter project a fresh start opened (nothing was restored), see isUntouchedStarterProject. */
+let freshProjectId: string | null = null;
+
+/**
+ * The open project is the starter project of a fresh start that nobody edited — it may still have
+ * been saved (choosing live data saves it), but it holds nothing of the person's.
+ */
+export function isUntouchedStarterProject(): boolean {
+  const s = useEditor.getState();
+  if (s.past.length > 0 || s.future.length > 0) return false;
+  if (freshProjectId !== null && s.project.id === freshProjectId) return true;
+  return useShell.getState().saveStatus === 'idle';
+}
 
 function isSafeMode(search: string): boolean {
   return /(?:^|[?&])safe(?:=(?:1|true|yes))?(?:&|$)/i.test(search);
@@ -150,8 +167,29 @@ export function bootstrapEditor(opts: { force?: boolean; search?: string } = {})
   } else {
     useShell.getState().setSaveStatus('idle');
     lastBoot = { kind: 'fresh' };
+    freshProjectId = useEditor.getState().project.id;
   }
+  pruneOrphanLiveData(useEditor.getState().project.id);
   return lastBoot;
+}
+
+/** Removes stored live-data choices of projects that are no longer saved in this browser. */
+export function pruneOrphanLiveData(keepProjectId?: string): number {
+  const storage = readStorage();
+  if (!storage) return 0;
+  const orphans: string[] = [];
+  try {
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i);
+      if (!key?.startsWith(LIVE_DATA_KEY_PREFIX)) continue;
+      const id = key.slice(LIVE_DATA_KEY_PREFIX.length);
+      if (id !== keepProjectId && storage.getItem(PROJECT_KEY_PREFIX + id) === null) orphans.push(key);
+    }
+    for (const key of orphans) storage.removeItem(key);
+  } catch {
+    return 0;
+  }
+  return orphans.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +322,7 @@ export function saveOpenProjectAsCopy(): SaveOutcome {
 /** A copy of a project with a fresh id (and "(copy)" after its name). Trust carries over. */
 export function copyOfProject(project: Project, suffix = ' (copy)'): Project {
   const copy: Project = { ...project, id: newId('p'), name: `${project.name || 'Project'}${suffix}`, updatedAt: new Date().toISOString() };
-  if (!isProjectTrusted(project.id)) markProjectUntrusted(copy.id);
+  copyCodeTrust(project.id, copy.id);
   return copy;
 }
 
@@ -314,6 +352,14 @@ export function useAutosave(): void {
       timer = setTimeout(flush, AUTOSAVE_DEBOUNCE_MS);
     });
     const unsubLayout = persistLayoutChanges();
+    // Live data / a sample record chosen on a project that was never saved (the untouched starter
+    // project): save it now, so the choice (stored under its id) is still there after a reload.
+    const unsubLive = useLiveData.subscribe((s, prev) => {
+      if (s.projectId !== prev.projectId || s.projectId !== useEditor.getState().project.id) return;
+      if (s.mode === prev.mode && s.recordByExtension === prev.recordByExtension) return;
+      if (autosaveSuspended || useShell.getState().conflict || useShell.getState().saveStatus !== 'idle') return;
+      saveCurrentProject();
+    });
     const onUnload = () => {
       if (timer) flush();
     };
@@ -331,6 +377,7 @@ export function useAutosave(): void {
     return () => {
       unsub();
       unsubLayout();
+      unsubLive();
       window.removeEventListener('beforeunload', onUnload);
       window.removeEventListener('storage', onStorage);
       // Don't lose the last edit when the shell unmounts — unless it unmounts because it crashed.

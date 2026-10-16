@@ -45,7 +45,7 @@ describe('<ProjectsDialog>', () => {
     expect(within(current).getByText('Current')).toBeInTheDocument();
     expect(within(current).getByRole('button', { name: 'Open Current App' })).toBeDisabled();
     const otherItem = items.find((i) => i.textContent?.includes('Other App'))!;
-    expect(otherItem).toHaveTextContent('1 extension');
+    expect(otherItem).toHaveTextContent('1 card or page');
     expect(otherItem).toHaveTextContent('5 min ago');
     fireEvent.click(within(otherItem).getByRole('button', { name: 'Open Other App' }));
     expect(useEditor.getState().project.id).toBe(other.id);

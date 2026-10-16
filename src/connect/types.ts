@@ -23,13 +23,14 @@ export const CONNECTOR_ROUTES = {
   pipelines: '/api/crm/pipelines/:objectType', // GET  -> CrmPipeline[]
   owners: '/api/crm/owners', // GET  -> CrmOwner[]
   searchRecords: '/api/crm/records/:objectType/search', // GET ?q=&limit= -> CrmRecordSummary[] (record picker)
-  record: '/api/crm/records/:objectType/:id', // GET ?properties=a,b&formatted=1 -> CrmRecord
+  record: '/api/crm/records/:objectType/:id', // GET ?properties=a,b&formatted=1 (or formatted=a,b: only those) -> CrmRecord
   associations: '/api/crm/records/:objectType/:id/associations/:toObjectType', // GET ?properties=&limit= -> AssociationResultDTO[]
   search: '/api/crm/search/:objectType', // POST CrmSearchRequestDTO -> CrmSearchResponseDTO
   proxyFetch: '/api/proxy/fetch', // POST ProxyFetchRequest -> ProxyFetchResponse (preview of hubspot.fetch)
   deployStart: '/api/deploy', // POST DeployRequest -> DeployStatus (beta)
-  deployStatus: '/api/deploy/:deployId', // GET -> DeployStatus
-  deployKey: '/api/deploy/key', // GET -> DeployKeyInfo; DELETE -> forget the remembered key -> DeployKeyInfo
+  deployStatus: '/api/deploy/:deployId', // GET -> DeployStatus (older clients; prefer deployPoll)
+  deployKey: '/api/deploy/key', // GET -> DeployKeyInfo (always { remembered: false }: keys are never stored); DELETE -> same
+  deployPoll: '/api/deploy/status', // POST { deployId } -> DeployStatus (keeps the deployId out of URLs and access logs)
 } as const;
 
 export const CSRF_HEADER = 'X-UIEX-Request';
@@ -56,6 +57,11 @@ export interface ConnectorHealth {
   scopes: { required: string[]; optional: string[] };
   /** Names of the server settings that are still missing (never their values), e.g. ['HUBSPOT_CLIENT_ID']. */
   missingSettings?: string[];
+  /**
+   * HUBSPOT_APP_BASE when it is not https://app.hubspot.com (an EU data centre, or the fake HubSpot
+   * of the demo): links into HubSpot (personal access key page, records, settings) use it.
+   */
+  appBase?: string;
 }
 
 export type ConnectionInfo =
@@ -171,7 +177,8 @@ export interface CrmSearchRequestDTO {
   sorts?: Array<{ propertyName: string; direction: 'ASCENDING' | 'DESCENDING' }>;
   pageLength?: number;
   after?: string;
-  formatted?: boolean;
+  /** true: format every property; a list: only those (like propertiesToFormat). */
+  formatted?: boolean | string[];
 }
 
 /** Mirrors @hubspot/ui-extensions CrmSearchResponse. */
@@ -200,14 +207,22 @@ export interface ProxyFetchResponse {
   truncated: boolean;
 }
 
-/** Terminal-free deploy (beta): upload an exported project with the admin's personal access key. */
+/**
+ * Terminal-free deploy (beta): upload an exported project with the admin's personal access key.
+ * Once HubSpot sign-in is set up on the server, deploying needs a signed-in session and the key must
+ * belong to the connected account (error 'not_connected' / 'portal_mismatch' otherwise).
+ */
 export interface DeployRequest {
-  /** HubSpot personal access key (Settings → Integrations → Personal access key). Never stored unless `remember`. */
+  /** HubSpot personal access key (Settings → Integrations → Personal access key). Never stored. */
   personalAccessKey?: string;
-  /** Use the key remembered in the encrypted session cookie from a previous deploy. */
+  /**
+   * @deprecated Keys are no longer remembered (any script on the page could have deployed with a
+   * stored key). Sending it without a key answers 400 'no_remembered_key'.
+   */
   useRememberedKey?: boolean;
+  /** @deprecated Ignored: keys are never stored. */
   remember?: boolean;
-  /** Target portal id (defaults to the connected portal). */
+  /** Target portal id: must be the connected portal when signed in (only used before sign-in is set up). */
   portalId?: number;
   projectName: string;
   platformVersion: string;
@@ -236,7 +251,7 @@ export interface DeployStatus {
   installUrl?: string;
 }
 
-/** GET/DELETE /api/deploy/key — whether a personal access key is remembered in this browser's session. */
+/** GET/DELETE /api/deploy/key — kept for older clients: keys are never remembered any more (always false). */
 export interface DeployKeyInfo {
   remembered: boolean;
   /** Portal the remembered key belongs to. */

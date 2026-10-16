@@ -20,6 +20,9 @@ test.describe('editor basics', () => {
   test('loads the default project without console errors', async ({ page }) => {
     const watch = watchConsole(page);
     await page.goto('/');
+    // First visit: the welcome screen covers the editor; skipping it opens the editor.
+    await expect(page.getByRole('dialog', { name: 'Build your own HubSpot cards' })).toBeVisible();
+    await page.getByRole('button', { name: /I know what I’m doing/ }).click();
     await expect(page.getByRole('banner', { name: 'Editor top bar' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'My UI Extensions App' })).toBeVisible();
     await expect(page.getByTestId('canvas')).toBeVisible();
@@ -27,9 +30,7 @@ test.describe('editor basics', () => {
     await expect(cardNodes(page, 'Heading')).toHaveCount(1);
     await expect(cardNodes(page, 'Heading')).toContainText('Hello');
     await expect(cardRoot(page).locator('.hsp-rt-error')).toHaveCount(0);
-    // First visit shows the welcome card.
-    await expect(page.getByRole('region', { name: 'Welcome' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'No problems — ready to export' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'No problems — ready to publish' })).toBeVisible();
     await page.waitForTimeout(500);
     expect(watch.errors).toEqual([]);
   });
@@ -120,15 +121,18 @@ test.describe('editor basics', () => {
     await page.keyboard.press(`${MOD}+z`);
     await expect(cardNodes(page, 'Divider')).toHaveCount(1);
 
-    // Layers: drag the Divider above the Button.
+    // Layers: drag the Divider above the Button. (Click-to-add put both at the end of the card's
+    // main column.)
     await showLeftTab(page, 'Layers');
     const order = async () =>
-      cardRoot(page).locator(':scope > [data-node-id]').evaluateAll((els) => els.map((e) => e.getAttribute('data-node-type')));
-    expect(await order()).toEqual(['Flex', 'Button', 'Divider']);
+      cardRoot(page)
+        .locator(':scope > [data-node-id] > [data-node-id]')
+        .evaluateAll((els) => els.map((e) => e.getAttribute('data-node-type')).slice(-2));
+    expect(await order()).toEqual(['Button', 'Divider']);
     const divider = layerRow(page, /^Divider/);
     const button = layerRow(page, /^Button/);
     await mouseDrag(page, divider, button, { x: 40, y: 2 });
-    await expect.poll(order).toEqual(['Flex', 'Divider', 'Button']);
+    await expect.poll(order).toEqual(['Divider', 'Button']);
     await expect(layersTree(page).getByRole('treeitem').nth(-1)).toContainText('Button');
   });
 
@@ -177,8 +181,10 @@ test.describe('canvas editing', () => {
     const badge = page.getByRole('button', { name: /1 error/ });
     await expect(badge).toBeVisible();
 
-    // Deselect, then jump back to the node from the problem.
+    // Deselect (Escape climbs to the card's main column, then clears), then jump back to the node
+    // from the problem.
     await page.getByRole('region', { name: 'Design canvas' }).focus();
+    await page.keyboard.press('Escape');
     await page.keyboard.press('Escape');
     await expect(inspector(page).getByText('Select a component to edit its properties.')).toBeVisible();
     await badge.click();
@@ -187,6 +193,6 @@ test.describe('canvas editing', () => {
     await expectInspectorFor(page, 'Input');
     await expect(inspector(page).getByRole('combobox', { name: 'Label' })).toBeFocused();
     await inspector(page).getByRole('combobox', { name: 'Label' }).fill('Email');
-    await expect(page.getByRole('button', { name: 'No problems — ready to export' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'No problems — ready to publish' })).toBeVisible();
   });
 });

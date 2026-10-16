@@ -156,7 +156,8 @@ describe('deployment files', () => {
     expect(meta.config.auth.type).toBe('oauth');
     expect(meta.config.auth.requiredScopes).toEqual(DEFAULT_REQUIRED_SCOPES);
     expect(meta.config.auth.optionalScopes).toEqual(DEFAULT_OPTIONAL_SCOPES);
-    expect(meta.config.auth.redirectUrls).toEqual(['https://YOUR-DOMAIN/api/auth/callback', 'http://localhost:5173/api/auth/callback']);
+    // No localhost address in the app people use (a dev sign-in would be possible from anywhere).
+    expect(meta.config.auth.redirectUrls).toEqual(['https://YOUR-DOMAIN/api/auth/callback']);
     expect(meta.config.permittedUrls).toEqual({ fetch: [], iframe: [], img: [] });
     expect(JSON.parse(read('hubspot-app/hsproject.json'))).toEqual({ name: 'uiex-builder-connector', srcDir: 'src', platformVersion: '2026.03' });
   });

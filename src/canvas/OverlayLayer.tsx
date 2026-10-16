@@ -329,7 +329,7 @@ export const OverlayLayer = memo(function OverlayLayer({ viewportRef, stageRef, 
         <div key={`f${i}`} className={cx('ub-cv-flag', `ub-cv-flag--${f.kind}`)} style={px(f.box)}>
           <span className="ub-cv-flag__tag">
             {f.kind === 'cond' ? <EyeOff size={11} aria-hidden /> : <Repeat size={11} aria-hidden />}
-            {f.kind === 'cond' ? 'Hidden by condition' : 'Repeats over empty list'}
+            {f.kind === 'cond' ? 'Hidden right now' : 'Repeats over empty list'}
           </span>
         </div>
       ))}

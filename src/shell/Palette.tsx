@@ -81,12 +81,14 @@ export function Palette() {
   const focusNonce = useShell((s) => s.paletteFocusNonce);
   useInputModality();
 
-  // Cmd+/ (or the rail) asks to focus the search box.
+  // Cmd+/ (or the rail, or "Search components" from Templates) asks to focus the search box.
   useEffect(() => {
     if (focusNonce === 0) return;
+    const wanted = useShell.getState().paletteFocusQuery;
+    if (wanted) setQuery(wanted);
     const input = searchRef.current?.querySelector('input');
     input?.focus();
-    input?.select();
+    if (!wanted) input?.select();
   }, [focusNonce]);
 
   const toggleCategory = useCallback((category: string) => {

@@ -1072,7 +1072,7 @@ function validateRequirements(project: Project, c: Collector): void {
   }
   for (const scope of req.scopes) {
     if (configured.has(scope)) continue;
-    c.add('missing-scope', 'info', `Scope ${quote(scope)} is needed by your extensions and will be added automatically on export.`, { field: 'app.requiredScopes' }, scope, scope);
+    c.add('missing-scope', 'info', `Scope ${quote(scope)} is needed by your extensions and will be added automatically when you publish or download.`, { field: 'app.requiredScopes' }, scope, scope);
   }
   const permitted = isRecord(app.permittedUrls) ? app.permittedUrls : { fetch: [], iframe: [], img: [] };
   for (const kind of ['fetch', 'iframe', 'img'] as const) {
@@ -1082,7 +1082,7 @@ function validateRequirements(project: Project, c: Collector): void {
       c.add(
         'missing-permitted-url',
         'info',
-        `${origin} is used by ${kind === 'img' ? 'an image' : kind === 'iframe' ? 'an iframe modal' : 'a fetch request'} and will be added to the permitted URLs automatically on export.`,
+        `${origin} is used by ${kind === 'img' ? 'an image' : kind === 'iframe' ? 'an iframe modal' : 'a fetch request'} and will be added to the permitted URLs automatically when you publish or download.`,
         { field: `app.permittedUrls.${kind}` },
         origin,
         origin,
@@ -1407,7 +1407,7 @@ function checkDynamicOrigin(ctx: ExtContext, url: string, kind: PermittedKind, l
   ctx.c.add(
     'dynamic-url-origin',
     hint.suggestion || listed.size === 0 ? 'warning' : 'info',
-    `${subject} builds its host from an expression, so it isn’t added to the permitted URLs on export — HubSpot blocks ${what}s to hosts that aren’t listed.${fix}`,
+    `${subject} builds its host from an expression, so it isn’t added to the permitted URLs automatically — HubSpot blocks ${what}s to hosts that aren’t listed.${fix}`,
     loc,
     `${kind}:${url}`,
     hint.suggestion ?? undefined,

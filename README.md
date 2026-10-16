@@ -48,6 +48,9 @@ npm run dev        # http://localhost:5173
 npm run dev:full   # same, plus a fake HubSpot with demo data to try "Connect HubSpot" offline
 ```
 
+The development server only listens on this computer; add `-- --host` (e.g. `npm run dev -- --host`)
+to open it to other devices on your network.
+
 Other scripts:
 
 | Command | What it does |
@@ -60,11 +63,11 @@ Other scripts:
 | `npm run secret` | Print a random `SESSION_SECRET` |
 | `npm test` | Unit/integration tests (Vitest), incl. the connector against a fake HubSpot and type-checking generated cards against `@hubspot/ui-extensions` |
 | `npm run e2e` | End-to-end tests (Playwright) of the static builder |
-| `npm run e2e:connect` | End-to-end tests of Connect HubSpot, live data and Deploy to HubSpot against the fake HubSpot (`CONNECT_SCREENSHOTS=<dir>` saves screenshots) |
+| `npm run e2e:connect` | End-to-end tests of the first-run setup, Connect HubSpot, live data and Publish to HubSpot against the fake HubSpot (`CONNECT_SCREENSHOTS=<dir>` saves screenshots) |
 
 ## Deploying what you build
 
-1. In the builder click **Export** → **Download project (.zip)** and unzip it.
+1. In the builder click **Publish** → **Download** tab → **Download project (.zip)** and unzip it.
 2. Install the HubSpot CLI and authenticate: `npm install -g @hubspot/cli` then `hs account auth`.
 3. Install the extension dependencies: `cd src/app/cards && npm install` (repeat for
    `src/app/settings` / `src/app/pages` if present).
@@ -81,7 +84,10 @@ where each card goes) and lists the scopes and permitted URLs it needs.
 ## Connect to HubSpot
 
 When the builder is hosted with its small **connector** (any option under [Hosting](#hosting)),
-admins can sign in with HubSpot - no terminal, no install:
+admins can sign in with HubSpot - no terminal, no install. On a first visit a **welcome screen**
+offers **Connect my HubSpot** or **Try it with sample data**, then a 3-step guided setup (connect →
+where the card appears → a real sample record and a starter) opens the editor with real data and a
+short tour (replay it, or the welcome, from **Help**). The same, step by step:
 
 1. Click **Connect HubSpot** (top right). The builder first explains what it can and cannot do;
    click **Continue to HubSpot**, approve in the HubSpot window, and the top bar shows your
@@ -92,11 +98,18 @@ admins can sign in with HubSpot - no terminal, no install:
    back any time.
 3. Property, object-type and pipeline pickers list your account's real schema: custom properties,
    labels and dropdown options.
-4. **Deploy to HubSpot** (beta) uploads the generated project with a personal access key you
-   create in HubSpot - instead of the CLI steps above.
+4. **Publish** (top right) → **Publish to HubSpot** (beta) uploads the generated project with a
+   personal access key you create in HubSpot (the wizard links straight to HubSpot's key page for
+   your account; tick **Developer projects**) - instead of the CLI steps above - then lists what
+   to do in HubSpot (install the app, add the card to the record page, open a record) with direct
+   links. Publishing needs you to be connected to the same HubSpot account, and asks for the key
+   each time (it is never stored).
 
 Access is **read-only**. HubSpot's tokens never reach the browser: the connector keeps them in an
-encrypted, `HttpOnly` cookie (there is no database) and refreshes them automatically. To remove
+encrypted, `HttpOnly` cookie (there is no database) and refreshes them automatically. Set
+`ALLOWED_PORTALS` to your HubSpot account number(s) so only your accounts can connect and deploy.
+A project someone else made opens with its code paused; while you are connected, trusting it
+says plainly that its code can read your HubSpot data. To remove
 access, click **Disconnect**, or uninstall the app in HubSpot (**Settings → Integrations →
 Connected apps**). Without a connector (e.g. plain static hosting or `npm run dev:vite`) the builder
 works exactly as before, with mock data, and **Connect HubSpot** explains that it is available on
@@ -109,17 +122,20 @@ Put the builder online with sign-in in a few clicks - step-by-step guide for non
 **[docs/HOSTING.md](docs/HOSTING.md)**.
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/cmgfender/Uiexbuilder)
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fcmgfender%2FUiexbuilder&project-name=uiex-builder&repository-name=uiex-builder&env=APP_URL,HUBSPOT_CLIENT_ID,HUBSPOT_CLIENT_SECRET,SESSION_SECRET&envDescription=Type%20%22later%22%20in%20each%20box%20if%20you%20do%20not%20have%20the%20values%20yet.%20The%20builder%20works%20without%20them%3B%20only%20Connect%20HubSpot%20waits.&envLink=https%3A%2F%2Fgithub.com%2Fcmgfender%2FUiexbuilder%2Fblob%2FHEAD%2Fdocs%2FHOSTING.md%23step-3---add-the-hubspot-settings-to-your-host)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fcmgfender%2FUiexbuilder&project-name=uiex-builder&repository-name=uiex-builder&env=APP_URL,HUBSPOT_CLIENT_ID,HUBSPOT_CLIENT_SECRET,SESSION_SECRET&envDescription=For%20SESSION_SECRET%20type%2048%20random%20letters%20and%20numbers%20%28a%20password%20manager%27s%20generator%20works%29%20-%20Deploy%20to%20HubSpot%20needs%20it.%20Type%20%22later%22%20in%20the%20other%20three%20boxes%20if%20you%20do%20not%20have%20the%20values%20yet%3B%20the%20builder%20works%20without%20them%2C%20only%20Connect%20HubSpot%20waits.&envLink=https%3A%2F%2Fgithub.com%2Fcmgfender%2FUiexbuilder%2Fblob%2FHEAD%2Fdocs%2FHOSTING.md%23step-3---add-the-hubspot-settings-to-your-host)
 
 In short:
 
 1. Deploy (Render, Vercel, Cloudflare Workers via `wrangler.toml`, Docker via `Dockerfile`, or any
    Node.js host with `npm run build && npm start`).
 2. Create the HubSpot app that people approve when they connect - from the builder itself
-   (`/setup.html` → **Download the app file** → **Project › Import .uiex.json…** → **Deploy to
-   HubSpot**) or with the HubSpot CLI from [`hubspot-app/`](hubspot-app).
+   (`/setup.html` → **Download the app file** → **Project › Import .uiex.json…** → **Publish** →
+   **Publish to HubSpot**; needs `SESSION_SECRET` set first) or with the HubSpot CLI from
+   [`hubspot-app/`](hubspot-app). Then sign HubSpot's Acceptable Use Policy for the app
+   (**Distribution → Begin publishing**).
 3. Set `HUBSPOT_CLIENT_ID`, `HUBSPOT_CLIENT_SECRET` and `SESSION_SECRET` (plus `APP_URL` on
-   Docker or with your own domain) - see [`.env.example`](.env.example).
+   Docker or with your own domain, and optionally `ALLOWED_PORTALS`) - see
+   [`.env.example`](.env.example).
 4. Open `/setup.html` on your builder to check that sign-in is ready, then share the address.
 
 | Platform | Files |

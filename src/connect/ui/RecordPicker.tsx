@@ -10,6 +10,8 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { ChevronDown, Database, ExternalLink, FlaskConical, LoaderCircle, RefreshCw, Search, TriangleAlert, X } from 'lucide-react';
 import { selectActiveExtension, useEditor } from '../../model/store';
+import type { Extension } from '../../model/types';
+import { collectExtensionCode } from '../../codegen/extension';
 import { Button, Segmented, Select, cx } from '../../ui';
 import type { CrmObjectTypeInfo, CrmRecordSummary } from '../types';
 import { getConnectorClient, isAbortError } from '../client';
@@ -49,22 +51,27 @@ function LiveDataControls() {
   // In preview the toolbar belongs to the preview banner (Reset / Exit): one compact chip whose
   // popover holds the Mock | Live switch.
   const compact = useEditor((s) => s.mode === 'preview');
+  // Switching to Live on a CRM card without a sample record opens the record picker right away.
+  const [openPicker, setOpenPicker] = useState(0);
   if (!loaded) return null;
   return (
-    <div className={cx('ub-cn-live', compact && 'ub-cn-live--compact')}>
-      {!compact && <ModeSwitch mode={mode} />}
-      {(compact || mode === 'live') && <DataChip ext={ext} mode={mode} compact={compact} />}
+    <div className={cx('ub-cn-live', compact && 'ub-cn-live--compact')} data-tour="preview-data">
+      {!compact && <ModeSwitch mode={mode} onLive={() => setOpenPicker((n) => n + 1)} />}
+      {(compact || mode === 'live') && <DataChip ext={ext} mode={mode} compact={compact} openRequest={openPicker} />}
       <span className="ub-cn-live__divider" aria-hidden />
     </div>
   );
 }
 
-function ModeSwitch({ mode }: { mode: LiveMode }) {
+function ModeSwitch({ mode, onLive }: { mode: LiveMode; onLive?: () => void }) {
   return (
     <Segmented<LiveMode>
       aria-label="Preview data"
       value={mode}
-      onChange={(m) => useLiveData.getState().setMode(m)}
+      onChange={(m) => {
+        useLiveData.getState().setMode(m);
+        if (m === 'live') onLive?.();
+      }}
       options={[
         {
           value: 'mock',
@@ -128,15 +135,34 @@ interface ExtSummary {
  *  live + settings/home  "Live data · acme.com" → what live data means without a record
  *  mock (preview only)   "Mock data" → explanation; the popover has the Mock | Live switch
  */
-function DataChip({ ext, mode, compact }: { ext: ExtSummary; mode: LiveMode; compact: boolean }) {
+function DataChip({ ext, mode, compact, openRequest = 0 }: { ext: ExtSummary; mode: LiveMode; compact: boolean; openRequest?: number }) {
   const isCard = ext.kind === 'card';
   const record = useSampleRecord({ id: ext.id, kind: isCard ? 'card' : ext.kind === 'home' ? 'home' : 'settings', objectTypes: ext.objectTypes });
   const info = useConnection((s) => s.info);
+  const connectedAt = useConnection((s) => s.connectedAt);
   const error = useLiveData((s) => s.error);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLButtonElement>(null);
   const live = mode === 'live';
   useRecordLabel(ext.id, live && isCard ? record : null);
+  // "Live data" chosen on a card with no sample record yet: show the picker.
+  const hasRecord = !!record;
+  useEffect(() => {
+    if (openRequest > 0 && live && isCard && !hasRecord) setOpen(true);
+    // Only when a new request comes in.
+  }, [openRequest]);
+  // "Reconnect HubSpot" pressed in the picker: open it again once the new sign-in is done.
+  const reopenAfterConnect = useRef(false);
+  useEffect(() => {
+    if (connectedAt !== null && reopenAfterConnect.current) {
+      reopenAfterConnect.current = false;
+      setOpen(true);
+    }
+  }, [connectedAt]);
+  const reconnect = () => {
+    reopenAfterConnect.current = true;
+    void useConnection.getState().connect();
+  };
   if (!info.connected) return null;
   const account = info.hubDomain || `account ${info.portalId}`;
   const problem = live && error ? ` — problem: ${error.title}` : '';
@@ -160,10 +186,12 @@ function DataChip({ ext, mode, compact }: { ext: ExtSummary; mode: LiveMode; com
         Live data · <strong>{displayLabel(record)}</strong>
       </>
     ) : (
-      'Pick a sample record'
+      <>
+        Pick a sample record<span className="ub-cn-chip__note"> · mock values until then</span>
+      </>
     );
     label = record ? `Live data: ${displayLabel(record)}${problem}. Change the sample record` : 'Pick a sample record to preview with real data';
-    title = record ? `Previewing with ${displayLabel(record)} — click to change` : 'Pick a sample record to preview with real data';
+    title = record ? `Previewing with ${displayLabel(record)} — click to change` : 'The card shows mock values until you pick a sample record — click to pick one';
     popoverLabel = 'Sample record';
   } else {
     icon = error ? <TriangleAlert size={13} aria-hidden /> : <span className="ub-cn-live-dot" aria-hidden />;
@@ -212,9 +240,9 @@ function DataChip({ ext, mode, compact }: { ext: ExtSummary; mode: LiveMode; com
           {!live ? (
             <MockNote />
           ) : isCard ? (
-            <SampleRecordPanel ext={ext} record={record} searchId={searchId} onPicked={() => setOpen(false)} />
+            <SampleRecordPanel ext={ext} record={record} searchId={searchId} onPicked={() => setOpen(false)} onReconnect={reconnect} />
           ) : (
-            <AccountNote />
+            <AccountNote onReconnect={reconnect} />
           )}
         </Popover>
       )}
@@ -233,7 +261,7 @@ function MockNote() {
   );
 }
 
-function AccountNote() {
+function AccountNote({ onReconnect }: { onReconnect: () => void }) {
   const error = useLiveData((s) => s.error);
   return (
     <div className="ub-cn-picker">
@@ -241,9 +269,20 @@ function AccountNote() {
         <strong>Live data</strong>
         <span>Settings pages and app home have no CRM record. The preview uses your real account and user, and CRM searches return real records. Nothing in HubSpot is changed.</span>
       </div>
-      {error && <LiveErrorNote error={error} onRetry={() => useLiveData.getState().clearError()} />}
+      {error && <LiveErrorNote error={error} onRetry={() => useLiveData.getState().clearError()} onReconnect={onReconnect} />}
     </div>
   );
+}
+
+/**
+ * Whether a card shows anything of its record: record data sources (properties, associations), CRM
+ * data components, or code that reads context.crm. When it doesn't, picking a sample record changes
+ * nothing visible — the picker says so.
+ */
+export function extensionUsesRecord(ext: Extension): boolean {
+  if ((ext.dataSources ?? []).some((d) => d.kind === 'crmProperties' || d.kind === 'associations')) return true;
+  if (Object.values(ext.nodes ?? {}).some((n) => /^Crm(Property|DataHighlight|StageTracker|Association|Report|Statistics)/.test(n.type))) return true;
+  return collectExtensionCode(ext).some((code) => /\bcontext\s*\.\s*crm\b/.test(code));
 }
 
 function SampleRecordPanel({
@@ -251,12 +290,15 @@ function SampleRecordPanel({
   record,
   searchId,
   onPicked,
+  onReconnect,
 }: {
   ext: { id: string; objectTypes: string[] };
   record: CrmRecordSummary | null;
   searchId: string;
   onPicked: () => void;
+  onReconnect: () => void;
 }) {
+  const usesRecord = useEditor((s) => extensionUsesRecord(selectActiveExtension(s)));
   const { objectTypes: known } = useObjectTypes();
   const info = useConnection((s) => s.info);
   const error = useLiveData((s) => s.error);
@@ -279,7 +321,7 @@ function SampleRecordPanel({
         <span>The preview shows this record's real data from HubSpot. Nothing in HubSpot is changed.</span>
       </div>
 
-      {error && <LiveErrorNote error={error} onRetry={() => useLiveData.getState().clearError()} />}
+      {error && <LiveErrorNote error={error} onRetry={() => useLiveData.getState().clearError()} onReconnect={onReconnect} />}
 
       {record ? (
         <div className="ub-cn-selected" aria-label="Picked record">
@@ -307,7 +349,13 @@ function SampleRecordPanel({
           </button>
         </div>
       ) : (
-        <p className="ub-cn-picker__prompt">Pick a sample record to preview with real data</p>
+        <p className="ub-cn-picker__prompt">Pick a sample record to preview with real data. Until then the card shows mock values.</p>
+      )}
+
+      {record && !usesRecord && (
+        <p className="ub-cn-picker__hint" role="note">
+          This card doesn’t show any record details yet — add a property from the Data tab, or start from the Contact summary template.
+        </p>
       )}
 
       {types.length > 1 && (
@@ -322,7 +370,7 @@ function SampleRecordPanel({
         </div>
       )}
 
-      <RecordSearch key={activeType} inputId={searchId} objectType={activeType} known={known} selectedId={record?.id ?? null} onPick={pick} />
+      <RecordSearch key={activeType} inputId={searchId} objectType={activeType} known={known} selectedId={record?.id ?? null} onPick={pick} onReconnect={onReconnect} />
     </div>
   );
 }
@@ -338,10 +386,16 @@ export interface RecordSearchProps {
   selectedId?: string | null;
   known?: readonly CrmObjectTypeInfo[];
   inputId?: string;
+  /** "Reconnect HubSpot" (default: start a new sign-in). */
+  onReconnect?: () => void;
+  /** Offer "Use mock data" when a permission is missing (default true). */
+  offerMock?: boolean;
 }
 
 /** Search combobox (input + listbox): shows recently changed records, then matches as you type. */
-export function RecordSearch({ objectType, onPick, selectedId, known, inputId }: RecordSearchProps) {
+export function RecordSearch({ objectType, onPick, selectedId, known, inputId, onReconnect, offerMock = true }: RecordSearchProps) {
+  // A new sign-in (e.g. after "Reconnect HubSpot") searches again.
+  const connectedAt = useConnection((s) => s.connectedAt);
   const [query, setQuery] = useState('');
   const [debounced, setDebounced] = useState('');
   const [results, setResults] = useState<CrmRecordSummary[]>([]);
@@ -396,7 +450,7 @@ export function RecordSearch({ objectType, onPick, selectedId, known, inputId }:
         },
       );
     return () => controller.abort();
-  }, [objectType, debounced, attempt]);
+  }, [objectType, debounced, attempt, connectedAt]);
 
   useEffect(() => {
     if (active < 0) return;
@@ -471,21 +525,27 @@ export function RecordSearch({ objectType, onPick, selectedId, known, inputId }:
         />
         {busy && <LoaderCircle size={13} aria-hidden className="ub-cn-spin ub-cn-search__busy" />}
       </div>
-      <div id={`${baseId}-status`} className={cx('ub-cn-search__status', status === 'error' && 'ub-cn-search__status--error')} role="status" aria-live="polite">
+      <div
+        id={`${baseId}-status`}
+        className={cx('ub-cn-search__status', status === 'error' && (error?.tone === 'warning' ? 'ub-cn-search__status--warning' : 'ub-cn-search__status--error'))}
+        role="status"
+        aria-live="polite"
+      >
         {status === 'error' && error ? <strong>{error.title}. </strong> : null}
         {statusText}
       </div>
-      {status === 'error' && error && error.action !== 'none' && (
+      {status === 'error' && error && (error.action !== 'none' || (error.offerMock && offerMock)) && (
         <div className="ub-cn-search__actions">
           {error.action === 'reconnect' ? (
-            <Button size="sm" icon={<RefreshCw size={13} aria-hidden />} onClick={() => void useConnection.getState().connect()}>
-              Reconnect HubSpot
+            <Button size="sm" icon={<RefreshCw size={13} aria-hidden />} onClick={() => (onReconnect ? onReconnect() : void useConnection.getState().connect())}>
+              {error.actionLabel ?? 'Reconnect HubSpot'}
             </Button>
-          ) : (
+          ) : error.action === 'retry' ? (
             <Button size="sm" icon={<RefreshCw size={13} aria-hidden />} onClick={() => setAttempt((a) => a + 1)}>
               Try again
             </Button>
-          )}
+          ) : null}
+          {error.offerMock && offerMock && <UseMockButton />}
         </div>
       )}
       <ul id={listId} role="listbox" aria-label={`Matching ${lowerPlural}`} className="ub-cn-search__list">
@@ -511,17 +571,30 @@ export function RecordSearch({ objectType, onPick, selectedId, known, inputId }:
   );
 }
 
-function LiveErrorNote({ error, onRetry }: { error: LiveDataError; onRetry: () => void }) {
+/** Back to mock data (the person can keep designing while a permission is sorted out). */
+function UseMockButton() {
   return (
-    <div className="ub-cn-error" role="alert">
+    <Button size="sm" variant="ghost" icon={<FlaskConical size={13} aria-hidden />} onClick={() => useLiveData.getState().setMode('mock')}>
+      Use mock data
+    </Button>
+  );
+}
+
+function LiveErrorNote({ error, onRetry, onReconnect }: { error: LiveDataError; onRetry: () => void; onReconnect: () => void }) {
+  const warning = error.tone === 'warning';
+  return (
+    <div className={cx('ub-cn-error', warning && 'ub-cn-error--warning')} role={warning ? 'status' : 'alert'}>
       <TriangleAlert size={14} aria-hidden className="ub-cn-error__icon" />
       <div className="ub-cn-error__body">
         <strong>{error.title}</strong>
         <span>{error.message}</span>
         {error.action === 'reconnect' ? (
-          <Button size="sm" icon={<RefreshCw size={13} aria-hidden />} onClick={() => void useConnection.getState().connect()}>
-            Reconnect HubSpot
-          </Button>
+          <span className="ub-cn-error__actions">
+            <Button size="sm" icon={<RefreshCw size={13} aria-hidden />} onClick={onReconnect}>
+              {error.actionLabel ?? 'Reconnect HubSpot'}
+            </Button>
+            {error.offerMock && <UseMockButton />}
+          </span>
         ) : error.action === 'retry' ? (
           <Button
             size="sm"

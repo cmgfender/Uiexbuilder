@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
-import { connectButton, openEditor, topBar, watchConsole } from './helpers';
+import { connectButton, openEditor, snap, topBar, watchConsole } from './helpers';
 
 const INDEX_HTML = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'index.html'), 'utf8');
 
@@ -29,7 +29,7 @@ test.describe('hosting states', () => {
     expect(watch.errors).toEqual([]);
   });
 
-  test('connector running but HubSpot sign-in not set up: explains what the host must add', async ({ page }) => {
+  test('connector running but HubSpot sign-in not set up: points the admin to whoever set it up', async ({ page }) => {
     const watch = watchConsole(page);
     await page.route('**/api/health', async (route) => {
       const real = await route.fetch();
@@ -41,16 +41,54 @@ test.describe('hosting states', () => {
     await expect(button).toHaveAttribute('data-status', 'not-configured');
     await button.click();
     const note = page.getByRole('dialog', { name: 'About Connect HubSpot' });
-    await expect(note).toContainText('isn\'t set up yet');
-    await expect(note).toContainText('HUBSPOT_CLIENT_ID');
+    await expect(note).toContainText('HubSpot sign-in isn\'t switched on yet');
+    await expect(note).toContainText('keep building with mock data');
+    // Admins don't see server setting names; the setup checklist has them.
+    await expect(note).not.toContainText('HUBSPOT_CLIENT_ID');
     await expect(note.getByRole('link', { name: /Open the setup checklist/ })).toHaveAttribute('href', '/setup.html');
     await page.keyboard.press('Escape');
 
-    // Deploy to HubSpot still works without sign-in (personal access key only).
-    await topBar(page).getByRole('button', { name: 'Export', exact: true }).click();
-    const dialog = page.getByRole('dialog', { name: /Export/ });
-    await dialog.getByRole('tab', { name: 'Deploy to HubSpot' }).click();
+    // While sign-in isn't set up (first-time setup: deploying the connector app itself), Deploy to
+    // HubSpot works with the personal access key alone.
+    await topBar(page).getByRole('button', { name: 'Publish', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Publish to HubSpot' });
+    await dialog.getByRole('tab', { name: 'Publish to HubSpot' }).click();
     await expect(dialog.getByLabel('Paste your key')).toBeVisible();
+    expect(watch.errors).toEqual([]);
+  });
+
+  test('SESSION_SECRET still missing: the deploy tab and the setup page say what to do', async ({ page }) => {
+    const watch = watchConsole(page);
+    await page.route('**/api/health', async (route) => {
+      const real = await route.fetch();
+      const body = (await real.json()) as Record<string, unknown>;
+      await route.fulfill({
+        response: real,
+        json: {
+          ...body,
+          oauthConfigured: false,
+          missingSettings: ['HUBSPOT_CLIENT_ID', 'HUBSPOT_CLIENT_SECRET', 'SESSION_SECRET'],
+          features: { crm: false, fetchProxy: false, deploy: false, deployUnavailableReason: 'session_secret' },
+        },
+      });
+    });
+    await openEditor(page);
+    await topBar(page).getByRole('button', { name: 'Publish', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Publish to HubSpot' });
+    await dialog.getByRole('tab', { name: 'Publish to HubSpot' }).click();
+    await expect(dialog).toContainText('SESSION_SECRET');
+    await expect(dialog.getByRole('link', { name: /setup checklist/i })).toHaveAttribute('href', '/setup.html');
+    await expect(dialog).not.toContainText('turned off deploying');
+    await snap(page, '09-deploy-needs-session-secret');
+
+    await page.goto('/setup.html');
+    const warning = page.locator('#deploy-warning');
+    await expect(warning).toBeVisible();
+    await expect(warning).toContainText('Deploy to HubSpot needs SESSION_SECRET first');
+    await expect(warning.getByRole('link', { name: 'Make one here' })).toHaveAttribute('href', '/secret.html');
+    await expect(page.locator('#status-detail')).toContainText('Still missing: HUBSPOT_CLIENT_ID, HUBSPOT_CLIENT_SECRET, SESSION_SECRET');
+    await expect(page.getByText('Acceptable Use Policy', { exact: true })).toBeVisible();
+    await snap(page, '10-setup-page-session-secret');
     expect(watch.errors).toEqual([]);
   });
 });

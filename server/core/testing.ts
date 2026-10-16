@@ -21,11 +21,12 @@ export const TEST_APP_BASE = 'https://app.hubspot.com';
 export const TEST_START_TIME = Date.parse('2025-06-01T12:00:00.000Z');
 
 interface StoredCookie {
+  name: string;
   value: string;
   path: string;
 }
 
-/** Minimal cookie jar honouring Max-Age=0 deletion and Path scoping. */
+/** Minimal cookie jar honouring Max-Age=0 deletion and Path scoping (cookies are keyed by name + path, like browsers). */
 export class CookieJar {
   readonly cookies = new Map<string, StoredCookie>();
 
@@ -42,24 +43,34 @@ export class CookieJar {
         if (k.toLowerCase() === 'path') path = v ?? '/';
         if (k.toLowerCase() === 'max-age' && Number(v) <= 0) remove = true;
       }
-      if (remove || value === '') this.cookies.delete(name);
-      else this.cookies.set(name, { value, path });
+      const key = `${name}\u0000${path}`;
+      if (remove || value === '') this.cookies.delete(key);
+      else this.cookies.set(key, { name, value, path });
     }
   }
 
   header(pathname: string): string {
-    return [...this.cookies.entries()]
-      .filter(([, c]) => pathname === c.path || pathname.startsWith(c.path.endsWith('/') ? c.path : `${c.path}/`) || c.path === '/')
-      .map(([n, c]) => `${n}=${c.value}`)
+    return [...this.cookies.values()]
+      .filter((c) => pathname === c.path || pathname.startsWith(c.path.endsWith('/') ? c.path : `${c.path}/`) || c.path === '/')
+      .sort((a, b) => b.path.length - a.path.length) // more specific paths first, like browsers
+      .map((c) => `${c.name}=${c.value}`)
       .join('; ');
   }
 
   get(name: string): string | undefined {
-    return this.cookies.get(name)?.value;
+    return this.cookies.get(`${name}\u0000/`)?.value ?? [...this.cookies.values()].find((c) => c.name === name)?.value;
   }
 
   set(name: string, value: string, path = '/'): void {
-    this.cookies.set(name, { value, path });
+    this.cookies.set(`${name}\u0000${path}`, { name, value, path });
+  }
+
+  delete(name: string, path = '/'): void {
+    this.cookies.delete(`${name}\u0000${path}`);
+  }
+
+  names(): string[] {
+    return [...new Set([...this.cookies.values()].map((c) => c.name))];
   }
 }
 
@@ -75,6 +86,8 @@ export interface CallInit {
   origin?: string;
   /** Use the cookie jar (default true). */
   cookies?: boolean;
+  /** Client IP the hosting adapter reports (RequestMeta.clientIp). */
+  clientIp?: string;
 }
 
 export interface TestEnv {
@@ -140,7 +153,7 @@ export function createTestEnv(
       body = JSON.stringify(init.json);
       headers['Content-Type'] = 'application/json';
     }
-    const res = await connector.handle(new Request(url, { method: init.method ?? (body !== undefined ? 'POST' : 'GET'), headers, body }));
+    const res = await connector.handle(new Request(url, { method: init.method ?? (body !== undefined ? 'POST' : 'GET'), headers, body }), { clientIp: init.clientIp });
     if (!res) throw new Error(`not an API route: ${pathAndQuery}`);
     if (init.cookies !== false) jar.store(res);
     return res;

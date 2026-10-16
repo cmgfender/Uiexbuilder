@@ -56,6 +56,7 @@ import {
   type DataSourceStatus,
 } from './scope';
 import type { IframeModalState, LiveDataAdapter, RuntimeAlert, RuntimeLogEntry } from './types';
+import { LiveCrmProvider, type LiveCrmSource } from '../preview/liveCrm';
 import './runtime.css';
 
 /** Oldest log entries are dropped beyond this many. */
@@ -871,10 +872,27 @@ export function RuntimeProvider({ project, extension, mode, resetKey = 0, live =
     ],
   );
 
+  // CRM components read the sample record through the same live adapter (src/preview/liveCrm).
+  const liveCrm = useMemo<LiveCrmSource | null>(() => {
+    if (!live) return null;
+    const crm = live.context.crm;
+    return {
+      key: live.key,
+      record: crm ? { objectTypeId: crm.objectTypeId, objectId: crm.objectId } : null,
+      getRecordProperties: live.getRecordProperties,
+      getAssociations: live.getAssociations,
+      getPropertyDefinitions: live.getPropertyDefinitions,
+      getPipelines: live.getPipelines,
+    };
+    // A new key means another portal / record; the adapter's functions don't change otherwise.
+  }, [liveKey]);
+
   return (
     <RuntimeContext.Provider value={api}>
       <ControlsContext.Provider value={controls}>
-        <RenderContext.Provider value={renderState}>{children}</RenderContext.Provider>
+        <LiveCrmProvider value={liveCrm}>
+          <RenderContext.Provider value={renderState}>{children}</RenderContext.Provider>
+        </LiveCrmProvider>
       </ControlsContext.Provider>
     </RuntimeContext.Provider>
   );

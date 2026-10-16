@@ -3,7 +3,7 @@
  * the inspector, all sharing one preview runtime. Also mounts the dialogs, the command palette,
  * global shortcuts, autosave, problem tracking and the compact (narrow window) layout.
  */
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { selectActiveExtension, useEditor } from '../model/store';
 import { RuntimeProvider } from '../runtime';
 import { useConnection } from '../connect';
@@ -12,6 +12,7 @@ import { Canvas } from '../canvas';
 import { CommandPalette } from '../power';
 import { AppSettingsDialog, ExportDialog, ExtensionsDialog, FunctionsDialog, ProjectsDialog } from '../panels';
 import { NewProjectDialog } from '../templates';
+import { FirstRun, Tour, useOnboarding } from '../onboarding';
 import { BottomPanel } from './BottomPanel';
 import { useDialogs } from './dialogs';
 import { ImportConflictDialog } from './importProject';
@@ -23,7 +24,6 @@ import { useGlobalShortcuts } from './shortcuts';
 import { ShortcutsDialog } from './ShortcutsDialog';
 import { LeftSidebar, RightSidebar } from './Sidebars';
 import { TopBar } from './TopBar';
-import { WelcomeCard } from './WelcomeCard';
 import './shell.css';
 
 /** Provides the shared preview runtime for the active extension (re-renders only the provider). */
@@ -97,9 +97,32 @@ function ShellServices() {
   return null;
 }
 
+/**
+ * While the first-run screen covers the window, the editor behind it is inert and hidden from
+ * assistive technology (React 18 has no `inert` prop, so it is set on the element).
+ */
+function useHiddenBehindFirstRun() {
+  const ref = useRef<HTMLDivElement>(null);
+  const covered = useOnboarding((s) => s.open);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (covered) {
+      el.setAttribute('inert', '');
+      el.setAttribute('aria-hidden', 'true');
+    } else {
+      el.removeAttribute('inert');
+      el.removeAttribute('aria-hidden');
+    }
+  }, [covered]);
+  return ref;
+}
+
 export function AppShell() {
+  const viewport = useHiddenBehindFirstRun();
   return (
-    <div className="ub-sh-viewport">
+    <>
+    <div className="ub-sh-viewport" ref={viewport}>
       <WorkspaceRuntime>
         <ShellServices />
         <ShellGrid>
@@ -110,7 +133,6 @@ export function AppShell() {
           <main className="ub-sh-center" aria-label="Canvas">
             <div className="ub-sh-canvas">
               <Canvas />
-              <WelcomeCard />
             </div>
             <BottomPanel />
           </main>
@@ -120,5 +142,8 @@ export function AppShell() {
         <CommandPalette />
       </WorkspaceRuntime>
     </div>
+    <FirstRun />
+    <Tour />
+    </>
   );
 }

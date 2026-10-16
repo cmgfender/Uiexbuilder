@@ -268,6 +268,14 @@ interface DataSourceBase {
   name: string;
 }
 
+/** `propertiesToFormat` of a CRM data source: 'all' (true), none (false / absent) or a list of properties. */
+export type FormattedSetting = boolean | string[];
+
+/** Whether a property's value is formatted under a FormattedSetting. */
+export function isFormatted(setting: FormattedSetting | undefined, property: string): boolean {
+  return setting === true || (Array.isArray(setting) && setting.includes(property));
+}
+
 /**
  * useCrmProperties([...]) — properties of the current CRM record.
  * Scope: `<name>` is Record<string, string | null>.
@@ -275,8 +283,11 @@ interface DataSourceBase {
 export interface CrmPropertiesSource extends DataSourceBase {
   kind: 'crmProperties';
   properties: string[];
-  /** Pass { propertiesToFormat: 'all' } to get formatted values. */
-  formatted?: boolean;
+  /**
+   * Formatted values: true → { propertiesToFormat: 'all' }; a list → only those properties
+   * (e.g. ['dealstage'] for stage labels while amounts stay numbers).
+   */
+  formatted?: FormattedSetting;
 }
 
 /**
@@ -289,7 +300,7 @@ export interface AssociationsSource extends DataSourceBase {
   toObjectType: string;
   properties: string[];
   pageLength: number;
-  formatted?: boolean;
+  formatted?: FormattedSetting;
 }
 
 /**
@@ -305,7 +316,7 @@ export interface CrmSearchSource extends DataSourceBase {
   filters: Array<{ propertyName: string; operator: string; value: string }>;
   sorts: Array<{ propertyName: string; direction: 'ASCENDING' | 'DESCENDING' }>;
   pageLength: number;
-  formatted?: boolean;
+  formatted?: FormattedSetting;
 }
 
 /**

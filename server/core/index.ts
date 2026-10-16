@@ -23,6 +23,7 @@ import { authRoutes } from './routes/auth';
 import { crmRoutes } from './routes/crm';
 import { proxyRoutes } from './routes/proxy';
 import { deployRoutes } from './routes/deploy';
+import { describeAuthError, renderAuthPage } from './authPage';
 
 export { configFromEnv, checkConfig, CONNECTOR_VERSION, DEFAULT_OPTIONAL_SCOPES, DEFAULT_REQUIRED_SCOPES } from './config';
 export type { ConfigStatus } from './config';
@@ -85,7 +86,7 @@ export function createConnector(config: ServerConfig, options: ConnectorOptions 
   const limiter = options.rateLimiter ?? new RateLimiter(config.now);
 
   /** Rate limits for the routes that make the server call out on the caller's behalf. */
-  async function applyRateLimit(route: Route, session: CookieSession, clientIp: string | undefined): Promise<void> {
+  async function applyRateLimit(route: Route, request: Request, session: CookieSession, clientIp: string | undefined): Promise<Response | null> {
     const ipKey = `ip:${clientIp ?? 'unknown'}`;
     const userKey = async () => {
       if (!status.oauthConfigured) return null;
@@ -104,9 +105,26 @@ export function createConnector(config: ServerConfig, options: ConnectorOptions 
       rule = RATE_RULES.proxy;
       key = (await userKey()) ?? ipKey;
     }
-    if (!rule) return;
+    if (!rule) return null;
     const decision = limiter.take(rule, key);
-    if (!decision.ok) throw rateLimited(rule, decision.retryAfter);
+    if (decision.ok) return null;
+    const err = rateLimited(rule, decision.retryAfter);
+    // Sign-in start / callback are page loads in the HubSpot window: answer with a readable page.
+    const accept = request.headers.get('accept') ?? '';
+    if ((route.path === CONNECTOR_ROUTES.authStart || route.path === CONNECTOR_ROUTES.authCallback) && !accept.includes('application/json')) {
+      const page = await renderAuthPage({
+        status: 429,
+        ok: false,
+        title: describeAuthError('rate_limited').title,
+        message: err.message,
+        targetOrigin: null,
+        returnTo: config.appUrl || null,
+        errorCode: 'rate_limited',
+      });
+      page.headers.set('Retry-After', String(decision.retryAfter));
+      return page;
+    }
+    throw err;
   }
 
   async function dispatch(request: Request, url: URL, session: CookieSession, meta: RequestMeta): Promise<Response> {
@@ -126,7 +144,8 @@ export function createConnector(config: ServerConfig, options: ConnectorOptions 
     }
     const route: Route = match.route;
     if (route.csrf !== false) assertCsrf(config, request);
-    await applyRateLimit(route, session, meta.clientIp);
+    const limited = await applyRateLimit(route, request, session, meta.clientIp);
+    if (limited) return limited;
 
     let api: SessionHubSpotApi | null = null;
     const hubspot = async (): Promise<SessionHubSpotApi> => {
@@ -149,7 +168,10 @@ export function createConnector(config: ServerConfig, options: ConnectorOptions 
       config,
       session,
       hubspot,
-      signedIn: async (): Promise<SessionData> => (await hubspot()).ensureFresh(),
+      signedIn: async (opts?: { confirm?: boolean }): Promise<SessionData> => {
+        const a = await hubspot();
+        return opts?.confirm ? a.refresh() : a.ensureFresh();
+      },
       clientIp: meta.clientIp,
     };
 

@@ -97,8 +97,11 @@ function stringArray(values: string[] | undefined): JsNode {
   return jsArray((Array.isArray(values) ? values : []).map((v) => jsCode(quoteString(asString(v)))));
 }
 
-function formatOptions(formatted: boolean | undefined): JsNode[] {
-  return formatted ? [jsObject([['propertiesToFormat', jsCode("'all'")]])] : [];
+/** `{ propertiesToFormat: 'all' }`, `{ propertiesToFormat: ['dealstage'] }` or nothing. */
+function formatOptions(formatted: boolean | string[] | undefined): JsNode[] {
+  if (formatted === true) return [jsObject([['propertiesToFormat', jsCode("'all'")]])];
+  const list = Array.isArray(formatted) ? formatted.filter((p) => typeof p === 'string' && p.trim() !== '') : [];
+  return list.length ? [jsObject([['propertiesToFormat', stringArray(list)]])] : [];
 }
 
 /** Component-scope identifiers referenced by user code (hook dependency lists). */

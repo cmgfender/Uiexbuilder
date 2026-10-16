@@ -12,7 +12,6 @@ export { CodePanel } from './CodePanel';
 export { ProblemsPanel } from './ProblemsPanel';
 export { ConsolePanel } from './ConsolePanel';
 export { ShortcutsDialog, Keys } from './ShortcutsDialog';
-export { WelcomeCard } from './WelcomeCard';
 export {
   SHORTCUTS,
   SHORTCUT_GROUPS,

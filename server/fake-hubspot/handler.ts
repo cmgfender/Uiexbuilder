@@ -81,8 +81,15 @@ export interface FakeHubSpotControls extends FakeHubSpot {
   readonly droppedScopes: ReadonlySet<string>;
 }
 
-/** Personal access key the fake always accepts for the default portal. */
-export const FAKE_PERSONAL_ACCESS_KEY = 'pat-na1-fake0000-0000-4000-8000-000000000001';
+/**
+ * Personal access key the fake always accepts for the default portal. Shaped like a real one (a long
+ * base64 code that starts with "CiR…", which encodes the hublet "na1"), not like a private app
+ * token ("pat-na1-…"). The demo shows it on the fake's personal access key page
+ * (`/personal-access-key/<portal>`, the page the builder's "How do I get this?" guide opens).
+ */
+export const FAKE_PERSONAL_ACCESS_KEY = 'CiRuYTEtZmFrZS1kZW1vLWtleS1hY21lZGVtby0wMDAwMDAwMRIYdWlleC1kZW1vLWZha2UtcGFrLTAwMDAwMQ';
+/** The key earlier demos printed (still accepted). */
+export const LEGACY_FAKE_PERSONAL_ACCESS_KEY = 'pat-na1-fake0000-0000-4000-8000-000000000001';
 
 interface Grant {
   refreshToken: string;
@@ -143,7 +150,8 @@ export function createFakeHubSpot(opts: FakeHubSpotOptions): FakeHubSpotControls
   const now = opts.now ?? (() => Date.now());
   const ttl = opts.accessTokenTtlSeconds ?? 1800;
   const region = opts.region ?? 'na1';
-  const user = opts.user ?? { email: 'jordan.lee@acmedemo.com', id: 9001 };
+  // Not "Jordan Lee" (the mock data's user), so switching to live data visibly changes the preview.
+  const user = opts.user ?? { email: 'sam.rivera@acmedemo.com', id: 9001 };
 
   const grants = new Map<string, Grant>();
   const accessTokens = new Map<string, AccessToken>();
@@ -153,7 +161,11 @@ export function createFakeHubSpot(opts: FakeHubSpotOptions): FakeHubSpotControls
   const requests: FakeRequestLog[] = [];
   const projects: FakeProjectsState = {
     portalId,
-    personalAccessKeys: new Map<string, number>([[FAKE_PERSONAL_ACCESS_KEY, portalId], ...Object.entries(opts.personalAccessKeys ?? {})]),
+    personalAccessKeys: new Map<string, number>([
+      [FAKE_PERSONAL_ACCESS_KEY, portalId],
+      [LEGACY_FAKE_PERSONAL_ACCESS_KEY, portalId],
+      ...Object.entries(opts.personalAccessKeys ?? {}),
+    ]),
   };
 
   const effectiveScopes = (g: Grant) => g.scopes.filter((s) => !dropped.has(s));
@@ -253,6 +265,95 @@ export function createFakeHubSpot(opts: FakeHubSpotOptions): FakeHubSpotControls
 <button type="submit" name="decision" value="deny">Deny</button></form>
 <p hidden>${esc(state)}</p></main>`,
     );
+  }
+
+  /** The fake "Personal access key" settings page (what "How do I get this?" opens in the demo). */
+  function personalAccessKeyPage(): Response {
+    const key = esc(FAKE_PERSONAL_ACCESS_KEY);
+    return new Response(
+      `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Personal access key · HubSpot (fake)</title>
+<style>body{font:15px/1.5 system-ui,sans-serif;margin:40px auto;max-width:640px;padding:0 16px;color:#33475b}code{display:block;word-break:break-all;background:#eaf0f6;padding:10px 12px;border-radius:6px;margin:8px 0}button{font:inherit;padding:6px 14px}</style>
+</head><body><main><h1>Personal access key (fake HubSpot)</h1>
+<p>Account <strong>${portalId}</strong> (${esc(seed.hubDomain)}) — ${esc(user.email)}</p>
+<p>Permissions: <strong>Developer projects</strong> ✓</p>
+<label for="k">Your key</label><code id="k">${key}</code>
+<button type="button" id="copy">Copy</button> <span id="done" role="status"></span>
+<p>This is a demo account: the key only works with the fake HubSpot.</p></main>
+<script>document.getElementById('copy').onclick=function(){var t=document.getElementById('k').textContent;var d=document.getElementById('done');(navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(function(){d.textContent='Copied';},function(){var r=document.createRange();r.selectNodeContents(document.getElementById('k'));var s=getSelection();s.removeAllRanges();s.addRange(r);d.textContent='Selected - press Ctrl+C to copy';});};</script>
+</body></html>`,
+      { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } },
+    );
+  }
+
+  // ------------------------------------------------------------ demo app pages
+  // The "Finish in HubSpot" checklist links to HubSpot's web app (install the app, settings, a
+  // record). In the demo those go to this fake, so they get small stand-in pages instead of an
+  // error: each says what the real page does and how to get back to the builder.
+
+  function demoPage(title: string, body: string): Response {
+    return new Response(
+      `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${esc(title)} · HubSpot (fake)</title>
+<style>body{font:15px/1.55 system-ui,sans-serif;margin:40px auto;max-width:720px;padding:0 16px;color:#33475b}h1{font-size:24px}
+.note{background:#eaf0f6;border-radius:8px;padding:10px 14px}.card{border:1px dashed #cbd6e2;border-radius:8px;padding:14px;margin:12px 0}
+button{font:inherit;padding:6px 14px}table{border-collapse:collapse}td,th{border-bottom:1px solid #dfe3eb;padding:6px 10px;text-align:left}</style>
+</head><body><main><p class="note">Demo account <strong>${portalId}</strong> (${esc(seed.hubDomain)}) — this is a stand-in for a HubSpot page. Close this tab to go back to the builder.</p>
+<h1>${esc(title)}</h1>${body}</main></body></html>`,
+      { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } },
+    );
+  }
+
+  function recordName(t: FakeObjectType, r: FakeRecord): string {
+    if (t.name === 'contacts') return [r.properties.firstname, r.properties.lastname].filter(Boolean).join(' ') || `Contact ${r.id}`;
+    return r.properties[t.primaryDisplayProperty] || `${t.singular} ${r.id}`;
+  }
+
+  function demoAppPage(path: string): Response | null {
+    let m: RegExpExecArray | null;
+    if (/^\/static-token\/\d+\/authorize\/?$/.test(path)) {
+      return demoPage(
+        'Install your app',
+        `<p>In HubSpot this page asks you to approve the access your app needs. Approve it once and every card in the app can show up on your records.</p>
+<button type="button" id="install">Install</button> <span id="done" role="status"></span>
+<script>document.getElementById('install').onclick=function(){document.getElementById('done').textContent='Installed — close this tab and go back to the builder.';};</script>`,
+      );
+    }
+    if (/^\/settings\/\d+\/?/.test(path)) {
+      return demoPage(
+        'Settings',
+        `<p>In HubSpot, this is where you add your card to a record page: <strong>Data Management → Objects → (your record type) → Record Customization</strong>. The builder’s checklist lists every click.</p>
+<p>The demo account has nothing to set up here.</p>`,
+      );
+    }
+    if ((m = /^\/contacts\/\d+\/record\/([^/]+)\/([^/]+)\/?$/.exec(path))) {
+      const t = findType(decodeURIComponent(m[1]));
+      const r = t ? recordsOf(t).find((x) => x.id === decodeURIComponent(m![2])) : undefined;
+      if (!t || !r) return demoPage('Record not found', '<p>This demo account has no such record.</p>');
+      const rows = t.defaultProperties
+        .filter((n) => r.properties[n] && !/^(hs_object_id|createdate|hs_createdate|lastmodifieddate|hs_lastmodifieddate)$/.test(n))
+        .slice(0, 6)
+        .map((n) => `<tr><th>${esc(t.properties.find((p) => p.name === n)?.label ?? n)}</th><td>${esc(String(r.properties[n]))}</td></tr>`)
+        .join('');
+      return demoPage(
+        recordName(t, r),
+        `<table>${rows}</table><div class="card"><strong>Your app cards show here</strong><br>Once the app is installed and the card is added to the ${esc(t.singular.toLowerCase())} record page, HubSpot shows it in this spot.</div>`,
+      );
+    }
+    if ((m = /^\/contacts\/\d+\/objects\/([^/]+)\/?$/.exec(path))) {
+      const t = findType(decodeURIComponent(m[1]));
+      if (!t) return demoPage('Records', '<p>This demo account has no such record type.</p>');
+      const items = recordsOf(t)
+        .slice(0, 25)
+        .map((r) => `<li><a href="/contacts/${portalId}/record/${esc(t.objectTypeId)}/${esc(r.id)}">${esc(recordName(t, r))}</a></li>`)
+        .join('');
+      return demoPage(t.plural, `<ul>${items}</ul>`);
+    }
+    if ((m = /^\/developer-projects\/\d+\/project\/([^/]+)\/?/.exec(path))) {
+      return demoPage(
+        `Project “${decodeURIComponent(m[1])}”`,
+        '<p>In HubSpot this page shows your project’s builds and deploys, and the app it contains (Distribution → Install, Auth → Client ID).</p>',
+      );
+    }
+    return null;
   }
 
   function decide(url: URL, decision: string): Response {
@@ -591,6 +692,7 @@ export function createFakeHubSpot(opts: FakeHubSpotOptions): FakeHubSpotControls
     if (FAKE_PROJECT_PATH_PREFIXES.some((p) => path.startsWith(p))) return handleFakeProjects(request, projects);
 
     if (request.method === 'GET' && path === '/oauth/authorize') return authorizePage(url);
+    if (request.method === 'GET' && (path === '/l/personal-access-key' || /^\/personal-access-key\/\d+\/?$/.test(path))) return personalAccessKeyPage();
     if (request.method === 'GET' && path === '/oauth/authorize/decision') return decide(url, url.searchParams.get('decision') ?? 'deny');
     if (request.method === 'POST' && path === '/oauth/v1/token') return token(request);
     let m: RegExpExecArray | null;
@@ -602,6 +704,10 @@ export function createFakeHubSpot(opts: FakeHubSpotOptions): FakeHubSpotControls
       const at = authenticate(request, log);
       if (at instanceof Response) return at;
       return crm(request, url, at);
+    }
+    if (request.method === 'GET') {
+      const page = demoAppPage(path);
+      if (page) return page;
     }
     return hsError(404, `Unknown fake endpoint ${request.method} ${path}`, 'OBJECT_NOT_FOUND');
   }

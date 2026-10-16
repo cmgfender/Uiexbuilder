@@ -355,14 +355,18 @@ async function simulateServerless(
   return result;
 }
 
-async function copyText(host: ActionHost, text: string): Promise<void> {
+/**
+ * `announce`: say in the card what was copied (HubSpot copies silently, so the preview shows it
+ * to make the action testable) — unless the handler shows its own alert afterwards, which would
+ * otherwise appear twice.
+ */
+async function copyText(host: ActionHost, text: string, announce = true): Promise<void> {
   try {
     const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
     if (!clipboard?.writeText) throw new Error('Clipboard API is not available');
     await clipboard.writeText(text);
     host.log('action', `Copied to clipboard: "${text}"`);
-    // HubSpot copies silently; the preview says what was copied so the action can be tested.
-    host.addAlert({ type: 'info', title: 'Copied to clipboard (preview)', message: clipText(text) || '(empty text)' });
+    if (announce) host.addAlert({ type: 'info', title: 'Copied to clipboard (preview)', message: clipText(text) || '(empty text)' });
   } catch (e) {
     host.log('warn', `Copy to clipboard failed (${errorMessage(e)}). Text: "${text}"`);
     host.addAlert({ type: 'warning', title: 'Copy to clipboard (preview)', message: `The browser blocked the copy. Text: ${clipText(text) || '(empty text)'}` });
@@ -611,7 +615,12 @@ function preview(value: unknown): string {
   return s.length > 120 ? `${s.slice(0, 117)}…` : s;
 }
 
-async function executeStep(step: ActionStep, scope: Scope, host: ActionHost): Promise<void> {
+/** The handler shows an alert of its own after this step (so a preview-only notice would repeat it). */
+function alertFollows(rest: readonly ActionStep[]): boolean {
+  return rest.some((s) => s.type === 'addAlert');
+}
+
+async function executeStep(step: ActionStep, scope: Scope, host: ActionHost, rest: readonly ActionStep[] = []): Promise<void> {
   switch (step.type) {
     case 'setState': {
       const value = evalStrict(host, step, 'value', step.value ?? '', scope);
@@ -647,7 +656,7 @@ async function executeStep(step: ActionStep, scope: Scope, host: ActionHost): Pr
       closeOverlayById(host, step.overlayNodeId);
       return;
     case 'copyToClipboard':
-      await copyText(host, interpolate(step.text ?? '', scope));
+      await copyText(host, interpolate(step.text ?? '', scope), !alertFollows(rest));
       return;
     case 'runDataSource':
       await host.runDataSource(step.dataSourceId);
@@ -689,10 +698,11 @@ async function executeStep(step: ActionStep, scope: Scope, host: ActionHost): Pr
 
 /** Runs steps sequentially with the given (snapshot) scope. Throws StepFailure to abort. */
 async function executeSteps(steps: ActionStep[], scope: Scope, host: ActionHost): Promise<void> {
-  for (const step of steps) {
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
     if (!host.isActive()) return;
     try {
-      await executeStep(step, scope, host);
+      await executeStep(step, scope, host, steps.slice(i + 1));
     } catch (e) {
       if (e instanceof StepFailure) throw e;
       // Unexpected failure inside the runtime itself: log and abort like a thrown error would.

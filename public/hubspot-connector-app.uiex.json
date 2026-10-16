@@ -10,8 +10,7 @@
     "distribution": "marketplace",
     "authType": "oauth",
     "redirectUrls": [
-      "https://YOUR-DOMAIN/api/auth/callback",
-      "http://localhost:5173/api/auth/callback"
+      "https://YOUR-DOMAIN/api/auth/callback"
     ],
     "requiredScopes": [
       "oauth",
@@ -47,7 +46,7 @@
   },
   "extensions": [
     {
-      "id": "e_npgtvl9j8c",
+      "id": "e_dvflpnid3m",
       "kind": "settings",
       "uid": "uiex_builder_settings",
       "name": "UI Extension Builder",
@@ -59,53 +58,53 @@
       ],
       "state": [],
       "dataSources": [],
-      "rootId": "n_5ci6p100co",
+      "rootId": "n_qlocswdg2x",
       "nodes": {
-        "n_5ci6p100co": {
-          "id": "n_5ci6p100co",
+        "n_qlocswdg2x": {
+          "id": "n_qlocswdg2x",
           "type": "__root__",
           "props": {},
           "children": [
-            "n_xtl92ad6qg"
+            "n_99hleyw90m"
           ]
         },
-        "n_xtl92ad6qg": {
-          "id": "n_xtl92ad6qg",
+        "n_99hleyw90m": {
+          "id": "n_99hleyw90m",
           "type": "Flex",
           "props": {
             "direction": "column",
             "gap": "medium"
           },
           "children": [
-            "n_71f734ytot",
-            "n_gw1x80p8un",
-            "n_udtkk93hr3",
-            "n_t6ft0icrti"
+            "n_b08mvevj87",
+            "n_0el41kva4u",
+            "n_pv6x7z2auu",
+            "n_485q3yn5ub"
           ]
         },
-        "n_71f734ytot": {
-          "id": "n_71f734ytot",
+        "n_b08mvevj87": {
+          "id": "n_b08mvevj87",
           "type": "Heading",
           "props": {},
           "children": [],
           "text": "UI Extension Builder"
         },
-        "n_gw1x80p8un": {
-          "id": "n_gw1x80p8un",
+        "n_0el41kva4u": {
+          "id": "n_0el41kva4u",
           "type": "Text",
           "props": {},
           "children": [],
           "text": "This app lets your team preview HubSpot cards in UI Extension Builder with your real CRM records, properties and pipelines."
         },
-        "n_udtkk93hr3": {
-          "id": "n_udtkk93hr3",
+        "n_pv6x7z2auu": {
+          "id": "n_pv6x7z2auu",
           "type": "Text",
           "props": {},
           "children": [],
           "text": "It only reads data. It never creates, changes or deletes anything in HubSpot."
         },
-        "n_t6ft0icrti": {
-          "id": "n_t6ft0icrti",
+        "n_485q3yn5ub": {
+          "id": "n_485q3yn5ub",
           "type": "Text",
           "props": {},
           "children": [],

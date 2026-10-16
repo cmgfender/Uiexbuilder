@@ -10,8 +10,8 @@ export {
   freshBlockTemplate,
   matchesBlock,
 } from './catalog';
-export type { ExtensionTemplate, BlockTemplate, InstantiatedTemplate } from './catalog';
-export { insertBlock, addTemplateToProject, replaceActiveWithTemplate, projectFromTemplate, type FlowResult } from './actions';
+export type { ExtensionTemplate, BlockTemplate, BuiltBlock, InstantiatedTemplate } from './catalog';
+export { insertBlock, prepareBlock, addTemplateToProject, replaceActiveWithTemplate, projectFromTemplate, type FlowResult } from './actions';
 export { Wireframe, extensionTemplates } from './Wireframe';
 export { saveUserBlock, renameUserBlock, deleteUserBlock, listUserBlocks, reloadUserBlocks, useUserBlocks } from './userBlocks';
 export type { UserBlock } from './userBlocks';

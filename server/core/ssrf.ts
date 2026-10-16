@@ -1,16 +1,20 @@
 /**
  * SSRF guard for the fetch proxy (preview of `hubspot.fetch`).
  *
- * Allowed: https URLs to public hosts. In local development (APP_URL on localhost) http and https
- * to localhost / loopback addresses are allowed too, so a locally running backend can be previewed.
- * Blocked: other schemes, credentials in the URL, IP literals in private / loopback / link-local /
- * CGNAT / multicast / reserved ranges (IPv4, IPv6, IPv4-mapped and NAT64), "localhost", "*.localhost",
- * "*.internal", "*.local", "metadata.google.internal" and single-label hostnames.
+ * Allowed: https URLs to public hosts. In local development (APP_URL on localhost, and the request
+ * coming from a browser on the same computer) http and https to localhost / loopback addresses are
+ * allowed too, so a locally running backend can be previewed.
+ * Blocked: other schemes, credentials in the URL, the ports browsers refuse (fetch spec "bad ports":
+ * SMTP, SSH, …), IP literals in private / loopback / link-local / CGNAT / multicast / reserved ranges,
+ * every IPv6 address outside global unicast 2000::/3 (so NAT64, IPv4-translated, …) and the special
+ * ranges inside it (Teredo, 6to4, documentation, ORCHID), "localhost", "*.localhost", "*.internal",
+ * "*.local", "metadata.google.internal" and single-label hostnames.
  *
- * Limitation: the Web Fetch API has no portable DNS lookup, so a public hostname that resolves to a
- * private address (DNS rebinding) cannot be detected here. Deploy the connector where outbound
- * traffic to internal networks is impossible (Vercel / Cloudflare Workers are) or disable the proxy
- * with ENABLE_FETCH_PROXY=false.
+ * Host NAMES are checked here; the ADDRESSES they resolve to are checked where a DNS lookup exists:
+ * the Node server (Render, Docker, any Node host) passes ServerConfig.proxyFetch =
+ * server/guardedFetch.ts, which resolves every name, refuses blocked addresses (addressBlocked) and
+ * connects to exactly the address it checked (no DNS rebinding). The Edge runtimes (Vercel,
+ * Cloudflare Workers) have no DNS API, but they also have no private network to reach.
  */
 
 export type UrlCheck = { ok: true; url: URL } | { ok: false; reason: string };
@@ -25,6 +29,9 @@ function parseIPv4(host: string): number[] | null {
 export function isBlockedIPv4(parts: number[]): boolean {
   const [a, b, c] = parts;
   if (a === 0) return true; // "this network"
+  if (a === 192 && b === 31 && c === 196) return true; // AS112
+  if (a === 192 && b === 52 && c === 193) return true; // AMT
+  if (a === 192 && b === 175 && c === 48) return true; // AS112 direct delegation
   if (a === 10) return true; // private
   if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
   if (a === 127) return true; // loopback
@@ -71,28 +78,58 @@ function parseIPv6(host: string): number[] | null {
   return out;
 }
 
+/**
+ * IPv6: only global unicast (2000::/3) can be reached, minus its special-purpose ranges. Everything
+ * else — loopback, unspecified, unique / link / site local, multicast, NAT64 (64:ff9b::/96 and the
+ * local-use 64:ff9b:1::/48), IPv4-translated ::ffff:0:a.b.c.d, discard-only 100::/64 … — is refused.
+ * IPv4-mapped addresses (::ffff:a.b.c.d) are judged as the IPv4 address they stand for.
+ */
 export function isBlockedIPv6(h: number[]): boolean {
-  const allZeroPrefix = (n: number) => h.slice(0, n).every((x) => x === 0);
-  if (allZeroPrefix(8)) return true; // ::
-  if (allZeroPrefix(7) && h[7] === 1) return true; // ::1
-  // IPv4-mapped ::ffff:a.b.c.d and IPv4-compatible ::a.b.c.d
-  if (allZeroPrefix(5) && (h[5] === 0xffff || h[5] === 0)) {
+  if (h.slice(0, 5).every((x) => x === 0) && h[5] === 0xffff) {
     return isBlockedIPv4([h[6] >> 8, h[6] & 0xff, h[7] >> 8, h[7] & 0xff]);
   }
-  // NAT64 64:ff9b::/96
-  if (h[0] === 0x64 && h[1] === 0xff9b && h.slice(2, 6).every((x) => x === 0)) {
-    return isBlockedIPv4([h[6] >> 8, h[6] & 0xff, h[7] >> 8, h[7] & 0xff]);
-  }
-  if ((h[0] & 0xfe00) === 0xfc00) return true; // unique local fc00::/7
-  if ((h[0] & 0xffc0) === 0xfe80) return true; // link-local fe80::/10
-  if ((h[0] & 0xffc0) === 0xfec0) return true; // site-local (deprecated)
-  if ((h[0] & 0xff00) === 0xff00) return true; // multicast
+  if ((h[0] & 0xe000) !== 0x2000) return true; // outside global unicast 2000::/3
+  if (h[0] === 0x2001 && h[1] < 0x0200) return true; // 2001::/23 IETF protocol assignments (Teredo 2001::/32, benchmarking, ORCHID …)
   if (h[0] === 0x2001 && h[1] === 0x0db8) return true; // documentation
-  if (h[0] === 0x2002) {
-    // 6to4 embeds an IPv4 address
-    return isBlockedIPv4([h[1] >> 8, h[1] & 0xff, h[2] >> 8, h[2] & 0xff]);
-  }
+  if (h[0] === 0x2002) return true; // 6to4 (embeds an IPv4 address; deprecated)
+  if (h[0] === 0x3fff && h[1] < 0x1000) return true; // documentation 3fff::/20
   return false;
+}
+
+/**
+ * Ports browsers never fetch from (fetch spec "bad ports": FTP, SSH, SMTP, DNS, IRC, …). The proxy
+ * refuses them too, so it can't be used to talk to non-web services.
+ */
+export const BAD_PORTS = new Set([
+  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135,
+  137, 139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720,
+  1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080,
+]);
+
+/** Thrown by a guarded fetch when a host name resolves to an address the proxy must not reach. */
+export class BlockedAddressError extends Error {
+  readonly code = 'EUIEX_BLOCKED_ADDRESS';
+  constructor(message = 'That address points to a private or internal network, which the preview proxy does not reach.') {
+    super(message);
+    this.name = 'BlockedAddressError';
+  }
+}
+
+/** True when the proxy must not connect to this resolved address (IPv4 or IPv6 text form). */
+export function addressBlocked(address: string, opts: { allowLoopback?: boolean } = {}): boolean {
+  const bare = address.replace(/^\[|\]$/g, '');
+  if (opts.allowLoopback && isLoopbackHost(bare)) return false;
+  const v4 = parseIPv4(bare);
+  if (v4) return isBlockedIPv4(v4);
+  const v6 = parseIPv6(bare);
+  if (v6) return isBlockedIPv6(v6);
+  return true; // not an IP address: never connect to it blindly
+}
+
+/** True for loopback client addresses (127.0.0.0/8, ::1, ::ffff:127.x). */
+export function isLoopbackAddress(address: string | undefined | null): boolean {
+  if (!address) return false;
+  return isLoopbackHost(address.trim().toLowerCase().replace(/^\[|\]$/g, ''));
 }
 
 function isLoopbackHost(host: string): boolean {
@@ -100,7 +137,9 @@ function isLoopbackHost(host: string): boolean {
   const v4 = parseIPv4(host);
   if (v4) return v4[0] === 127;
   const v6 = parseIPv6(host.replace(/^\[|\]$/g, ''));
-  return !!v6 && v6.slice(0, 7).every((x) => x === 0) && v6[7] === 1;
+  if (!v6) return false;
+  if (v6.slice(0, 7).every((x) => x === 0) && v6[7] === 1) return true; // ::1
+  return v6.slice(0, 5).every((x) => x === 0) && v6[5] === 0xffff && v6[6] >> 8 === 127; // ::ffff:127.x.x.x
 }
 
 /** Check a hostname (as produced by the WHATWG URL parser, so numeric IPv4 forms are canonical). */
@@ -137,6 +176,7 @@ export function checkProxyUrl(raw: string, opts: { devLocal: boolean }): UrlChec
   } else if (url.protocol !== 'https:') {
     return { ok: false, reason: 'Only https:// URLs can be fetched.' };
   }
+  if (url.port && BAD_PORTS.has(Number(url.port))) return { ok: false, reason: `Port ${url.port} is not allowed (browsers refuse it too).` };
   const blocked = checkHostname(url.hostname, { allowLoopback: opts.devLocal });
   if (blocked) return { ok: false, reason: blocked };
   return { ok: true, url };

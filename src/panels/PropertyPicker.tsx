@@ -16,6 +16,8 @@ import { useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type 
 import { createPortal } from 'react-dom';
 import { Calendar, CalendarClock, CircleDot, Hash, List, Loader2, Phone, ToggleLeft, TriangleAlert, Type, X } from 'lucide-react';
 import { cx } from '../ui';
+import { useConnection } from '../connect/store';
+import { isMissingAccessMessage } from '../connect/describe';
 import { useAnchorRect } from './common';
 import { objectTypeLabel, propertyNameWarning } from './crmProperties';
 import {
@@ -215,10 +217,15 @@ function PropertyList({
                     onMouseEnter={() => onHover(i)}
                   >
                     <PropertyTypeIcon type={p.type} />
-                    <span className="ub-pp-option__label">{p.label}</span>
-                    <span className="ub-pp-option__name">{p.name}</span>
+                    {/* Two lines: the label people recognise, then the exact internal name (and group). */}
+                    <span className="ub-pp-option__text">
+                      <span className="ub-pp-option__label">{p.label}</span>
+                      <span className="ub-pp-option__meta">
+                        <span className="ub-pp-option__name">{p.name}</span>
+                        {!g.group && p.group && <span className="ub-pp-option__group"> · {p.group}</span>}
+                      </span>
+                    </span>
                     {p.custom && <span className="ub-pp-badge">Custom</span>}
-                    {!g.group && <span className="ub-pp-option__group">{p.group}</span>}
                   </div>
                 );
               })}
@@ -245,6 +252,14 @@ function StatusLine({ props }: { props: PortalProperties }) {
     return (
       <div className="ub-pp-status ub-pp-status--warn" role="status">
         Couldn’t load your HubSpot properties, so common ones are suggested. {props.error}
+        {isMissingAccessMessage(props.error) && (
+          <>
+            {' '}
+            <button type="button" className="ub-pn-link" onClick={() => void useConnection.getState().connect()}>
+              Reconnect to grant access
+            </button>
+          </>
+        )}
       </div>
     );
   }

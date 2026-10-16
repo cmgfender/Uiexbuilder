@@ -197,7 +197,7 @@ test.describe('review: saving and copies', () => {
     await expect(cardNodes(page, 'Button').filter({ hasText: 'Click me' })).toHaveCount(2);
     await expect(page.locator('.ub-cv-sb-frame')).toHaveCount(2);
     // No problems about missing or duplicate overlays.
-    await expect(topBar(page).getByRole('button', { name: 'No problems — ready to export' })).toBeVisible();
+    await expect(topBar(page).getByRole('button', { name: 'No problems — ready to publish' })).toBeVisible();
 
     await setMode(page, 'Preview');
     await cardNodes(page, 'Button').filter({ hasText: 'Click me' }).nth(1).click();

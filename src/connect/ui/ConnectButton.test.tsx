@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { resetConnectionForTests, useConnection, type ConnectionState } from '../store';
+import { CONNECT_TIMINGS, resetConnectionForTests, useConnection, type ConnectionState } from '../store';
+import { ToastProvider } from '../../ui';
 import { connectedInfo, healthFixture } from '../testUtils';
 import { ConnectButton } from './ConnectButton';
 import { HOSTING_DOCS_URL } from './links';
@@ -14,6 +15,7 @@ function stubActions() {
     switchPortal: vi.fn(async () => {}),
     cancelConnect: vi.fn(),
     focusPopup: vi.fn(),
+    restartConnect: vi.fn(async () => {}),
     init: vi.fn(async () => {}),
   };
   useConnection.setState(actions);
@@ -33,6 +35,51 @@ afterEach(() => {
   useConnection.setState(original, true);
   resetConnectionForTests();
   localStorage.clear();
+});
+
+describe('ConnectButton: waiting and notices', () => {
+  it('after a few seconds of waiting, shows a visible panel to show the window, start again or cancel', () => {
+    vi.useFakeTimers();
+    try {
+      const actions = stubActions();
+      useConnection.setState({ status: 'connecting', health: healthFixture(), connectingSince: Date.now() });
+      render(<ConnectButton />);
+      // The Cancel button has a visible label.
+      expect(screen.getByRole('button', { name: 'Cancel connecting' })).toHaveTextContent('Cancel');
+      expect(screen.queryByRole('region', { name: 'Waiting for HubSpot' })).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(CONNECT_TIMINGS.waitingHintMs + 10);
+      });
+      const panel = screen.getByRole('region', { name: 'Waiting for HubSpot' });
+      expect(panel).toHaveTextContent('Finish in the HubSpot window');
+      fireEvent.click(within(panel).getByRole('button', { name: 'Show HubSpot window' }));
+      expect(actions.focusPopup).toHaveBeenCalled();
+      fireEvent.click(within(panel).getByRole('button', { name: 'Start again' }));
+      expect(actions.restartConnect).toHaveBeenCalled();
+      fireEvent.click(within(panel).getByRole('button', { name: 'Cancel' }));
+      expect(actions.cancelConnect).toHaveBeenCalled();
+      act(() => useConnection.setState({ status: 'disconnected', connectingSince: null }));
+      expect(screen.queryByRole('region', { name: 'Waiting for HubSpot' })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('turns connection notices into toasts (expired offers Reconnect)', () => {
+    const actions = stubActions();
+    useConnection.setState({ status: 'connected', health: healthFixture(), info: connectedInfo() });
+    render(
+      <ToastProvider>
+        <ConnectButton />
+      </ToastProvider>,
+    );
+    act(() => useConnection.setState({ notice: { id: 1, kind: 'connected', account: 'acme.com' } }));
+    expect(screen.getByText('Connected to acme.com. Pick a sample record above the card to see real data.')).toBeInTheDocument();
+    act(() => useConnection.setState({ status: 'disconnected', info: { connected: false, reason: 'expired' }, notice: { id: 2, kind: 'expired' } }));
+    expect(screen.getByText('Your HubSpot sign-in expired, so the preview is back to mock data.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+    expect(actions.connect).toHaveBeenCalled();
+  });
 });
 
 describe('ConnectButton', () => {
@@ -65,8 +112,11 @@ describe('ConnectButton', () => {
     expect(btn.getAttribute('title')).toMatch(/not set up/);
     fireEvent.click(btn);
     const note = screen.getByRole('dialog', { name: 'About Connect HubSpot' });
-    expect(note).toHaveTextContent('HUBSPOT_CLIENT_ID');
-    expect(note).toHaveTextContent('SESSION_SECRET');
+    // Plain language for admins: who to ask and what to send them — no server setting names.
+    expect(note).toHaveTextContent(/person who set up this builder needs to finish one step/);
+    expect(note).toHaveTextContent(/keep building with mock data/);
+    expect(note).not.toHaveTextContent('HUBSPOT_CLIENT_ID');
+    expect(note).not.toHaveTextContent('APP_URL');
     expect(within(note).getByRole('link', { name: /Read the hosting guide/ })).toHaveAttribute('href', expect.stringContaining('docs/HOSTING.md'));
     expect(within(note).getByRole('link', { name: /setup checklist/ })).toHaveAttribute('href', '/setup.html');
   });
@@ -137,7 +187,7 @@ describe('ConnectButton', () => {
     expect(scopes).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(scopes);
     expect(within(menu).getByRole('list', { name: 'Allowed' })).toHaveTextContent('See contacts');
-    expect(within(menu).getByRole('list', { name: 'Not allowed' })).toHaveTextContent('See tickets');
+    expect(within(menu).getByRole('list', { name: 'Not included in this connection' })).toHaveTextContent('See tickets');
 
     expect(within(menu).getByRole('link', { name: /Open HubSpot/ })).toHaveAttribute('href', 'https://app.hubspot.com/contacts/12345678');
     fireEvent.click(within(menu).getByRole('button', { name: /Switch account/ }));

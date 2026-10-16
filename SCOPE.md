@@ -127,4 +127,5 @@ See `ARCHITECTURE.md` for contracts. Modules:
 | `src/panels` | Data (state, data sources, functions, mock data), app/extension settings, export |
 | `src/shell` | App layout, top bar, palette, layers, code/problems/console panels, shortcuts |
 | `src/templates` | Starter templates & validation |
+| `src/onboarding` | First-run welcome, guided setup and coach-mark tour |
 | `src/ui` | Builder-chrome UI kit |

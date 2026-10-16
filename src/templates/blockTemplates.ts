@@ -13,6 +13,7 @@ import {
   LayoutPanelTop,
   ListCollapse,
   LoaderCircle,
+  Network,
   PanelTop,
   Info,
   RectangleHorizontal,
@@ -22,10 +23,57 @@ import {
   TextCursorInput,
   TrendingUp,
 } from 'lucide-react';
-import type { BlockTemplate } from './catalog';
+import type { DataSource, Extension, NodeTemplate } from '../model/types';
+import { objectTypeLabel } from '../panels/crmProperties';
+import { createDataSource } from '../panels/dataSourceMeta';
+import { resultsTableBlock } from '../panels/generators';
+import { PORTAL_LABELS } from '../panels/portal';
+import type { BlockTemplate, BuiltBlock } from './catalog';
 import { blockState, steps, t } from './builders';
 
+type AssociationsSource = Extract<DataSource, { kind: 'associations' }>;
+
+/**
+ * "Associated records": a heading and a table of the record's associated deals (contacts on a
+ * deal card) that reads an associations data source — with a loading spinner, an error message
+ * and a "none yet" state — so the card shows real data when HubSpot is connected.
+ */
+function associatedRecordsBlock(ds: AssociationsSource): NodeTemplate {
+  const table = resultsTableBlock(ds, PORTAL_LABELS);
+  const plural = PORTAL_LABELS.objectTypeLabel(ds.toObjectType) || objectTypeLabel(ds.toObjectType);
+  return {
+    ...table,
+    name: `Associated ${plural.toLowerCase()}`,
+    children: [{ type: 'Heading', text: `Associated ${plural.toLowerCase()}` }, ...(table.children ?? [])],
+  };
+}
+
+function buildAssociatedRecords(ext: Extension, project: { functions: Parameters<typeof createDataSource>[2] }): BuiltBlock {
+  const ds = createDataSource('associations', ext, project.functions) as AssociationsSource;
+  return { template: associatedRecordsBlock(ds), dataSources: [ds] };
+}
+
+/** What the gallery's thumbnail shows (the real block is built for the card it goes into). */
+const ASSOCIATED_PREVIEW = associatedRecordsBlock({
+  id: 'preview',
+  kind: 'associations',
+  name: 'associatedDeals',
+  toObjectType: '0-3',
+  properties: ['dealname', 'dealstage', 'amount'],
+  pageLength: 10,
+  formatted: true,
+});
+
 export const BLOCK_TEMPLATES: BlockTemplate[] = [
+  {
+    id: 'associated-records',
+    name: 'Associated records',
+    description: 'A table of this record’s associated deals (contacts on a deal), with a loading spinner and a “none yet” message. Uses your real data when HubSpot is connected.',
+    icon: Network,
+    keywords: ['associations', 'associated', 'related', 'linked', 'deals', 'contacts', 'companies', 'tickets', 'table', 'list', 'loading', 'crm'],
+    template: ASSOCIATED_PREVIEW,
+    create: buildAssociatedRecords,
+  },
   {
     id: 'key-value',
     name: 'Key/value summary',
@@ -168,7 +216,7 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   {
     id: 'loading-state',
     name: 'Loading state',
-    description: 'A spinner shown while isLoading is true, then the content.',
+    description: 'A spinner while something loads, then your content. (Data blocks such as Associated records already include one.)',
     icon: LoaderCircle,
     keywords: ['loading', 'spinner', 'condition', 'wait'],
     state: [blockState('isLoading', 'boolean', true, 'Set to false once your data has loaded')],

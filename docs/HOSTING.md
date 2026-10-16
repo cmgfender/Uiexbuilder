@@ -30,13 +30,17 @@ never open a terminal.
 
 ## What you need
 
-- **A HubSpot account where you can create apps** - a Super Admin, or someone with developer access
-  in the account that should *own* the app. (The app can still be used by any HubSpot account - see
-  [who can connect](#who-can-connect).)
+- **A HubSpot account where you can create apps** - one that shows **Development** in HubSpot's
+  main menu (developer projects), where you are a Super Admin or have developer access. On HubSpot's
+  current developer platform (2025.2 and later) that can be your company's normal HubSpot account;
+  a free [developer account](https://developers.hubspot.com) works too. This account *owns* the app;
+  other accounts can still connect - see [who can connect](#who-can-connect).
 - **A free hosting account**: [Render](https://render.com) *or* [Vercel](https://vercel.com). Both
   let you sign in with GitHub.
-- **A GitHub account** - the one-click buttons put a copy of the builder in your GitHub, so the host
-  can update it for you.
+- **A GitHub account** to sign in to the host. Vercel's button copies the builder into your GitHub
+  (Vercel redeploys when that copy changes). Render's button deploys straight from the public
+  repository - no copy needed; to update later, open the service and click **Manual Deploy** →
+  **Deploy latest commit**.
 
 How the pieces fit together:
 
@@ -82,18 +86,26 @@ Pick **one** host. Render is the simplest. Vercel is just as good if your compan
 
 ### Option B: Vercel
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fcmgfender%2FUiexbuilder&project-name=uiex-builder&repository-name=uiex-builder&env=APP_URL,HUBSPOT_CLIENT_ID,HUBSPOT_CLIENT_SECRET,SESSION_SECRET&envDescription=Type%20%22later%22%20in%20each%20box%20if%20you%20do%20not%20have%20the%20values%20yet.%20The%20builder%20works%20without%20them%3B%20only%20Connect%20HubSpot%20waits.&envLink=https%3A%2F%2Fgithub.com%2Fcmgfender%2FUiexbuilder%2Fblob%2FHEAD%2Fdocs%2FHOSTING.md%23step-3---add-the-hubspot-settings-to-your-host)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fcmgfender%2FUiexbuilder&project-name=uiex-builder&repository-name=uiex-builder&env=APP_URL,HUBSPOT_CLIENT_ID,HUBSPOT_CLIENT_SECRET,SESSION_SECRET&envDescription=For%20SESSION_SECRET%20type%2048%20random%20letters%20and%20numbers%20%28a%20password%20manager%27s%20generator%20works%29%20-%20Deploy%20to%20HubSpot%20needs%20it.%20Type%20%22later%22%20in%20the%20other%20three%20boxes%20if%20you%20do%20not%20have%20the%20values%20yet%3B%20the%20builder%20works%20without%20them%2C%20only%20Connect%20HubSpot%20waits.&envLink=https%3A%2F%2Fgithub.com%2Fcmgfender%2FUiexbuilder%2Fblob%2FHEAD%2Fdocs%2FHOSTING.md%23step-3---add-the-hubspot-settings-to-your-host)
 
 1. Click **Deploy with Vercel** above and sign in with **GitHub**.
 2. **Create Git Repository**: keep the name `uiex-builder` (or choose another) and click **Create**.
    The project name becomes your address: `https://uiex-builder.vercel.app` (Vercel adds letters if
    the name is taken).
 3. Vercel asks for four values: **APP_URL**, **HUBSPOT_CLIENT_ID**, **HUBSPOT_CLIENT_SECRET** and
-   **SESSION_SECRET**. You do not have them yet - **type `later` in each box**. The builder treats
-   `later` as "not set yet": it works, and only **Connect HubSpot** waits for the real values.
+   **SESSION_SECRET**.
+   - **SESSION_SECRET**: type **48 random letters and numbers** now (your password manager's
+     "generate password" button is fine; no spaces). **Deploy to HubSpot** in step 2 needs it.
+   - The other three: you do not have them yet - **type `later`**. The builder treats `later` as
+     "not set yet": it works, and only **Connect HubSpot** waits for the real values.
 4. Click **Deploy** and wait about 2 minutes.
 5. Click **Continue to Dashboard** and **copy the address** under **Domains** (it ends in
    `.vercel.app`).
+6. **Typed `later` for SESSION_SECRET too?** Fix it now, before step 2: open
+   `https://<your address>/secret.html` and click **Copy**. In Vercel open **Settings** →
+   **Environment Variables** → `SESSION_SECRET` → **⋯** → **Edit**, paste, **Save**. Then
+   **Deployments** → **⋯** of the newest deployment → **Redeploy**. (`/setup.html` shows a warning
+   until this is done.)
 
 > Use the address under **Domains** (your production address). The long addresses Vercel creates
 > for each preview deployment cannot sign in to HubSpot.
@@ -114,14 +126,21 @@ Your **redirect URL** is your address followed by `/api/auth/callback`, for exam
 1. Open `https://<your address>/setup.html` and click **Download the app file** (section 3). The
    file `hubspot-connector-app.uiex.json` already contains your redirect URL.
 2. Create a **personal access key** in HubSpot: open
-   [app.hubspot.com/l/personal-access-key](https://app.hubspot.com/l/personal-access-key), choose
-   the HubSpot account that should own the app, then create the key (or show the one you already
-   have) and **Copy** it.
+   [app.hubspot.com/l/personal-access-key](https://app.hubspot.com/l/personal-access-key) and choose
+   the HubSpot account that should own the app. Create the key (or show the one you already have) -
+   **make sure the "Developer projects" permission is ticked** - and **Copy** it. It is a long code
+   (it often starts with `CiR`); a code that starts with `pat-` is a *private app token*, not a
+   personal access key.
 3. Open your builder (`https://<your address>`). In the top bar click **Project** →
    **Import .uiex.json…** and choose the downloaded file.
-4. Click **Deploy to HubSpot** (beta), paste the personal access key and click **Deploy**. Wait
-   until it says the deploy succeeded.
-5. Continue with [Copy the Client ID and Client secret](#copy-the-client-id-and-client-secret).
+4. Click **Publish** (top right). The **Publish to HubSpot** tab opens (beta). Paste the personal
+   access key and click **Publish to HubSpot**. Wait until it says it is published.
+   - The tab says it **needs SESSION_SECRET**? Do Step 1 → Vercel → step 6, then try again.
+   - Deploying again later, once sign-in works? Click **Connect HubSpot** first - deploys then go
+     to the account you are connected to.
+5. Continue with [Accept HubSpot's Acceptable Use Policy](#accept-hubspots-acceptable-use-policy-once)
+   (below), then [Copy the Client ID and Client secret](#copy-the-client-id-and-client-secret). The
+   success screen lists these steps too.
 
 ### Option B: with the HubSpot CLI
 
@@ -133,6 +152,9 @@ folder is the same app as a HubSpot developer project:
    `hs project upload`.
 
 Details: [hubspot-app/README.md](../hubspot-app/README.md).
+
+Next: [Accept HubSpot's Acceptable Use Policy](#accept-hubspots-acceptable-use-policy-once), then
+[Copy the Client ID and Client secret](#copy-the-client-id-and-client-secret).
 
 ### Accept HubSpot's Acceptable Use Policy (once)
 
@@ -159,8 +181,15 @@ the app's settings in the builder: **App** settings → **Redirect URLs**) and d
 <a id="who-can-connect"></a>
 ### Who can connect?
 
-The app uses `"distribution": "marketplace"`: **any HubSpot account can connect** from your builder.
-It is not listed on the HubSpot Marketplace, so nobody else finds it.
+The app uses `"distribution": "marketplace"` without a Marketplace listing: once the Acceptable Use
+Policy is signed, **up to 25 HubSpot accounts** can install it (more needs a Marketplace listing).
+Nobody finds it on the Marketplace.
+
+**Recommended:** limit sign-in (and Deploy to HubSpot) to your own accounts with the server setting
+`ALLOWED_PORTALS` - a comma-separated list of HubSpot account ids, for example `12345678,87654321`
+(the account id is shown in the builder's account menu, and in HubSpot under your profile).
+Anyone else who tries to connect sees *"This HubSpot account can't be used here"*, and the builder
+gives their sign-in back to HubSpot right away.
 
 Want to limit it to your own HubSpot accounts? Before you deploy the app for the first time, change
 the distribution to **private** (builder: **App** settings → **Distribution**; CLI: `"distribution":
@@ -172,13 +201,18 @@ to connect.
 
 ## Step 3 - Add the HubSpot settings to your host
 
-You need three values:
+- **Render**: two values - `HUBSPOT_CLIENT_ID` and `HUBSPOT_CLIENT_SECRET` (Render made
+  `SESSION_SECRET` for you).
+- **Vercel**: `HUBSPOT_CLIENT_ID` and `HUBSPOT_CLIENT_SECRET` (and `SESSION_SECRET` if it still says
+  `later`).
+- Recommended on both: `ALLOWED_PORTALS` (see [who can connect](#who-can-connect)).
 
 | Setting | Value |
 | --- | --- |
 | `HUBSPOT_CLIENT_ID` | the Client ID from step 2 |
 | `HUBSPOT_CLIENT_SECRET` | the Client secret from step 2 |
 | `SESSION_SECRET` | 48 random characters (Render already made one). To make one, open `https://<your address>/secret.html` and click **Copy**. |
+| `ALLOWED_PORTALS` *(recommended)* | the HubSpot account ids that may connect, e.g. `12345678,87654321`. Empty = any account that installs your app. |
 | `APP_URL` *(optional)* | your address, e.g. `https://uiex-builder.onrender.com`. Leave it empty (or `later`) on Render and Vercel unless you use your own domain. |
 
 **Render:** open your service → **Environment** (left menu) → **Edit** → fill in
@@ -205,8 +239,9 @@ Domains** settings, set `APP_URL` to `https://builder.yourcompany.com`, and add
 2. Want the raw check? Open `https://<your address>/api/health`. You should see
    `"ok":true` and `"oauthConfigured":true`.
 3. Open the builder, click **Connect HubSpot** → **Continue to HubSpot**, approve in the window
-   that opens, and check that the top right of the builder now shows your HubSpot account (its
-   domain and account number, for example `acme.com · 12345678`).
+   that opens, and check that the top right of the builder now shows your HubSpot domain (for
+   example `acme.com`; wide screens also show the account number). Click it to see the account
+   number and what the builder can see.
 
 Something wrong? See [Troubleshooting](#troubleshooting).
 
@@ -221,7 +256,13 @@ Send admins the address, for example:
 
 ### What admins see
 
-1. They open the address. The builder works right away with sample (mock) data.
+1. They open the address. A short "Waking up the builder…" page shows while a free-plan server
+   starts, then a **welcome screen**: **Connect my HubSpot** (recommended) or **Try it with sample
+   data** (or *I know what I'm doing → open the editor*). Connecting walks them through three
+   steps — sign in, choose where the card appears (record type, including their custom objects,
+   and the place on the record page), pick a real record and a starting card — and opens the
+   editor with their real data and a four-tip tour. **Help › Getting started** shows the welcome
+   again; the rest of this list is the same flow from the editor.
 2. They click **Connect HubSpot** (top right). The builder first explains, in plain words, what it
    can and cannot do (read-only; the exact permissions are one click away). They click
    **Continue to HubSpot**. A HubSpot window opens. They sign in if needed, pick the HubSpot
@@ -229,18 +270,26 @@ Send admins the address, for example:
    - The first person in each HubSpot account installs the app for that account. HubSpot only lets
      **Super Admins** or users with **App Marketplace access** do that; if someone sees a permission
      message, ask a Super Admin to connect first (or to grant that permission).
-3. The window closes and the top bar shows the account (for example `acme.com · 12345678`).
-   Clicking it opens the account menu: what the builder can see, **Switch account**,
-   **Disconnect**.
+3. The window closes, a message says they are connected, and the top bar shows the account's
+   domain (for example `acme.com`). Clicking it opens the account menu: account number, what the
+   builder can see, **Switch account**, **Disconnect**. If the HubSpot window is closed or stuck,
+   the builder offers **Start again** / **Cancel** after a few seconds.
 4. Above the card they choose **Live data** and **Pick a sample record** (search by name, email
    or ID); the preview shows its real values, associations and search results. Property, object
    and pipeline pickers list the account's real properties (including custom ones, marked
-   **Custom**), labels and dropdown options. **Mock data** switches back at any time. If a
-   permission is missing, the builder says which one and offers **Reconnect HubSpot**.
-5. **Deploy to HubSpot** (beta) uploads what they built, using a personal access key they create
-   in HubSpot ([app.hubspot.com/l/personal-access-key](https://app.hubspot.com/l/personal-access-key)).
-   No terminal needed.
-6. **Disconnect** signs them out of HubSpot in the builder.
+   **Custom**), labels and dropdown options. HubSpot's CRM components (property lists, data
+   highlights, stage trackers, association tables) show the real record too; the few that can't
+   (reports, statistics) say *Sample values*. **Mock data** switches back at any time. If
+   something isn't included in their connection (for example tickets on a plan without them), the
+   builder says so and offers **Reconnect to grant access** or **Use mock data**.
+5. **Publish** (top right) opens on **Publish to HubSpot** (beta): it uploads what they built to the
+   account they are connected to, using a personal access key they create in HubSpot
+   ([app.hubspot.com/l/personal-access-key](https://app.hubspot.com/l/personal-access-key), with the
+   **Developer projects** permission). They paste the key for every deploy - it is never saved. No
+   terminal needed.
+6. A project imported from a file keeps its code paused until they trust it; while HubSpot is
+   connected the builder warns that trusted code can read their HubSpot data.
+7. **Disconnect** signs them out of HubSpot in the builder.
 
 ---
 
@@ -261,7 +310,15 @@ Send admins the address, for example:
 | The HubSpot window does not open | The browser blocked the pop-up | Allow pop-ups for the builder's address and click **Connect HubSpot** again. |
 | HubSpot says the app **could not be installed because the app developer has not signed the acceptable use policy** | The HubSpot account that owns the app has not accepted HubSpot's Acceptable Use Policy yet | Step 2 → [Accept HubSpot's Acceptable Use Policy](#accept-hubspots-acceptable-use-policy-once): **Development → Projects → your project → app → Distribution → Begin publishing**, then sign. No Marketplace listing is needed. |
 | The first visit is very slow (Render) | The free plan sleeps after 15 minutes | Choose the **Starter** plan, or wait up to a minute. |
-| **Deploy to HubSpot** says the key is not valid | Wrong, deleted, or another account's personal access key | Create a new key in the account you are deploying to and paste it again. |
+| **Publish to HubSpot** says the key is not valid | Wrong, deleted, or another account's personal access key | Create a new key in the account you are deploying to and paste it again. |
+| **Publish to HubSpot** says the key *looks like a private app access token* | A `pat-…` token from a private app was pasted | Open the **Personal access key** page (not Private apps) and copy that key - a much longer code. |
+| **Publish to HubSpot** says the key needs the **Developer projects** permission | The key was created without it | On the personal access key page, add **Developer projects** to the key (or create a new one with it) and paste the new key. |
+| The **Publish to HubSpot** tab says it **needs one more server setting (SESSION_SECRET)** | `SESSION_SECRET` is missing, too short or still `later` | Make one at `/secret.html`, add it to your host's settings and redeploy (Step 1 → Vercel → step 6). |
+| The **Publish to HubSpot** tab says deploying **is turned off** | `ENABLE_DEPLOY=false` is set | Remove the setting (or set it to `true`) and redeploy, or use the HubSpot CLI. |
+| **Publish to HubSpot** asks to **Connect HubSpot first** | Sign-in is set up, and deploys only go to the connected account | Click **Connect HubSpot**, then deploy. To deploy to another account, use **Switch account**. |
+| **This deploy can't be followed any more** | The status link expired (after an hour) or was opened in another browser | Open the project in HubSpot to see how it went, or deploy again. |
+| HubSpot window says **This HubSpot account can't be used here** | `ALLOWED_PORTALS` doesn't list that account | Add the account id to `ALLOWED_PORTALS` and redeploy, or connect a listed account. |
+| **Too many sign-in attempts** / **Too many deploys** | The server limits how often these can happen | Wait a minute and try again. |
 | Render's deploy fails with a **health check** error | The server did not start | Open **Logs** in Render. The start-up message lists what is set and what is missing (never the secret values). |
 
 ---
@@ -278,12 +335,30 @@ Send admins the address, for example:
   (page scripts cannot read it) and `Secure` on `https://`. The browser never sees the tokens; the
   connector refreshes them automatically and revokes them on **Disconnect**.
 - **Requests must come from the builder.** API calls need a special header and must come from the
-  builder's own address (`APP_URL`, plus any `ALLOWED_ORIGINS`), which blocks other websites.
-- **Personal access keys** (Deploy to HubSpot) are used for that deploy only. If someone ticks
-  "remember", the key is kept in the same encrypted cookie in *their* browser, nowhere else.
+  builder's own address (`APP_URL`, plus any `ALLOWED_ORIGINS`), which blocks other websites. The
+  cookies use the `__Host-` prefix on `https://`, so other sites on your domain can't plant or
+  replace them.
+- **Who can connect.** Any account that installs your app, unless you set `ALLOWED_PORTALS` (the
+  recommended setting). Sign-in, deploys and the fetch proxy are rate limited.
+- **Signing out** revokes the sign-in at HubSpot. The builder re-checks it with HubSpot every few
+  minutes and before every deploy, so even a copied cookie stops working within about five
+  minutes. To sign *everyone* out at once, change `SESSION_SECRET`.
+- **Personal access keys** (Deploy to HubSpot) are used for that one deploy and **never stored** -
+  not in a cookie, not on the server. Once sign-in is set up, deploying needs a HubSpot sign-in and
+  the key must belong to that same account. A running deploy can only be followed from the browser
+  that started it (its status token is tied to that browser and never appears in server logs).
+- **Imported projects.** A `.uiex.json` someone sends you can contain code. It stays paused until
+  you choose **Trust**; while HubSpot is connected the builder tells you plainly that trusted code
+  could read your HubSpot data, and a project trusted before you connected is asked about again.
+  Only trust files from people you trust.
 - **Preview fetch proxy.** Cards that call outside APIs (`hubspot.fetch`) can be previewed through
-  the connector. It refuses private and internal network addresses. Turn it off with
-  `ENABLE_FETCH_PROXY=false`.
+  the connector (signed-in people only). It refuses private and internal network addresses: host
+  names are checked everywhere, and on the Node server (Render, Docker, any Node host) every
+  address a name resolves to is checked too, and the connection goes only to a checked address (so
+  names like `127.0.0.1.nip.io` or DNS tricks can't reach your network). Vercel and Cloudflare have
+  no private network to reach. In local development, `http://localhost` backends can be previewed
+  only from a browser on the same computer. Turn the proxy off with `ENABLE_FETCH_PROXY=false` if
+  you don't need it.
 - **Secrets.** Keep `HUBSPOT_CLIENT_SECRET` and `SESSION_SECRET` only in your host's settings.
   The server never prints them. Changing `SESSION_SECRET` signs everyone out (they just connect
   again). If the client secret leaks, rotate it in the HubSpot app's **Auth** tab and update
@@ -295,8 +370,9 @@ Send admins the address, for example:
 - A whole HubSpot account: in HubSpot, click the **settings** (gear) icon → **Integrations** →
   **Connected apps** → **UI Extension Builder** → **Actions** → **Uninstall**. This revokes every
   token for that account.
-- Everyone, everywhere: change `SESSION_SECRET` (signs everyone out) and remove or rotate the app's
-  client secret in HubSpot.
+- Everyone, everywhere: change `SESSION_SECRET` (signs everyone out - it is the only way to make
+  every existing sign-in cookie invalid at once) and remove or rotate the app's client secret in
+  HubSpot.
 
 ---
 
@@ -367,8 +443,10 @@ On Railway and Fly.io, `APP_URL` is detected automatically like on Render and Ve
 | `ENABLE_FETCH_PROXY` | no | `true` | Preview `hubspot.fetch` calls through the connector |
 | `ENABLE_DEPLOY` | no | `true` | Allow **Deploy to HubSpot** (beta) |
 | `ALLOWED_ORIGINS` | no | - | Other addresses allowed to use the connector, comma separated |
+| `ALLOWED_PORTALS` | recommended | - (any account) | HubSpot account ids that may sign in and deploy, comma separated |
+| `TRUST_PROXY` | no | `true` | Node server: read the client address from `X-Forwarded-For` (behind Render's or your own proxy). Set `false` when the server is reached directly |
 | `PORT` | no | `3000` | Port for `npm start` / Docker |
-| `LOG_REQUESTS` | no | `true` | Log one line per API request (paths only, never data or secrets) |
+| `LOG_REQUESTS` | no | `true` | Log one line per API request (paths only - deploy status tokens are replaced by `…` - never data or secrets) |
 
 Placeholder values such as `later`, `todo` or `-` count as "not set".
 
@@ -378,8 +456,8 @@ Placeholder values such as `later`, `todo` or `-` count as "not set".
 
 | Command | What it does |
 | --- | --- |
-| `npm run dev` | Builder on http://localhost:5173 plus the connector. Without settings, Connect HubSpot shows as not set up - everything else works. Put real settings in `.env.local` (see `.env.example`) to sign in to a real account (add `http://localhost:5173/api/auth/callback` to the app's redirect URLs). |
-| `npm run dev:full` | Same, plus a **fake HubSpot** with demo data on port 4010: try the whole Connect flow, sample records and Deploy to HubSpot without a HubSpot account. The fake personal access key is printed in the terminal. |
+| `npm run dev` | Builder on http://localhost:5173 (this computer only; `npm run dev -- --host` opens it to your network) plus the connector. Without settings, Connect HubSpot shows as not set up - everything else works. To sign in to a real account, create a **separate development app** with the redirect URL `http://localhost:5173/api/auth/callback` (never add localhost to the app people use) and put its settings in `.env.local` (see `.env.example`). |
+| `npm run dev:full` | Same, plus a **fake HubSpot** with demo data on port 4010: try the whole Connect flow, sample records and Deploy to HubSpot without a HubSpot account. The demo personal access key is on the fake's personal access key page (Publish → Publish to HubSpot → **Open HubSpot’s key page**) and printed in the terminal. |
 | `npm run build` then `npm start` | Production server on http://localhost:3000 |
 | `npm run start:demo` | Production build + fake HubSpot on http://localhost:4174 (used for demos and end-to-end tests; run `npm run build` first) |
 | `npm run secret` | Print a new `SESSION_SECRET` |

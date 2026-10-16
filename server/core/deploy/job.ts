@@ -9,10 +9,18 @@
  *
  * The job state lives in the deployId itself: an AES-GCM sealed token (HKDF from SESSION_SECRET,
  * purpose "deploy-job") holding portal, project, build / deploy ids, step, a bounded log and the
- * short-lived access token from the key exchange. The personal access key itself is never in the
- * token; it is stored only when the admin ticks "Remember", inside the encrypted session cookie
- * (and then used to renew an expired access token mid-deploy). Every status answer carries a NEW
- * deployId — always poll with the latest one.
+ * short-lived access token from the key exchange. The personal access key itself is never stored —
+ * not in the token, not in a cookie: every deploy needs the key pasted again. Every status answer
+ * carries a NEW deployId — always poll with the latest one.
+ *
+ * Who may start and follow a job (routes/deploy.ts):
+ *  - once HubSpot sign-in is set up, starting a deploy needs a signed-in session whose grant is
+ *    still live, and the key must belong to that same HubSpot account (and to ALLOWED_PORTALS);
+ *  - a job is bound to the browser that started it: the `uiex_deploy` HttpOnly cookie holds a
+ *    random value whose hash is sealed into the job (`k`). A deployId without that cookie (copied
+ *    from a log line, replayed by someone else) is refused;
+ *  - the only step that changes anything in HubSpot while polling ('queue') first checks the
+ *    project's deployed build, so replaying an old deployId never re-deploys or rolls back a build.
  *
  * Mirrors `hs project upload` (CLI 8.x lib/projects/upload.ts + pollProjectBuildAndDeploy.ts):
  * auto-deploy is followed like the CLI does (waits ~15 s for HubSpot to start it); when a project
@@ -20,12 +28,12 @@
  * because the admin has no terminal to run it.
  */
 import type { DeployPhase, DeployRequest, DeployStatus } from '../../../src/connect/types';
-import { HubSpotApiError, type ServerConfig, type Session, type SessionData } from '../types';
+import { HubSpotApiError, type ServerConfig, type SessionData } from '../types';
 import { ConnectorError } from '../http';
-import { seal, unseal } from '../crypto';
+import { seal, timingSafeEqual, unseal } from '../crypto';
 import { sessionSecretUsable } from '../session';
 import { appHostFor } from '../oauth';
-import { DEFAULT_APP_BASE } from '../config';
+import { DEFAULT_APP_BASE, portalAllowed } from '../config';
 import {
   DEVELOPER_PROJECTS_PERMISSION_HELP,
   DeployApiError,
@@ -57,7 +65,6 @@ export const MAX_TRANSIENT_ERRORS = 6;
 /** Keeps the deployId (it travels in the URL) small. */
 export const MAX_LOG_CHARS = 2400;
 export const MAX_LOG_LINE = 280;
-const TOKEN_REFRESH_MARGIN_MS = 2 * 60 * 1000;
 export const BUILD_MESSAGE = 'Uploaded from UI Extension Builder';
 
 const PROJECT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
@@ -101,6 +108,11 @@ export interface JobState {
   iu?: string;
   /** Started at (epoch ms). */
   st: number;
+  /**
+   * Hash of the browser binding (the `uiex_deploy` cookie of the browser that started the job).
+   * Optional only so tokens sealed by an older version still parse; advanceDeploy refuses them.
+   */
+  k?: string;
 }
 
 /** The key belongs to another HubSpot account than the deploy target (answered as 409 portal_mismatch). */
@@ -109,13 +121,38 @@ export class PortalMismatchError extends ConnectorError {
     public keyPortalId: number,
     public targetPortalId: number,
     hubName?: string,
+    /** The target is the account the browser is connected to (deploys only go there). */
+    connected = false,
   ) {
     super(
       409,
       'portal_mismatch',
-      `This personal access key belongs to HubSpot account ${keyPortalId}${hubName ? ` (${hubName})` : ''}, but the deploy is going to account ${targetPortalId}. Use a key from account ${targetPortalId}, or deploy to account ${keyPortalId} instead.`,
+      connected
+        ? `This personal access key belongs to HubSpot account ${keyPortalId}${hubName ? ` (${hubName})` : ''}, but you're connected to account ${targetPortalId}. Use a key from account ${targetPortalId}, or connect to account ${keyPortalId} instead (account menu › Switch account).`
+        : `This personal access key belongs to HubSpot account ${keyPortalId}${hubName ? ` (${hubName})` : ''}, but the deploy is going to account ${targetPortalId}. Use a key from account ${targetPortalId}, or deploy to account ${keyPortalId} instead.`,
     );
   }
+}
+
+/** The browser-binding cookie of deploy jobs (`__Host-uiex_deploy` on https). */
+export const DEPLOY_BINDING_COOKIE = 'uiex_deploy';
+/** How long the binding cookie lives (refreshed on every start / poll). */
+export const DEPLOY_BINDING_TTL_SECONDS = 2 * 60 * 60;
+
+/** Hash of a binding cookie value, as sealed into the job (`k`). */
+export async function bindingHash(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`uiex-deploy-binding:${value}`));
+  let bin = '';
+  for (const b of new Uint8Array(digest).slice(0, 18)) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function notFollowable(): ConnectorError {
+  return new ConnectorError(
+    404,
+    'deploy_not_found',
+    "This deploy can't be followed any more (status links expire after an hour and only work in the browser that started the deploy). Open the project in HubSpot to see how it went, or deploy again.",
+  );
 }
 
 // ------------------------------------------------------------------ token sealing
@@ -339,7 +376,26 @@ export interface StartResult {
   status: DeployStatus;
 }
 
-export async function startDeploy(config: ServerConfig, session: Session, raw: unknown): Promise<StartResult> {
+export interface StartDeployOptions {
+  /**
+   * The signed-in HubSpot session (grant confirmed), or null when HubSpot sign-in isn't set up on
+   * this server (first-time setup: the host deploys the connector's own app). When set, the key
+   * must belong to this account.
+   */
+  signedIn: SessionData | null;
+  /** Hash of the browser-binding cookie (bindingHash). */
+  binding: string;
+}
+
+/** HubSpot rejected a key that looks like a private app access token (pat-na1-…), not a personal access key. */
+export function looksLikePrivateAppToken(key: string): boolean {
+  return /^pat-[a-z]{2}\d-/i.test(key.trim());
+}
+
+export const PRIVATE_APP_TOKEN_HELP =
+  'This looks like a private app access token (it starts with “pat-”). Deploying needs your personal access key from the Personal access key page instead — a much longer code. Use the Copy button next to it.';
+
+export async function startDeploy(config: ServerConfig, raw: unknown, opts: StartDeployOptions): Promise<StartResult> {
   if (!sessionSecretUsable(config)) {
     throw new ConnectorError(503, 'not_configured', 'Deploying from the builder needs SESSION_SECRET (at least 32 random characters) on the server. Ask whoever hosts the builder to set it.');
   }
@@ -365,21 +421,37 @@ export async function startDeploy(config: ServerConfig, session: Session, raw: u
   const local = translateProject(src, req.platformVersion, null);
   if (local.errors.length) throw bad('invalid_project', listProblems('HubSpot would reject the project:', local.errors));
 
-  // 2. The personal access key → access token for its portal.
-  const sessionData = await session.get().catch(() => null);
-  let key = req.personalAccessKey;
-  let usedRemembered = false;
+  // 2. The personal access key → access token for its portal. Keys are never stored, so there is
+  //    no "remembered" key to fall back on: the admin pastes it for every deploy.
+  const sessionData = opts.signedIn;
+  const key = req.personalAccessKey;
   if (!key && req.useRememberedKey) {
-    key = sessionData?.personalAccessKey ?? '';
-    usedRemembered = true;
-    if (!key) throw bad('no_remembered_key', 'No personal access key is saved on this browser any more. Paste your key to deploy.');
+    throw bad('no_remembered_key', "The builder doesn't save personal access keys. Paste your key to deploy.");
   }
   const keyProblem = personalAccessKeyProblem(key);
   if (keyProblem) throw bad(key ? 'invalid_key' : 'missing_key', keyProblem);
-  const token: PersonalAccessKeyToken = await exchangePersonalAccessKey(config, key);
+  let token: PersonalAccessKeyToken;
+  try {
+    token = await exchangePersonalAccessKey(config, key);
+  } catch (err) {
+    if (err instanceof DeployApiError && err.code === 'invalid_key' && looksLikePrivateAppToken(key)) {
+      throw new DeployApiError(PRIVATE_APP_TOKEN_HELP, 400, 'invalid_key', [], err.correlationId);
+    }
+    throw err;
+  }
 
-  const target = req.portalId ?? sessionData?.portalId;
-  if (target !== undefined && target !== token.portalId) throw new PortalMismatchError(token.portalId, target, token.hubName);
+  if (sessionData) {
+    if (token.portalId !== sessionData.portalId) throw new PortalMismatchError(token.portalId, sessionData.portalId, token.hubName, true);
+  } else if (req.portalId !== undefined && req.portalId !== token.portalId) {
+    throw new PortalMismatchError(token.portalId, req.portalId, token.hubName);
+  }
+  if (!portalAllowed(config, token.portalId)) {
+    throw new ConnectorError(
+      403,
+      'portal_not_allowed',
+      `This builder only deploys to specific HubSpot accounts, and account ${token.portalId} isn't one of them. Ask the person who set up this builder to add it.`,
+    );
+  }
 
   const state: JobState = {
     v: 1,
@@ -395,23 +467,9 @@ export async function startDeploy(config: ServerConfig, session: Session, raw: u
     e: 0,
     l: [],
     st: config.now(),
+    k: opts.binding,
   };
   pushLog(state, `Signed in to HubSpot account ${token.portalId}${token.hubName ? ` (${token.hubName})` : ''} with your personal access key.`);
-
-  if (req.remember && !usedRemembered) {
-    if (!sessionData) {
-      pushLog(state, "The key wasn't saved: connect HubSpot first to remember it on this browser.");
-    } else if (sessionData.portalId !== token.portalId) {
-      pushLog(state, "The key wasn't saved because it belongs to a different HubSpot account than the one you're connected to.");
-    } else {
-      try {
-        await session.set({ ...sessionData, personalAccessKey: key });
-        pushLog(state, 'Saved the key on this browser (encrypted) for next time.');
-      } catch {
-        pushLog(state, "The key couldn't be saved on this browser.");
-      }
-    }
-  }
   if (lacksDeveloperProjects(token.scopeGroups)) pushLog(state, 'Warning: this key may be missing the “Developer projects” permission.');
 
   const client = new DeployHubSpotClient(config, token.accessToken, token.portalId);
@@ -468,20 +526,6 @@ export async function startDeploy(config: ServerConfig, session: Session, raw: u
 
 // ------------------------------------------------------------------ advance (GET /api/deploy/:id)
 
-async function renewAccess(config: ServerConfig, session: Session, s: JobState): Promise<boolean> {
-  try {
-    const data = await session.get();
-    if (!data?.personalAccessKey || data.portalId !== s.p) return false;
-    const token = await exchangePersonalAccessKey(config, data.personalAccessKey);
-    if (token.portalId !== s.p) return false;
-    s.t = token.accessToken;
-    s.te = token.expiresAt;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function afterBuild(s: JobState, build: HsBuild): void {
   const locatorId = build.deployStatusTaskLocator?.id;
   if (build.isAutoDeployEnabled) {
@@ -515,7 +559,7 @@ async function runStep(config: ServerConfig, s: JobState, client: DeployHubSpotC
       } else if (st === 'FAILURE') {
         for (const line of subtaskErrors(build.subbuildStatuses)) pushLog(s, line);
         pushLog(s, `Build #${s.b} failed.`);
-        fail(s, 'build_failed', `HubSpot couldn't build your project (build #${s.b}). The log below says why — fix it in the builder and deploy again.`);
+        fail(s, 'build_failed', `HubSpot couldn't build your project (build #${s.b}). The log below says why.`);
       } else if (++s.c >= MAX_BUILD_POLLS) {
         fail(s, 'timeout', `Build #${s.b} is taking much longer than usual. Open the project in HubSpot to see how it is going.`);
       }
@@ -539,6 +583,20 @@ async function runStep(config: ServerConfig, s: JobState, client: DeployHubSpotC
       return;
     }
     case 'queue': {
+      // The one step that changes something in HubSpot. A deployId can be replayed (it is only
+      // a sealed token), so never queue a build that is already live or older than the live one.
+      const project = await projectsApi.fetchProject(client, s.n);
+      const live = Number(project?.deployedBuildId ?? 0);
+      if (live === s.b) {
+        pushLog(s, `Build #${s.b} is already deployed.`);
+        if (s.au) goTo(s, 'install');
+        else finish(s);
+        return;
+      }
+      if (live > s.b) {
+        fail(s, 'superseded', `A newer build (#${live}) of this project is already live in HubSpot, so the builder didn't deploy the older build #${s.b}.`);
+        return;
+      }
       const res = await projectsApi.queueDeploy(client, s.n, s.b);
       s.e = 0;
       if (res && res.buildResultType === 'DEPLOY_BLOCKED') {
@@ -623,42 +681,26 @@ export interface AdvanceResult {
   status: DeployStatus;
 }
 
-export async function advanceDeploy(config: ServerConfig, session: Session, deployId: string): Promise<AdvanceResult> {
+export async function advanceDeploy(config: ServerConfig, deployId: string, binding: string | null): Promise<AdvanceResult> {
   if (!sessionSecretUsable(config)) {
     throw new ConnectorError(503, 'not_configured', 'Deploying from the builder needs SESSION_SECRET on the server.');
   }
   const current = await unsealJob(config, deployId);
-  if (!current) {
-    throw new ConnectorError(
-      404,
-      'deploy_not_found',
-      "This deploy can't be followed any more (status links expire after an hour). Open the project in HubSpot to see how it went, or deploy again.",
-    );
-  }
+  // Only the browser that started the job can follow it (a deployId alone is not enough).
+  if (!current || !current.k || !binding || !timingSafeEqual(current.k, binding)) throw notFollowable();
   if (current.s === 'done' || current.s === 'failed') return { state: current, deployId, status: toStatus(config, deployId, current) };
 
   const s: JobState = { ...current, l: [...current.l] };
-  if (s.te - config.now() < TOKEN_REFRESH_MARGIN_MS) await renewAccess(config, session, s);
   const client = new DeployHubSpotClient(config, s.t, s.p);
   try {
     await runStep(config, s, client);
   } catch (err) {
     if (err instanceof HubSpotApiError && err.status === 401) {
-      if (await renewAccess(config, session, s)) {
-        pushLog(s, 'Renewed HubSpot access with the key saved on this browser.');
-        client.accessToken = s.t;
-        try {
-          await runStep(config, s, client);
-        } catch (again) {
-          handleStepError(s, again);
-        }
-      } else {
-        fail(
-          s,
-          'expired',
-          `HubSpot access for this deploy expired before it finished. Open the project in HubSpot to check on build #${s.b}, or deploy again.`,
-        );
-      }
+      fail(
+        s,
+        'expired',
+        `HubSpot access for this deploy expired before it finished. Open the project in HubSpot to check on build #${s.b}, or deploy again.`,
+      );
     } else {
       handleStepError(s, err);
     }

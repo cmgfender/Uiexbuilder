@@ -90,7 +90,7 @@ describe('<ProblemsPanel>', () => {
   it('shows the empty state when everything is fine', () => {
     resetEditor();
     renderPanel();
-    expect(screen.getByText('No problems — ready to export')).toBeInTheDocument();
+    expect(screen.getByText('No problems — ready to publish')).toBeInTheDocument();
   });
 
   it('groups problems by extension with counts and navigates on click', () => {

@@ -258,7 +258,11 @@ function normalizeDataSources(raw: unknown, r: Repairs, where: string): DataSour
     const at = `${where} › data source “${d.name}”`;
     const o: Obj = { ...d };
     if (typeof o.id !== 'string' || !o.id) o.id = newId('d');
-    optBool(o, 'formatted', r, at);
+    if (Array.isArray(o.formatted)) {
+      const list = o.formatted.filter((x): x is string => typeof x === 'string' && x.trim() !== '');
+      if (list.length !== o.formatted.length) r.add(`${at}: entries of formatted that are not property names were removed.`);
+      o.formatted = list;
+    } else optBool(o, 'formatted', r, at);
     switch (d.kind) {
       case 'crmProperties':
         o.properties = strList(d.properties, r, `${at} › properties`);

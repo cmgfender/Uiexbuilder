@@ -371,7 +371,7 @@ describe('selection and hover', () => {
     act(() => useEditor.getState().hover(null));
     // Any DOM mutation triggers a re-measure.
     act(() => useEditor.getState().setText(h.id, 'Only VIP customers'));
-    expect(await screen.findByText('Hidden by condition')).toBeInTheDocument();
+    expect(await screen.findByText('Hidden right now')).toBeInTheDocument();
   });
 });
 

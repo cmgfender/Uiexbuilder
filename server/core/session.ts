@@ -101,10 +101,11 @@ export class CookieSession implements Session {
     private readonly config: ServerConfig,
   ) {
     this.cookies = parseCookies(request.headers.get('cookie'));
+    this.dropLegacyCookies();
   }
 
-  private cookieOptions(maxAge: number) {
-    return { httpOnly: true, secure: this.config.secureCookies, sameSite: 'Lax' as const, path: '/', maxAge };
+  private cookieOptions(maxAge: number, path = '/') {
+    return { httpOnly: true, secure: this.config.secureCookies, sameSite: 'Lax' as const, path, maxAge };
   }
 
   /** A request cookie: undefined when absent, null when sent more than once (ambiguous). */
@@ -113,8 +114,20 @@ export class CookieSession implements Session {
   }
 
   /** Set (or with maxAge 0, delete) an HttpOnly cookie on the response. */
-  writeCookie(name: string, value: string, maxAgeSeconds: number): void {
-    this.outgoing.set(name, serializeCookie(name, maxAgeSeconds > 0 ? value : '', this.cookieOptions(maxAgeSeconds)));
+  writeCookie(name: string, value: string, maxAgeSeconds: number, path = '/'): void {
+    this.outgoing.set(`${name}\u0000${path}`, serializeCookie(name, maxAgeSeconds > 0 ? value : '', this.cookieOptions(maxAgeSeconds, path)));
+  }
+
+  /**
+   * Cookies earlier versions set that are no longer read: the unprefixed session cookie on https
+   * (now `__Host-uiex_session`) and the OAuth cookie scoped to /api/auth (now Path=/). They are
+   * deleted when seen, so they can't linger next to (or collide with) the current ones.
+   */
+  private dropLegacyCookies(): void {
+    if (this.config.secureCookies) {
+      if (this.cookies.has(SESSION_COOKIE)) this.writeCookie(SESSION_COOKIE, '', 0);
+      if (this.cookies.has(OAUTH_COOKIE)) this.writeCookie(OAUTH_COOKIE, '', 0, '/api/auth');
+    }
   }
 
   async get(): Promise<SessionData | null> {
@@ -168,7 +181,7 @@ export class CookieSession implements Session {
     if (new TextEncoder().encode(cookie).length > MAX_COOKIE_BYTES) {
       throw new Error('session cookie would exceed 4 KB');
     }
-    this.outgoing.set(name, cookie);
+    this.outgoing.set(`${name}\u0000/`, cookie);
     this.remember(data);
     this.data = data;
     this.loaded = true;
@@ -199,6 +212,8 @@ export class CookieSession implements Session {
       ttlSeconds: OAUTH_TTL_SECONDS,
     });
     this.writeCookie(oauthCookieName(this.config), value, OAUTH_TTL_SECONDS);
+    // An older version scoped this cookie to /api/auth; a leftover copy would make the name ambiguous.
+    if (!this.config.secureCookies) this.writeCookie(OAUTH_COOKIE, '', 0, '/api/auth');
   }
 
   clearOAuthState(): void {

@@ -11,9 +11,13 @@
  * extension-points.synced.d.ts (availability: every component in crm.record.tab, crm.preview and
  * helpdesk.sidebar; only CrmActionButton / CrmActionLink in crm.record.sidebar).
  *
- * Previews cannot read real CRM data. They render HubSpot-looking blocks filled with plausible
- * sample values derived from the configured props (property names, object type, labels, ...), so a
- * card can be laid out realistically. In preview mode the action components simulate the click:
+ * With mock data the previews render HubSpot-looking blocks filled with plausible sample values
+ * derived from the configured props (property names, object type, labels, ...), so a card can be
+ * laid out realistically. While the preview uses LIVE data (src/preview/liveCrm.tsx), property
+ * lists, data highlights, stage trackers (deals, tickets), association tables and association
+ * property lists show the sample record's real values with the portal's labels; the components
+ * that can't be shown from real data carry a "Sample values" badge so nobody mistakes them for
+ * real numbers. In preview mode the action components simulate the click:
  * they validate `actionContext` for the chosen `actionType` (firing `onError(errors)` like HubSpot
  * does for missing context values) and show what the action would do inside HubSpot.
  */
@@ -47,6 +51,7 @@ import type { ComponentDef, EnumOption, EventDef, PreviewProps, PropDef } from '
 import { CRM_ACTION_DOCS, CRM_DOCS, CRM_OBJECT_TYPES } from '../constants';
 import { cx, normalizeSize, str } from '../../preview/util';
 import '../../preview/styles/crm.css';
+import { useLiveCrm, useLiveLoad, useLivePropertyLabels, type LiveCrmSource } from '../../preview/liveCrm';
 
 // ---------------------------------------------------------------------------
 // Defensive prop readers (props may come from arbitrary user expressions)
@@ -322,6 +327,78 @@ function objectSample(objectTypeId: unknown): ObjectSample {
   };
 }
 
+
+// ---------------------------------------------------------------------------
+// Live data (the sample record, when the preview uses real HubSpot data)
+// ---------------------------------------------------------------------------
+
+/** Type id ('0-3') of an objectTypeId prop ('0-3', 'deals', …); custom types are kept as given. */
+function typeIdOf(v: unknown): string {
+  const raw = str(v).trim();
+  const known = CRM_OBJECT_TYPES.find((t) => t.typeId === raw || t.value === raw.toLowerCase());
+  return known?.typeId ?? raw;
+}
+
+/** The record a component shows with live data: its objectId / objectTypeId props, else the sample record. */
+function liveTarget(source: LiveCrmSource | null, props: Record<string, unknown>): { objectTypeId: string; objectId: number } | null {
+  if (!source) return null;
+  const id = positiveInt(props.objectId);
+  const type = hasValue(props.objectTypeId) ? typeIdOf(props.objectTypeId) : '';
+  if (id) {
+    const t = type || source.record?.objectTypeId;
+    return t ? { objectTypeId: t, objectId: id } : null;
+  }
+  if (!source.record) return null;
+  if (type && type !== source.record.objectTypeId) return null;
+  return source.record;
+}
+
+interface LiveValues {
+  status: 'loading' | 'ok' | 'error';
+  values: Record<string, string | null>;
+  labels: Record<string, string>;
+}
+
+/** Live, formatted values of `names` for the component's record; null with mock data. */
+function useLiveRecordValues(props: Record<string, unknown>, names: string[]): LiveValues | null {
+  const source = useLiveCrm();
+  const target = liveTarget(source, props);
+  const key = target && names.length ? `props:${target.objectTypeId}:${target.objectId}:${names.join(',')}` : null;
+  const load = useLiveLoad(target ? source : null, key, () => source!.getRecordProperties(target!.objectTypeId, target!.objectId, names, true));
+  const labels = useLivePropertyLabels(target ? source : null, target?.objectTypeId ?? null);
+  if (!source) return null;
+  if (!target) return { status: 'error', values: {}, labels: {} };
+  if (!load) return { status: 'ok', values: {}, labels };
+  return { status: load.status, values: load.status === 'ok' ? load.value : {}, labels };
+}
+
+/** Label and shown value of a property: live when available, else the sample. */
+function shownProperty(name: string, row: number, live: LiveValues | null): { label: string; value: string } {
+  const sample = sampleProperty(name, row);
+  if (!live || live.status === 'error') return sample;
+  const label = live.labels[name] ?? sample.label;
+  if (live.status === 'loading') return { label, value: '…' };
+  const v = live.values[name];
+  return { label, value: v === null || v === undefined ? '' : String(v) };
+}
+
+/**
+ * Shown on a CRM component while the preview uses live data but the component shows sample
+ * values (it can't be filled from the sample record here, or loading failed).
+ */
+function SampleBadge({ reason }: { reason?: string }) {
+  return (
+    <div className="hsp-crm-sample-badge" data-cv-chrome="" role="note">
+      Sample values — in HubSpot this shows the real record{reason ? ` (${reason})` : ''}
+    </div>
+  );
+}
+
+/** The badge when live data is on (null otherwise). */
+function useSampleBadge(): boolean {
+  return useLiveCrm() !== null;
+}
+
 // ---------------------------------------------------------------------------
 // Shared definitions
 // ---------------------------------------------------------------------------
@@ -341,10 +418,10 @@ const TEST_ID_PROP: PropDef = {
 
 const OBJECT_TYPE_HELP = 'e.g. 0-1 (contacts), 0-2 (companies), 0-3 (deals), 0-5 (tickets), or 2-… for custom objects.';
 
-function objectTypeIdProp(description: string, required: boolean): PropDef {
+function objectTypeIdProp(description: string, required: boolean, label = 'Record type'): PropDef {
   return {
     name: 'objectTypeId',
-    label: 'Object type ID',
+    label,
     type: { kind: 'string', placeholder: '0-1' },
     group: 'Data',
     required: required || undefined,
@@ -361,7 +438,7 @@ const RECORD_OBJECT_ID_PROP: PropDef = {
   label: 'Record ID',
   type: { kind: 'number', min: 1, step: 1, integer: true },
   group: 'Data',
-  description: 'ID of a specific CRM record to display instead of the current record (use together with Object type ID).',
+  description: 'ID of a specific CRM record to display instead of the current record (use together with Record type).',
 };
 
 function propertiesProp(description: string, label = 'Properties', name = 'properties'): PropDef {
@@ -653,16 +730,18 @@ function PropertyItems({
   row,
   direction,
   editable,
+  live = null,
 }: {
   names: string[];
   row: number;
   direction: 'row' | 'column';
   editable: boolean;
+  live?: LiveValues | null;
 }) {
   return (
     <dl className={cx('hsp-crm-proplist', `hsp-crm-proplist--${direction}`)}>
       {names.map((name, i) => {
-        const { label, value } = sampleProperty(name, row);
+        const { label, value } = shownProperty(name, row, live);
         return (
           <div className="hsp-crm-prop" key={`${i}-${name}`}>
             <dt className="hsp-crm-prop-label">{label}</dt>
@@ -677,12 +756,12 @@ function PropertyItems({
 }
 
 /** Compact property summary shown below stage trackers and deadlines. */
-function PropertySummary({ names, row }: { names: string[]; row: number }) {
+function PropertySummary({ names, row, live = null }: { names: string[]; row: number; live?: LiveValues | null }) {
   if (names.length === 0) return null;
   return (
     <dl className="hsp-crm-summary">
       {names.map((name, i) => {
-        const { label, value } = sampleProperty(name, row);
+        const { label, value } = shownProperty(name, row, live);
         return (
           <div className="hsp-crm-summary-item" key={`${i}-${name}`}>
             <dt className="hsp-crm-summary-label">{label}</dt>
@@ -754,13 +833,16 @@ function CrmPropertyListPreview({ props, rootProps, mode }: PreviewProps) {
   const direction = props.direction === 'row' ? 'row' : 'column';
   // A specific record (objectId) gets its own sample values so it is visibly "another record".
   const row = positiveInt(props.objectId) ?? 0;
+  const shown = names.slice(0, MAX_PROPERTY_LIST);
+  const live = useLiveRecordValues(props, shown);
   return (
     <div {...rootProps} className={cx('hsp-crm-block', rootProps.className)}>
+      {live?.status === 'error' && names.length > 0 && <SampleBadge />}
       {names.length === 0 ? (
         <EmptyState icon={TableProperties} title="No properties selected" hint="Add CRM property names to display." />
       ) : (
         <>
-          <PropertyItems names={names.slice(0, MAX_PROPERTY_LIST)} row={row} direction={direction} editable={mode === 'preview'} />
+          <PropertyItems names={shown} row={row} direction={direction} editable={mode === 'preview'} live={live} />
           {names.length > MAX_PROPERTY_LIST && (
             <DesignNote mode={mode}>HubSpot displays up to {MAX_PROPERTY_LIST} properties; the rest are ignored.</DesignNote>
           )}
@@ -779,15 +861,17 @@ const MAX_HIGHLIGHTS = 4;
 function CrmDataHighlightPreview({ props, rootProps, mode }: PreviewProps) {
   const names = stringList(props.properties);
   const row = positiveInt(props.objectId) ?? 0;
+  const live = useLiveRecordValues(props, names.slice(0, MAX_HIGHLIGHTS));
   return (
     <div {...rootProps} className={cx('hsp-crm-block', rootProps.className)}>
+      {live?.status === 'error' && names.length > 0 && <SampleBadge />}
       {names.length === 0 ? (
         <EmptyState icon={Gauge} title="No properties selected" hint="Add up to four CRM property names to highlight." />
       ) : (
         <>
           <dl className="hsp-crm-highlight">
             {names.slice(0, MAX_HIGHLIGHTS).map((name, i) => {
-              const { label, value } = sampleProperty(name, row);
+              const { label, value } = shownProperty(name, row, live);
               return (
                 <div className="hsp-crm-highlight-item" key={`${i}-${name}`}>
                   <dt className="hsp-crm-highlight-label">{label}</dt>
@@ -826,10 +910,33 @@ function firstSort(v: unknown, columns: string[]): { column: number; direction: 
   return null;
 }
 
+/** Live associated records of the sample record (rows of property values); null with mock data. */
+function useLiveAssociations(
+  toObjectType: unknown,
+  properties: string[],
+): { status: 'loading' | 'ok' | 'error'; rows: Array<Record<string, string | null>>; labels: Record<string, string> } | null {
+  const source = useLiveCrm();
+  const record = source?.record ?? null;
+  const to = typeIdOf(toObjectType);
+  const key = record && to ? `assoc:${record.objectTypeId}:${record.objectId}:${to}:${properties.join(',')}` : null;
+  const load = useLiveLoad(record && to ? source : null, key, () =>
+    source!.getAssociations(record!.objectTypeId, record!.objectId, { toObjectType: to, properties, pageLength: 100, formatted: true }),
+  );
+  const labels = useLivePropertyLabels(record && to ? source : null, to || null);
+  if (!source) return null;
+  if (!record || !to) return { status: 'error', rows: [], labels: {} };
+  if (!load || load.status === 'loading') return { status: 'loading', rows: [], labels };
+  if (load.status === 'error') return { status: 'error', rows: [], labels };
+  return { status: 'ok', rows: load.value.map((r) => ({ ...(r.properties ?? {}), hs_object_id: r.properties?.hs_object_id ?? String(r.toObjectId) })), labels };
+}
+
 function CrmAssociationTablePreview({ props, rootProps, mode }: PreviewProps) {
   const live = mode === 'preview';
   const object = objectSample(props.objectTypeId);
   const columns = stringList(props.propertyColumns);
+  const liveRows = useLiveAssociations(props.objectTypeId, columns);
+  const real = liveRows?.status === 'ok';
+  const columnLabel = (name: string) => (liveRows && liveRows.status !== 'error' ? (liveRows.labels[name] ?? sampleProperty(name).label) : sampleProperty(name).label);
   const quickFilters = stringList(props.quickFilterProperties);
   const searchable = flag(props.searchable, true);
   const paginated = flag(props.pagination, true);
@@ -841,7 +948,10 @@ function CrmAssociationTablePreview({ props, rootProps, mode }: PreviewProps) {
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
 
-  let rows = [0, 1, 2].map((row) => columns.map((c) => sampleProperty(c, row).value));
+  let rows = real
+    ? liveRows.rows.map((r) => columns.map((c) => (r[c] === null || r[c] === undefined ? '' : String(r[c]))))
+    : [0, 1, 2].map((row) => columns.map((c) => sampleProperty(c, row).value));
+  if (liveRows?.status === 'loading') rows = [];
   const q = query.trim().toLowerCase();
   if (q) rows = rows.filter((cells) => cells.some((cell) => cell.toLowerCase().includes(q)));
   if (sort) {
@@ -859,6 +969,7 @@ function CrmAssociationTablePreview({ props, rootProps, mode }: PreviewProps) {
 
   return (
     <div {...rootProps} className={cx('hsp-crm-block', 'hsp-crm-assoc-table', rootProps.className)}>
+      {liveRows?.status === 'error' && columns.length > 0 && <SampleBadge />}
       {(searchable || labelFilter || quickFilters.length > 0) && (
         <div className="hsp-crm-toolbar">
           {searchable && (
@@ -887,7 +998,7 @@ function CrmAssociationTablePreview({ props, rootProps, mode }: PreviewProps) {
               )}
               {quickFilters.map((name, i) => (
                 <span className="hsp-crm-filter" key={`${i}-${name}`}>
-                  {sampleProperty(name).label} <ChevronDown size={12} aria-hidden="true" />
+                  {columnLabel(name)} <ChevronDown size={12} aria-hidden="true" />
                 </span>
               ))}
             </div>
@@ -904,7 +1015,7 @@ function CrmAssociationTablePreview({ props, rootProps, mode }: PreviewProps) {
                 {columns.map((name, i) => (
                   <th key={`${i}-${name}`} className="hsp-crm-th" aria-sort={sort?.column === i ? (sort.direction === 1 ? 'ascending' : 'descending') : undefined}>
                     <span className="hsp-crm-th-inner">
-                      {sampleProperty(name).label}
+                      {columnLabel(name)}
                       {sort?.column === i &&
                         (sort.direction === 1 ? <ArrowUp size={12} aria-hidden="true" /> : <ArrowDown size={12} aria-hidden="true" />)}
                     </span>
@@ -916,7 +1027,11 @@ function CrmAssociationTablePreview({ props, rootProps, mode }: PreviewProps) {
               {visible.length === 0 ? (
                 <tr>
                   <td className="hsp-crm-td hsp-crm-td--empty" colSpan={columns.length}>
-                    No associated {object.plural} match your search.
+                    {liveRows?.status === 'loading'
+                      ? `Loading associated ${object.plural}…`
+                      : real && !q
+                        ? `No associated ${object.plural}.`
+                        : `No associated ${object.plural} match your search.`}
                   </td>
                 </tr>
               ) : (
@@ -970,6 +1085,7 @@ const REPORT_USE_LABELS: Record<string, string> = {
 };
 
 function CrmReportPreview({ props, rootProps }: PreviewProps) {
+  const badge = useSampleBadge();
   const reportId = str(props.reportId).trim();
   const use = oneOf(props.use, ['associations', 'subject', 'unfiltered'] as const, 'associations');
   // Bar heights vary with the report id so different reports look different.
@@ -978,6 +1094,7 @@ function CrmReportPreview({ props, rootProps }: PreviewProps) {
   const months = ['May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct'];
   return (
     <div {...rootProps} className={cx('hsp-crm-block', 'hsp-crm-report', rootProps.className)}>
+      {badge && reportId !== '' && <SampleBadge reason="reports can’t be previewed in the builder" />}
       {reportId === '' ? (
         <EmptyState icon={FileChartColumn} title="No report selected" hint="Set the ID of a single object report (found in the report URL)." />
       ) : (
@@ -1019,9 +1136,11 @@ function CrmAssociationPivotPreview({ props, rootProps, mode }: PreviewProps) {
   const max = positiveInt(props.maxAssociations);
   const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+  const badge = useSampleBadge();
 
   return (
     <div {...rootProps} className={cx('hsp-crm-block', 'hsp-crm-pivot', rootProps.className)}>
+      {badge && <SampleBadge />}
       {labels.map((label, g) => {
         // First group gets all three sample records, the others one each (rotating).
         const records = g === 0 ? object.records : [object.records[g % object.records.length]];
@@ -1067,15 +1186,29 @@ function CrmAssociationPivotPreview({ props, rootProps, mode }: PreviewProps) {
 // CrmAssociationPropertyList
 // ---------------------------------------------------------------------------
 
+/** A display name for an associated record from the properties loaded with it. */
+const NAME_PROPS: Record<string, string[]> = { '0-1': ['firstname', 'lastname'], '0-2': ['name'], '0-3': ['dealname'], '0-5': ['subject'] };
+
 function CrmAssociationPropertyListPreview({ props, rootProps, mode }: PreviewProps) {
   const object = objectSample(props.objectTypeId);
   const names = stringList(props.properties);
   const labels = stringList(props.associationLabels);
+  const nameProps = lookup(NAME_PROPS, typeIdOf(props.objectTypeId)) ?? [];
+  const liveRows = useLiveAssociations(props.objectTypeId, [...new Set([...names.slice(0, MAX_PROPERTY_LIST), ...nameProps])]);
+  const first = liveRows?.status === 'ok' ? liveRows.rows[0] : undefined;
+  const live: LiveValues | null = !liveRows
+    ? null
+    : liveRows.status === 'ok' && !first
+      ? { status: 'ok', values: {}, labels: liveRows.labels }
+      : { status: liveRows.status, values: first ?? {}, labels: liveRows.labels };
+  const recordName = first ? nameProps.map((p) => first[p]).filter(Boolean).join(' ') || `${object.singular} ${first.hs_object_id ?? ''}`.trim() : object.records[0].name;
   return (
     <div {...rootProps} className={cx('hsp-crm-block', rootProps.className)}>
+      {liveRows?.status === 'error' && <SampleBadge />}
+      {liveRows?.status === 'ok' && !first && <div className="hsp-crm-note">This record has no associated {object.plural}.</div>}
       <div className="hsp-crm-assoc-head">
         <span className="hsp-crm-assoc-kind">Associated {object.singular}</span>
-        <RecordLink>{object.records[0].name}</RecordLink>
+        <RecordLink>{liveRows?.status === 'loading' ? '…' : recordName}</RecordLink>
         {labels.map((label, i) => (
           <span className="hsp-crm-label-tag" key={`${i}-${label}`}>
             {label}
@@ -1086,7 +1219,7 @@ function CrmAssociationPropertyListPreview({ props, rootProps, mode }: PreviewPr
         <EmptyState icon={ListTree} title="No properties selected" hint={`Add properties of the associated ${object.singular} to display.`} />
       ) : (
         <>
-          <PropertyItems names={names.slice(0, MAX_PROPERTY_LIST)} row={0} direction="column" editable={mode === 'preview'} />
+          <PropertyItems names={names.slice(0, MAX_PROPERTY_LIST)} row={0} direction="column" editable={mode === 'preview'} live={live} />
           {names.length > MAX_PROPERTY_LIST && (
             <DesignNote mode={mode}>HubSpot displays up to {MAX_PROPERTY_LIST} properties; the rest are ignored.</DesignNote>
           )}
@@ -1102,16 +1235,57 @@ function CrmAssociationPropertyListPreview({ props, rootProps, mode }: PreviewPr
 
 const MAX_TRACKER_PROPERTIES = 4;
 
+/** Pipeline / stage properties of the object types whose stages come from the pipelines API. */
+const PIPELINE_PROPS: Record<string, { pipeline: string; stage: string }> = {
+  '0-3': { pipeline: 'pipeline', stage: 'dealstage' },
+  '0-5': { pipeline: 'hs_pipeline', stage: 'hs_pipeline_stage' },
+};
+
+/** The record's real pipeline stages and current stage (deals, tickets); null when not live. */
+function useLiveStages(props: Record<string, unknown>): { status: 'loading' | 'ok' | 'error'; stages: string[]; current: number } | null {
+  const source = useLiveCrm();
+  const target = liveTarget(source, props);
+  const pp = target ? lookup(PIPELINE_PROPS, target.objectTypeId) : undefined;
+  const raw = useLiveLoad(target && pp ? source : null, target && pp ? `stage:${target.objectTypeId}:${target.objectId}` : null, () =>
+    source!.getRecordProperties(target!.objectTypeId, target!.objectId, [pp!.pipeline, pp!.stage], false),
+  );
+  const pipelines = useLiveLoad(target && pp && source?.getPipelines ? source : null, target && pp ? `pipelines:${target.objectTypeId}` : null, () =>
+    source!.getPipelines!(target!.objectTypeId),
+  );
+  if (!source) return null;
+  if (!target || !pp || !source.getPipelines) return { status: 'error', stages: [], current: 0 };
+  if (!raw || !pipelines || raw.status === 'loading' || pipelines.status === 'loading') return { status: 'loading', stages: [], current: 0 };
+  if (raw.status === 'error' || pipelines.status === 'error') return { status: 'error', stages: [], current: 0 };
+  const pipelineId = raw.value[pp.pipeline];
+  const stageId = raw.value[pp.stage];
+  const pipeline = pipelines.value.find((p) => p.id === pipelineId) ?? pipelines.value.find((p) => p.stages.some((st) => st.id === stageId));
+  if (!pipeline) return { status: 'error', stages: [], current: 0 };
+  const ordered = [...pipeline.stages].sort((a, b) => a.displayOrder - b.displayOrder);
+  return { status: 'ok', stages: ordered.map((st) => st.label), current: Math.max(0, ordered.findIndex((st) => st.id === stageId)) };
+}
+
 function CrmStageTrackerPreview({ props, rootProps, mode }: PreviewProps) {
   // Without an object type the tracker follows the current record; deals are the typical case.
-  const object = objectSample(hasValue(props.objectTypeId) ? props.objectTypeId : '0-3');
+  const source = useLiveCrm();
+  const recordType = !hasValue(props.objectTypeId) ? source?.record?.objectTypeId : undefined;
+  const object = objectSample(hasValue(props.objectTypeId) ? props.objectTypeId : (recordType ?? '0-3'));
   const row = (positiveInt(props.objectId) ?? 0) % 3;
   const names = stringList(props.properties);
   const showProperties = flag(props.showProperties, true);
+  const liveStages = useLiveStages(props);
+  const live = useLiveRecordValues(props, showProperties ? names.slice(0, MAX_TRACKER_PROPERTIES) : []);
+  const stagesReal = liveStages?.status === 'ok' && liveStages.stages.length > 0;
   return (
     <div {...rootProps} className={cx('hsp-crm-block', 'hsp-crm-tracker', rootProps.className)}>
-      <StageTrack stages={object.stages} current={object.stageIndex[row]} />
-      {showProperties && <PropertySummary names={names.slice(0, MAX_TRACKER_PROPERTIES)} row={row} />}
+      {liveStages?.status === 'error' && <SampleBadge reason="stages of this record type aren’t loaded in the builder" />}
+      {liveStages?.status === 'loading' ? (
+        <div className="hsp-crm-stages hsp-crm-stages--loading">Loading stages…</div>
+      ) : stagesReal ? (
+        <StageTrack stages={liveStages.stages} current={liveStages.current} />
+      ) : (
+        <StageTrack stages={object.stages} current={object.stageIndex[row]} />
+      )}
+      {showProperties && <PropertySummary names={names.slice(0, MAX_TRACKER_PROPERTIES)} row={row} live={live} />}
       {showProperties && names.length > MAX_TRACKER_PROPERTIES && (
         <DesignNote mode={mode}>Stage trackers show up to {MAX_TRACKER_PROPERTIES} properties.</DesignNote>
       )}
@@ -1128,8 +1302,10 @@ function CrmAssociationStageTrackerPreview({ props, rootProps, mode }: PreviewPr
   const [index, setIndex] = useState(0);
   const count = object.records.length;
   const record = object.records[index % count];
+  const badge = useSampleBadge();
   return (
     <div {...rootProps} className={cx('hsp-crm-block', 'hsp-crm-tracker', rootProps.className)}>
+      {badge && <SampleBadge />}
       <div className="hsp-crm-assoc-head">
         <span className="hsp-crm-assoc-kind">Associated {object.singular}</span>
         <RecordLink>{record.name}</RecordLink>
@@ -1203,11 +1379,28 @@ function CrmSimpleDeadlinePreview({ props, rootProps, mode }: PreviewProps) {
   const showProperties = flag(props.showProperties, true);
   const theme = isRecord(props.progressTheme) ? props.progressTheme : {};
 
+  // Live data: the sample record's real dates (raw values, so they can be compared).
+  const source = useLiveCrm();
+  const target = liveTarget(source, props);
+  const dateNames = [startName, endName].filter(Boolean);
+  const liveDates = useLiveLoad(target && dateNames.length === 2 ? source : null, target ? `dates:${target.objectTypeId}:${target.objectId}:${dateNames.join(',')}` : null, () =>
+    source!.getRecordProperties(target!.objectTypeId, target!.objectId, dateNames, false),
+  );
+  const live = useLiveRecordValues(props, showProperties ? names : []);
+  const parse = (v: string | null | undefined): Date | null => {
+    if (!v) return null;
+    const ms = /^\d+$/.test(v) ? Number(v) : Date.parse(v);
+    return Number.isFinite(ms) ? new Date(ms) : null;
+  };
+  const realStart = liveDates?.status === 'ok' ? parse(liveDates.value[startName]) : null;
+  const realEnd = liveDates?.status === 'ok' ? parse(liveDates.value[endName]) : null;
+  const real = !!realStart && !!realEnd;
+
   // Sample timeline relative to today: started 90 days ago, due in 30 days (75% elapsed).
   const now = Date.now();
-  const start = new Date(now - 90 * DAY_MS);
-  const end = new Date(now + 30 * DAY_MS);
-  const percent = 75;
+  const start = realStart ?? new Date(now - 90 * DAY_MS);
+  const end = realEnd ?? new Date(now + 30 * DAY_MS);
+  const percent = real ? Math.round(Math.min(100, Math.max(0, ((now - start.getTime()) / Math.max(1, end.getTime() - start.getTime())) * 100))) : 75;
 
   const height = cssLength(theme.height);
   const radius = cssLength(theme.borderRadius);
@@ -1217,15 +1410,16 @@ function CrmSimpleDeadlinePreview({ props, rootProps, mode }: PreviewProps) {
 
   return (
     <div {...rootProps} className={cx('hsp-crm-block', 'hsp-crm-deadline', rootProps.className)}>
+      {source && !real && liveDates?.status !== 'loading' && <SampleBadge reason={dateNames.length < 2 ? 'set both date properties' : undefined} />}
       <div className={cx('hsp-crm-deadline-frame', background && 'hsp-crm-deadline-frame--filled')} style={background ? { background } : undefined}>
         <div className="hsp-crm-deadline-head">
           <span className="hsp-crm-deadline-date">
-            <span className="hsp-crm-deadline-caption">{startName ? sampleProperty(startName).label : 'Start date'}</span>
+            <span className="hsp-crm-deadline-caption">{startName ? (live?.labels[startName] ?? sampleProperty(startName).label) : 'Start date'}</span>
             {formatDate(start)}
           </span>
           <span className="hsp-crm-deadline-left">30 days left</span>
           <span className="hsp-crm-deadline-date hsp-crm-deadline-date--end">
-            <span className="hsp-crm-deadline-caption">{endName ? sampleProperty(endName).label : 'Deadline'}</span>
+            <span className="hsp-crm-deadline-caption">{endName ? (live?.labels[endName] ?? sampleProperty(endName).label) : 'Deadline'}</span>
             {formatDate(end)}
           </span>
         </div>
@@ -1242,7 +1436,7 @@ function CrmSimpleDeadlinePreview({ props, rootProps, mode }: PreviewProps) {
         </div>
       </div>
       {(!startName || !endName) && <DesignNote mode={mode}>Set both the start and end date property names.</DesignNote>}
-      {showProperties && <PropertySummary names={names} row={0} />}
+      {showProperties && <PropertySummary names={names} row={0} live={live} />}
     </div>
   );
 }
@@ -1282,9 +1476,11 @@ function statisticValue(type: StatisticType, propertyName: string, label: string
 }
 
 function CrmStatisticsPreview({ props, rootProps }: PreviewProps) {
+  const badge = useSampleBadge();
   const items = objectList(props.statistics);
   return (
     <div {...rootProps} className={cx('hsp-crm-block', rootProps.className)}>
+      {badge && <SampleBadge reason="statistics are calculated by HubSpot" />}
       {items.length === 0 ? (
         <EmptyState icon={Sigma} title="No statistics defined" hint="Add statistics such as { label, statisticType: 'SUM', propertyName: 'amount' }." />
       ) : (
@@ -1650,7 +1846,7 @@ export const crmComponents: ComponentDef[] = [
     type: 'CrmAssociationTable',
     label: 'Association table',
     category: 'CRM data',
-    description: 'A searchable, paginated table of records associated with the current record.',
+    description: 'A searchable, paginated table of records associated with the current record. HubSpot shows the loading and “none yet” states for you.',
     icon: Table2,
     docsUrl: `${CRM_DOCS}/crm-association-table`,
     importFrom: '@hubspot/ui-extensions/crm',
@@ -1667,7 +1863,7 @@ export const crmComponents: ComponentDef[] = [
       },
     }),
     props: [
-      objectTypeIdProp('Object type of the associated records to list.', true),
+      objectTypeIdProp('Which associated records to list (deals, contacts, companies…).', true, 'Associated records'),
       propertiesProp('Internal names of the properties to show as table columns.', 'Property columns', 'propertyColumns'),
       {
         name: 'quickFilterProperties',
@@ -1792,7 +1988,7 @@ export const crmComponents: ComponentDef[] = [
     children: { mode: 'none' },
     create: () => ({ type: 'CrmAssociationPivot', props: { objectTypeId: '0-1', maxAssociations: 5 } }),
     props: [
-      objectTypeIdProp('Object type of the associated records to list.', true),
+      objectTypeIdProp('Which associated records to list (deals, contacts, companies…).', true, 'Associated records'),
       associationLabelsProp('Only show these association labels. By default all labels appear.'),
       {
         name: 'maxAssociations',

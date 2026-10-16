@@ -15,6 +15,7 @@ import {
   CloudCheck,
   CloudOff,
   Command,
+  Compass,
   Download,
   ExternalLink,
   FilePlus2,
@@ -22,8 +23,8 @@ import {
   House,
   Keyboard,
   LayoutPanelTop,
+  LifeBuoy,
   LoaderCircle,
-  Package,
   PanelBottom,
   PanelLeft,
   PanelRight,
@@ -31,6 +32,7 @@ import {
   Play,
   Plus,
   Redo2,
+  Rocket,
   RotateCcw,
   Save,
   Settings,
@@ -55,6 +57,7 @@ import { isLeftCollapsed, openBottomTab, setLeftSidebarOpen, toggleBottomPanel, 
 import { saveNow, shortcutLabel } from './shortcuts';
 import { openCommandPalette as openPowerPalette } from '../power/uiStore';
 import { ConnectButton } from '../connect/ui';
+import { useOnboarding } from '../onboarding/store';
 
 export function LogoMark({ size = 24 }: { size?: number }) {
   return (
@@ -74,7 +77,7 @@ export function TopBar() {
       <div className="ub-sh-tb-group ub-sh-tb-left">
         <div className="ub-sh-tb-brand" title="UI Extension Builder for HubSpot">
           <LogoMark />
-          <span className="ub-sh-tb-product">Extension Builder</span>
+          <span className="ub-sh-tb-product">Card Builder</span>
         </div>
         <span className="ub-sh-tb-divider" aria-hidden />
         <AppNameButton />
@@ -97,8 +100,14 @@ export function TopBar() {
         <HelpMenu />
         <PanelToggles />
         <ConnectButton />
-        <Button variant="primary" icon={<Package size={14} />} onClick={() => useDialogs.getState().open('export')} title={`Export HubSpot project (${shortcutLabel('export')})`}>
-          Export
+        <Button
+          variant="primary"
+          icon={<Rocket size={14} />}
+          onClick={() => useDialogs.getState().open('export')}
+          title={`Publish to HubSpot, or download the project (${shortcutLabel('export')})`}
+          data-tour="publish"
+        >
+          Publish
         </Button>
       </div>
     </header>
@@ -164,7 +173,7 @@ export function ExtensionSwitcher() {
       onSelect: () => add('home'),
     },
     { separator: true, label: '' },
-    { icon: <LayoutPanelTop size={14} />, label: 'Manage extensions…', onSelect: () => useDialogs.getState().open('extensionSettings', activeId) },
+    { icon: <LayoutPanelTop size={14} />, label: 'Manage cards and pages…', onSelect: () => useDialogs.getState().open('extensionSettings', activeId) },
   ];
 
   return (
@@ -174,8 +183,8 @@ export function ExtensionSwitcher() {
         className={cx('ub-sh-tb-ext', menu.position && 'ub-sh-tb-ext--open')}
         aria-haspopup="menu"
         aria-expanded={!!menu.position}
-        aria-label={`${active.name}, ${extensionLocationLabel(active)} — switch or add extensions`}
-        title="Switch or add extensions"
+        aria-label={`${active.name}, ${extensionLocationLabel(active)} — switch or add cards and pages`}
+        title="Switch to another card, or add a card or page"
         onMouseDown={menu.onTriggerMouseDown}
         onClick={(e) => menu.toggle(e.currentTarget)}
       >
@@ -210,7 +219,7 @@ function ModeToggle() {
   const mode = useEditor((s) => s.mode);
   const key = shortcutLabel('togglePreview');
   return (
-    <div className="ub-sh-tb-cluster">
+    <div className="ub-sh-tb-cluster" data-tour="preview-mode">
       <Segmented
         aria-label="Editor mode"
         value={mode}
@@ -235,7 +244,7 @@ function ProblemsBadge() {
   const total = errors + warnings;
   const label =
     total === 0
-      ? 'No problems — ready to export'
+      ? 'No problems — ready to publish'
       : `${errors} ${errors === 1 ? 'error' : 'errors'}, ${warnings} ${warnings === 1 ? 'warning' : 'warnings'} — show problems`;
   return (
     <button
@@ -358,6 +367,18 @@ export function openCommandPalette(): void {
 function HelpMenu() {
   const menu = useAnchoredMenu();
   const items: MenuItem[] = [
+    { icon: <LifeBuoy size={14} />, label: 'Getting started', onSelect: () => useOnboarding.getState().reopen() },
+    {
+      icon: <Compass size={14} />,
+      label: 'Take the tour',
+      onSelect: () => {
+        const editor = useEditor.getState();
+        if (editor.mode !== 'design') editor.setMode('design');
+        // After the menu closed (it returns focus to the Help button first).
+        setTimeout(() => useOnboarding.getState().startTour(), 0);
+      },
+    },
+    { separator: true, label: '' },
     { icon: <Keyboard size={14} />, label: 'Keyboard shortcuts', shortcut: '?', onSelect: () => useDialogs.getState().open('shortcuts') },
     { icon: <Command size={14} />, label: 'Command palette', shortcut: shortcutLabel('commandPalette'), onSelect: () => setTimeout(openCommandPalette, 0) },
     { separator: true, label: '' },

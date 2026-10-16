@@ -12,27 +12,33 @@ import { startServer, type RunningServer } from './node';
 import { DEMO_CLIENT_ID, DEMO_CLIENT_SECRET, DEMO_PORTAL_ID, startFakeHubSpotServer, type RunningFakeHubSpot } from './fake-hubspot/server';
 import { CONNECTOR_ROUTES, CSRF_HEADER, type ConnectionInfo, type ConnectorHealth, type CrmObjectTypeInfo, type CrmRecord, type CrmRecordSummary } from '../src/connect/types';
 
-/** Minimal cookie jar: name → value, honouring deletions (Max-Age=0 / past Expires). */
+/**
+ * Minimal cookie jar: (name, path) → value like a browser, honouring deletions (Max-Age=0 / past
+ * Expires). Only the /api paths this test uses exist, so every stored cookie is sent.
+ */
 class CookieJar {
-  private cookies = new Map<string, string>();
+  private cookies = new Map<string, { name: string; value: string }>();
   store(response: Response): void {
     for (const header of response.headers.getSetCookie()) {
       const [pair, ...attrs] = header.split(';');
       const eq = pair.indexOf('=');
       const name = pair.slice(0, eq).trim();
       const value = pair.slice(eq + 1).trim();
+      let path = '/';
       const expired = attrs.some((a) => {
         const [k, v = ''] = a.trim().split('=');
+        if (k.toLowerCase() === 'path') path = v;
         if (k.toLowerCase() === 'max-age') return Number(v) <= 0;
         if (k.toLowerCase() === 'expires') return Date.parse(v) <= Date.now();
         return false;
       });
-      if (expired || value === '') this.cookies.delete(name);
-      else this.cookies.set(name, value);
+      const key = `${name}|${path}`;
+      if (expired || value === '') this.cookies.delete(key);
+      else this.cookies.set(key, { name, value });
     }
   }
   header(): string {
-    return [...this.cookies].map(([k, v]) => `${k}=${v}`).join('; ');
+    return [...this.cookies.values()].map(({ name, value }) => `${name}=${value}`).join('; ');
   }
   get size(): number {
     return this.cookies.size;

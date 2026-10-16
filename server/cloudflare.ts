@@ -72,7 +72,8 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
       try {
-        const response = await connectorFor(env, url.origin).handle(allowPlainHealthCheck(request));
+        const clientIp = request.headers.get('cf-connecting-ip')?.trim() || undefined;
+        const response = await connectorFor(env, url.origin).handle(allowPlainHealthCheck(request), { clientIp });
         return response ?? jsonError(404, 'not_found', 'There is no connector endpoint at this address.');
       } catch {
         return jsonError(500, 'internal_error', 'Something went wrong on the connector server. Please try again.');

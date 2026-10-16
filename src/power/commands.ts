@@ -55,7 +55,8 @@ import { explainNoTarget, historyStep, insertComponent, paletteInsertTarget } fr
 import { useDialogs, type DialogName } from '../shell/dialogs';
 import { showRightTab } from '../shell/shellStore';
 import { formatShortcut, SHORTCUTS } from '../shell/shortcuts';
-import { insertBlock } from '../templates/actions';
+import { insertBlock, prepareBlock } from '../templates/actions';
+import type { BlockTemplate } from '../templates/catalog';
 import { copyToClipboard, ensureDesignMode, goToNode, showBottomPanel, showLeftPanel, type Notify } from './actions';
 import { usePowerUi } from './uiStore';
 
@@ -97,6 +98,8 @@ export interface PaletteBlock {
   keywords?: string[];
   /** True for blocks the user saved ("Save as block"). */
   user?: boolean;
+  /** Data blocks: built for the card they go into (BlockTemplate.create). */
+  create?: BlockTemplate['create'];
 }
 
 export interface CommandSources {
@@ -298,7 +301,8 @@ function insertCommands(ext: Extension, selected: NodeId | null): Command[] {
  */
 export function runInsertBlock(block: PaletteBlock, notify: Notify): void {
   ensureDesignMode();
-  const res = insertBlock(block.template, block.state, block.name);
+  const built = prepareBlock(block);
+  const res = insertBlock(built.template, built.state, block.name, undefined, built.dataSources);
   if (res.message) notify(res.message);
 }
 
@@ -642,7 +646,7 @@ function projectCommands(): Command[] {
   return [
     dialog('appSettings', 'Open app settings', Settings, 'Name, scopes, permitted URLs, support info', ['app', 'scopes', 'urls', 'auth', 'config']),
     dialog('functions', 'Open app functions', SquareFunction, 'Server-side functions (hubspot.serverless)', ['serverless', 'backend', 'functions']),
-    dialog('export', 'Open export', Package, 'Download the HubSpot project (.zip)', ['export', 'download', 'zip', 'deploy', 'upload'], 'export'),
+    dialog('export', 'Publish to HubSpot', Package, 'Publish your cards, or download the HubSpot project (.zip)', ['export', 'download', 'zip', 'deploy', 'upload', 'publish'], 'export'),
     dialog('projects', 'Open projects', FolderOpen, 'Saved projects, import a .uiex.json', ['open', 'load', 'import', 'saved']),
     dialog('newProject', 'New project', FilePlus, 'Start from a template or a blank project', ['create', 'template', 'start']),
     dialog('shortcuts', 'Open keyboard shortcuts', Keyboard, 'Every shortcut of the editor', ['keys', 'help', 'hotkeys'], 'shortcuts'),

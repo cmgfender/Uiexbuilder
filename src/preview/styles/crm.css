@@ -43,6 +43,25 @@
   font-style: italic;
 }
 
+/* Live data is on, but this component shows sample values (builder note, not part of the card). */
+.hsp-crm-sample-badge {
+  align-self: flex-start;
+  margin-bottom: 8px;
+  padding: 2px 8px;
+  border: 1px solid var(--hsp-warning);
+  border-radius: 999px;
+  background: var(--hsp-warning-bg);
+  color: var(--hsp-text);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+}
+
+.hsp-crm-stages--loading {
+  font-size: 12px;
+  color: var(--hsp-text-muted);
+}
+
 /* Record names render as HubSpot links. */
 .hsp-crm-record-link {
   color: var(--hsp-link);

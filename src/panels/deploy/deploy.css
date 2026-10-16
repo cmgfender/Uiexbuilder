@@ -1,4 +1,4 @@
-/* Deploy to HubSpot (beta) — Export dialog section. Prefix: ub-dp- */
+/* Publish to HubSpot (beta; "deploy" in code) — Publish dialog section. Prefix: ub-dp- */
 
 .ub-dp-p {
   margin: 0;
@@ -68,7 +68,8 @@
   border: 1px solid var(--ub-border);
 }
 .ub-dp-guide .ub-dp-p {
-  padding: 8px 0;
+  padding: 6px 0 8px;
+  font-size: 12px;
 }
 .ub-dp-linkbtn {
   text-decoration: none;
@@ -184,4 +185,323 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* A pasted private app token ("pat-…") instead of a personal access key: a gentle, non-blocking note. */
+.ub-dp-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-radius: var(--ub-radius);
+  background: var(--ub-warning-soft);
+  color: var(--ub-warning);
+  font-size: 12px;
+}
+.ub-dp-hint svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* ---------- Wizard (1 Get your key · 2 Publish · 3 Finish in HubSpot) ---------- */
+.ub-dp-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ub-dp-wizard {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0;
+  padding: 0 0 10px;
+  list-style: none;
+  border-bottom: 1px solid var(--ub-border);
+}
+.ub-dp-wizard__step {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--ub-text-3);
+}
+.ub-dp-wizard__step + .ub-dp-wizard__step::before {
+  content: '';
+  width: 22px;
+  height: 2px;
+  margin-right: 3px;
+  border-radius: 1px;
+  background: var(--ub-border-strong);
+}
+.ub-dp-wizard__num {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ub-border-strong);
+  background: var(--ub-surface);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.ub-dp-wizard__step--current {
+  color: var(--ub-text);
+  font-weight: 600;
+}
+.ub-dp-wizard__step--current .ub-dp-wizard__num {
+  border-color: var(--ub-accent-strong);
+  background: var(--ub-accent-strong);
+  color: #fff;
+}
+.ub-dp-wizard__step--done .ub-dp-wizard__num {
+  border-color: var(--ub-success);
+  background: var(--ub-success);
+  color: #fff;
+}
+.ub-dp-wizard__step--failed {
+  color: var(--ub-danger);
+  font-weight: 600;
+}
+.ub-dp-wizard__step--failed .ub-dp-wizard__num {
+  border-color: var(--ub-danger);
+  background: var(--ub-danger);
+  color: #fff;
+}
+
+.ub-dp-keycard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ub-dp-target {
+  color: var(--ub-text-2);
+}
+
+/* Progress bar */
+.ub-dp-bar {
+  position: relative;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--ub-surface-3);
+}
+.ub-dp-bar__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--ub-accent-strong);
+  transition: width 0.4s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ub-dp-bar__fill {
+    transition: none;
+  }
+}
+
+/* What to do next (failure) */
+.ub-dp-advice ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  line-height: 1.55;
+}
+
+/* Finish in HubSpot checklist */
+.ub-dp-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ub-dp-checklist__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ub-dp-checklist__head .ub-pn-h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.ub-dp-checklist__count {
+  font-size: 12px;
+  color: var(--ub-text-3);
+}
+.ub-dp-checklist__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ub-dp-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--ub-border);
+  border-radius: var(--ub-radius-lg);
+  background: var(--ub-surface);
+}
+.ub-dp-check--done {
+  background: var(--ub-success-soft);
+  border-color: #bfe3d4;
+}
+.ub-dp-check__box {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--ub-success);
+  cursor: pointer;
+}
+.ub-dp-check__box:focus-visible {
+  outline: none;
+  box-shadow: var(--ub-focus);
+}
+.ub-dp-check__body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+.ub-dp-check__title {
+  font-weight: 600;
+  cursor: pointer;
+}
+.ub-dp-check--done .ub-dp-check__title {
+  text-decoration: line-through;
+  text-decoration-color: var(--ub-text-3);
+}
+.ub-dp-check__text {
+  margin: 0;
+  color: var(--ub-text-2);
+  line-height: 1.5;
+}
+.ub-dp-earlier {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ---------- Usability pass: a compact form whose action is always in view ---------- */
+.ub-dp-intro {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--ub-radius);
+  background: var(--ub-info-soft);
+  color: var(--ub-text-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.ub-dp-intro strong {
+  color: var(--ub-text);
+}
+.ub-dp-intro__icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--ub-info);
+}
+/* Key guide: one tight line per click. */
+.ub-dp-gsteps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 0 2px;
+  list-style: none;
+  line-height: 1.45;
+}
+.ub-dp-gstep {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.ub-dp-gstep__num {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: var(--ub-accent-soft);
+  color: var(--ub-accent-text);
+  font-size: 11px;
+  font-weight: 600;
+}
+.ub-dp-guidewrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ub-dp-cli-link {
+  align-self: flex-start;
+}
+/* The flow fills the dialog pane, so the actions sit at its bottom even when the content is short. */
+.ub-pn-dialog-pane > .ub-dp-flow {
+  min-height: 100%;
+}
+.ub-dp-flow > .ub-dp {
+  flex: 1 0 auto;
+}
+/* The primary action stays visible at the bottom of the dialog while the content scrolls. */
+.ub-dp-actions {
+  margin-top: auto !important;
+  position: sticky;
+  bottom: -18px;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin: 0 -18px -18px;
+  padding: 10px 18px 12px;
+  border-top: 1px solid var(--ub-border);
+  background: var(--ub-surface);
+}
+.ub-dp-actions .ub-dp-target {
+  flex: 1 1 240px;
+  min-width: 0;
+  font-size: 12.5px;
+}
+.ub-dp-actions > .ub-pn-row {
+  flex-wrap: wrap;
+}
+/* Checklist: the clicks, numbered. */
+.ub-dp-check__steps {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--ub-text-2);
+  line-height: 1.55;
+}
+.ub-dp-check__steps li + li {
+  margin-top: 1px;
+}
+.ub-dp-alldone {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--ub-radius);
+  background: var(--ub-success-soft);
+  color: var(--ub-success);
+  font-weight: 600;
+}
+.ub-dp-alldone svg {
+  flex: none;
+}
+.ub-dp-hint--info {
+  margin: 0;
+  background: var(--ub-info-soft);
+  color: var(--ub-info);
 }

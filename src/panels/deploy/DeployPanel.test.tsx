@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createExtension, createProject } from '../../model/factory';
 import { useEditor } from '../../model/store';
 import type { Issue } from '../../model/validate';
@@ -40,7 +40,7 @@ function status(phase: DeployStatus['phase'], n: number, extra: Partial<DeploySt
   };
 }
 
-function mockClient(opts: { start?: DeployClient['start']; statuses?: Array<DeployStatus | Error>; remembered?: boolean } = {}) {
+function mockClient(opts: { start?: DeployClient['start']; statuses?: Array<DeployStatus | Error> } = {}) {
   const queue = [...(opts.statuses ?? [])];
   const client = {
     start: vi.fn(opts.start ?? (async () => status('building', 1))),
@@ -50,22 +50,42 @@ function mockClient(opts: { start?: DeployClient['start']; statuses?: Array<Depl
       if (next instanceof Error) throw next;
       return next;
     }),
-    keyInfo: vi.fn(async () => (opts.remembered ? { remembered: true, portalId: PORTAL } : { remembered: false })),
-    forgetKey: vi.fn(async () => ({ remembered: false })),
   } satisfies DeployClient;
   return client;
 }
 
-function connect(state: 'connected' | 'disconnected' | 'unavailable' | 'checking' = 'connected', deploy = true) {
+function connect(
+  state: 'connected' | 'disconnected' | 'unavailable' | 'checking' | 'not-configured' = 'connected',
+  deploy = true,
+  extra: { reason?: 'disabled' | 'session_secret'; appBase?: string } = {},
+) {
+  const oauth = state !== 'not-configured';
   useConnection.setState({
     status: state,
     error: null,
-    health: state === 'unavailable' ? null : { ok: true, version: '1', oauthConfigured: true, features: { crm: true, fetchProxy: true, deploy }, scopes: { required: [], optional: [] } },
+    health:
+      state === 'unavailable'
+        ? null
+        : {
+            ok: true,
+            version: '1',
+            oauthConfigured: oauth,
+            features: {
+              crm: oauth,
+              fetchProxy: oauth,
+              deploy,
+              ...(oauth ? { deployNeedsSignIn: true } : {}),
+              ...(extra.reason ? { deployUnavailableReason: extra.reason } : {}),
+            },
+            scopes: { required: [], optional: [] },
+            ...(extra.appBase ? { appBase: extra.appBase } : {}),
+          },
     info:
       state === 'connected'
         ? { connected: true, portalId: PORTAL, hubDomain: 'acmedemo.com', user: { email: 'jordan@acmedemo.com' }, scopes: [], expiresAt: 0, appHost: 'app.hubspot.com' }
         : { connected: false },
     connect: vi.fn(async () => {}),
+    switchPortal: vi.fn(async () => {}),
   });
 }
 
@@ -87,6 +107,7 @@ function typeKey(value = 'CiRuYTEtZmFrZS1rZXktZm9yLXRlc3Rz') {
 }
 
 const realConnect = useConnection.getState().connect;
+const realSwitch = useConnection.getState().switchPortal;
 
 beforeEach(() => {
   mocks.issues = [];
@@ -96,43 +117,71 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  useConnection.setState({ connect: realConnect });
+  useConnection.setState({ connect: realConnect, switchPortal: realSwitch });
 });
 
 describe('<DeployToHubSpotPanel> availability', () => {
   it('shows the CLI instructions when there is no connector', () => {
     connect('unavailable');
     renderPanel(mockClient());
-    expect(screen.getByText('Deploying from the builder isn’t available here')).toBeInTheDocument();
+    expect(screen.getByText('Publishing from the builder isn’t available here')).toBeInTheDocument();
     expect(screen.getByText(/runs without its HubSpot connector/)).toBeInTheDocument();
     expect(screen.getByText('CLI STEPS')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Deploy to HubSpot' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Publish to HubSpot' })).toBeNull();
   });
 
   it('shows the CLI instructions when deploy is turned off on the server', () => {
-    connect('connected', false);
+    connect('connected', false, { reason: 'disabled' });
     renderPanel(mockClient());
-    expect(screen.getByText(/turned off deploying from the builder/)).toBeInTheDocument();
+    expect(screen.getByText(/turned off publishing from the builder/)).toBeInTheDocument();
     expect(screen.getByText('CLI STEPS')).toBeInTheDocument();
+  });
+
+  it('says what is missing when the server has no SESSION_SECRET yet (setup not finished), with the setup checklist', () => {
+    connect('not-configured', false, { reason: 'session_secret' });
+    renderPanel(mockClient());
+    expect(screen.getByText('Publishing from the builder needs one more server setting')).toBeInTheDocument();
+    expect(screen.queryByText(/turned off/)).toBeNull();
+    expect(screen.getByRole('link', { name: /Open the setup checklist/ })).toHaveAttribute('href', '/setup.html');
+    expect(screen.getByText('CLI STEPS')).toBeInTheDocument();
+  });
+
+  it('asks to connect HubSpot first when the server has sign-in set up', () => {
+    connect('disconnected');
+    renderPanel(mockClient());
+    expect(screen.getByRole('heading', { name: 'First, connect HubSpot' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Paste your key')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Connect HubSpot' }));
+    expect(useConnection.getState().connect).toHaveBeenCalled();
   });
 
   it('waits while the connection is being checked', () => {
     connect('checking');
     renderPanel(mockClient());
     expect(screen.getByText('Checking the connection to HubSpot…').closest('[role="status"]')).not.toBeNull();
-    expect(screen.queryByRole('button', { name: 'Deploy to HubSpot' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Publish to HubSpot' })).toBeNull();
   });
 
-  it('is a tab of the Export dialog', async () => {
+  it('opens the Publish dialog on Publish to HubSpot when this builder can publish', () => {
+    connect('connected');
+    render(
+      <ToastProvider>
+        <ExportDialog open onClose={() => {}} />
+      </ToastProvider>,
+    );
+    expect(screen.getByRole('tab', { name: 'Publish to HubSpot' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('is a tab of the Publish dialog', async () => {
     connect('unavailable');
     render(
       <ToastProvider>
         <ExportDialog open onClose={() => {}} arg="hubspot" />
       </ToastProvider>,
     );
-    const tab = screen.getByRole('tab', { name: 'Deploy to HubSpot' });
+    const tab = screen.getByRole('tab', { name: 'Publish to HubSpot' });
     expect(tab).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('tab', { name: 'Deploy with CLI' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Use the HubSpot CLI' })).toBeInTheDocument();
     // The fallback is the existing CLI guide.
     expect(screen.getByText('hs project upload')).toBeInTheDocument();
   });
@@ -153,21 +202,26 @@ describe('<DeployToHubSpotPanel> deploying', () => {
     renderPanel(client);
     expect(screen.getByText(/no terminal needed/)).toBeInTheDocument();
     expect(screen.getByText(/Your CRM records are not changed/)).toBeInTheDocument();
-    expect(screen.getByText('acmedemo.com')).toBeInTheDocument();
+    expect(screen.getAllByText('acmedemo.com').length).toBeGreaterThan(0);
+    // Wizard: step 1 of 3.
+    const wizard = screen.getByRole('list', { name: 'Publish steps' });
+    expect(within(wizard).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      expect.stringContaining('Get your key'),
+      expect.stringContaining('Publish'),
+      expect.stringContaining('Finish in HubSpot'),
+    ]);
+    expect(within(wizard).getAllByRole('listitem')[0]).toHaveAttribute('aria-current', 'step');
 
-    const deployBtn = screen.getByRole('button', { name: 'Deploy to HubSpot' });
+    const deployBtn = screen.getByRole('button', { name: 'Publish to HubSpot' });
     expect(deployBtn).toBeDisabled();
 
-    // Guide
-    const toggle = screen.getByRole('button', { name: /How do I get this\?/ });
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    // Step 1: a direct link to the connected account's personal access key page (the page the
+    // HubSpot CLI opens) and the clicks to make there.
+    expect(screen.getByRole('link', { name: /Open HubSpot’s key page/ })).toHaveAttribute('href', `https://app.hubspot.com/personal-access-key/${PORTAL}`);
     const guide = screen.getByRole('region', { name: 'How to get a personal access key' });
-    expect(within(guide).getByText('Create a key if you don’t have one yet')).toBeInTheDocument();
+    expect(within(guide).getByText(/Create a key if you don’t have one yet/)).toBeInTheDocument();
     expect(within(guide).getByText(/“Developer projects” permission/)).toBeInTheDocument();
     expect(within(guide).getByText(/search for “personal access key”/)).toBeInTheDocument();
-    expect(within(guide).getByRole('link', { name: /Open the personal access key page/ })).toHaveAttribute('href', `https://app.hubspot.com/personal-access-key/${PORTAL}`);
 
     // Key field: hidden by default, can be shown.
     const input = screen.getByLabelText('Paste your key');
@@ -175,45 +229,76 @@ describe('<DeployToHubSpotPanel> deploying', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show' }));
     expect(input).toHaveAttribute('type', 'text');
     typeKey();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Remember on this browser' }));
+    // Nothing to remember: the key is used for this deploy only.
+    expect(screen.queryByRole('checkbox', { name: /Remember/ })).toBeNull();
+    expect(screen.getByText(/never saves it/)).toBeInTheDocument();
     expect(deployBtn).toBeEnabled();
     fireEvent.click(deployBtn);
 
     await waitFor(() => expect(client.start).toHaveBeenCalledTimes(1));
     const req = client.start.mock.calls[0][0] as DeployRequest;
-    expect(req).toMatchObject({ personalAccessKey: 'CiRuYTEtZmFrZS1rZXktZm9yLXRlc3Rz', remember: true, portalId: PORTAL, projectName: 'deal-desk', platformVersion: '2026.03' });
+    expect(req).toMatchObject({ personalAccessKey: 'CiRuYTEtZmFrZS1rZXktZm9yLXRlc3Rz', portalId: PORTAL, projectName: 'deal-desk', platformVersion: '2026.03' });
+    expect(req.remember).toBeUndefined();
     expect(req.useRememberedKey).toBeUndefined();
     expect(req.files.map((f) => f.path)).toEqual(expect.arrayContaining(['hsproject.json', 'src/app/app-hsmeta.json', 'src/app/cards/DealCard.tsx']));
 
     // Progress: stepper + live status + log.
-    const stepper = await screen.findByRole('list', { name: 'Deploy progress' });
+    const stepper = await screen.findByRole('list', { name: 'Publish progress' });
     expect(within(stepper).getAllByRole('listitem').map((li) => li.textContent?.split('—')[0].trim())).toEqual([
       expect.stringContaining('Uploading'),
       expect.stringContaining('Building'),
-      expect.stringContaining('Deploying'),
-      expect.stringContaining('Done'),
+      expect.stringContaining('Going live'),
+      expect.stringContaining('Published'),
     ]);
+    expect(screen.getByRole('progressbar', { name: 'Publishing' })).toBeInTheDocument();
 
     // Done.
-    expect(await screen.findByText('Your project is live in HubSpot.')).toBeInTheDocument();
+    expect(await screen.findByText('Published! “Deal Card” is in HubSpot.')).toBeInTheDocument();
     expect(client.status.mock.calls.map((c) => c[0])).toEqual(['d1', 'd2', 'd3']);
     expect(screen.getByRole('link', { name: /Open project in HubSpot/ })).toHaveAttribute('href', PROJECT_URL);
-    expect(screen.getByRole('link', { name: /Install the app/ })).toHaveAttribute('href', `https://app.hubspot.com/static-token/${PORTAL}/authorize?appId=55`);
-    const next = screen.getByRole('region', { name: 'Next steps' });
+    const install = screen.getByRole('link', { name: /Install the app/ });
+    expect(install).toHaveAttribute('href', `https://app.hubspot.com/static-token/${PORTAL}/authorize?appId=55`);
+    // Installing is the next thing to do: it is the primary action.
+    expect(install).toHaveClass('ub-btn--primary');
+    expect(screen.getByRole('link', { name: /Open project in HubSpot/ })).not.toHaveClass('ub-btn--primary');
+    // Step 3: the "Finish in HubSpot" checklist with direct links.
+    const next = screen.getByRole('region', { name: 'Finish in HubSpot' });
     expect(within(next).getByText('Install the app in your account')).toBeInTheDocument();
-    expect(within(next).getByText('Add “Deal Card” to a tab in the middle column')).toBeInTheDocument();
-    expect(within(next).getByText(/Open a deals record, click Customize/)).toBeInTheDocument();
-    const stepItems = within(screen.getByRole('list', { name: 'Deploy progress' })).getAllByRole('listitem');
-    expect(stepItems.every((li) => li.textContent?.includes('done'))).toBe(true);
+    expect(within(next).getByText('Add “Deal Card” to deals records')).toBeInTheDocument();
+    // The exact clicks, numbered.
+    expect(within(next).getByText('Go to Data Management → Objects → Deals.')).toBeInTheDocument();
+    expect(within(next).getByText('Pick a tab in the middle column, then click Add cards → Card library.')).toBeInTheDocument();
+    expect(within(next).getByRole('link', { name: /Open HubSpot settings/ })).toHaveAttribute('href', `https://app.hubspot.com/settings/${PORTAL}`);
+    expect(within(next).getByText('Open a deal to see your card')).toBeInTheDocument();
+    expect(within(next).getByRole('link', { name: /Open your deals/ })).toHaveAttribute('href', `https://app.hubspot.com/contacts/${PORTAL}/objects/0-3`);
+    expect(within(next).getByText('0 of 3 done')).toBeInTheDocument();
+    expect(within(screen.getByRole('list', { name: 'Publish steps' })).getAllByRole('listitem')[2]).toHaveAttribute('aria-current', 'step');
+    // Done: the progress tiles make room for the checklist; the success line says what went where.
+    expect(screen.queryByRole('list', { name: 'Publish progress' })).toBeNull();
+    expect(screen.getByText(/It’s in the HubSpot account acmedemo\.com \(12345678\)/)).toBeInTheDocument();
+
+    // Ticked items are remembered for this project.
+    fireEvent.click(within(next).getByRole('checkbox', { name: 'Install the app in your account' }));
+    expect(within(next).getByText('1 of 3 done')).toBeInTheDocument();
+    const stored = JSON.parse(window.localStorage.getItem(`uiex-builder:publish:${useEditor.getState().project.id}`)!);
+    expect(stored).toMatchObject({ portalId: PORTAL, projectUrl: PROJECT_URL, done: ['install'] });
 
     // Log is folded away with a warnings badge.
-    const logToggle = screen.getByRole('button', { name: /Deploy log/ });
+    const logToggle = screen.getByRole('button', { name: /Publish log/ });
     expect(logToggle).toHaveTextContent('warnings');
     fireEvent.click(logToggle);
-    expect(screen.getByRole('log', { name: 'Deploy log' })).toHaveTextContent('Warning: Card "deal_card" has no description.');
+    expect(screen.getByRole('log', { name: 'Publish log' })).toHaveTextContent('Warning: Card "deal_card" has no description.');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy again' }));
-    expect(screen.getByRole('button', { name: 'Deploy to HubSpot' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Publish again' }));
+    expect(screen.getByRole('button', { name: 'Publish to HubSpot' })).toBeInTheDocument();
+    // Coming back: the checklist of the last publish is one click away, with its ticks.
+    const earlier = screen.getByRole('button', { name: /Last published .* to acmedemo\.com · Finish in HubSpot: 1 of 3 done/ });
+    // Published before: the key steps are one click away instead of in the way.
+    expect(screen.queryByRole('region', { name: 'How to get a personal access key' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /How do I get my key\?/ }));
+    expect(screen.getByRole('region', { name: 'How to get a personal access key' })).toBeInTheDocument();
+    fireEvent.click(earlier);
+    expect(screen.getByRole('checkbox', { name: 'Install the app in your account' })).toBeChecked();
   });
 
   it('shows a failed build with its log, and retries', async () => {
@@ -221,24 +306,77 @@ describe('<DeployToHubSpotPanel> deploying', () => {
       statuses: [
         status('failed', 2, {
           error: 'build_failed',
-          message: "HubSpot couldn't build your project (build #7). The log below says why — fix it in the builder and deploy again.",
+          message: "HubSpot couldn't build your project (build #7). The log below says why.",
           log: ['Uploaded 15 files. HubSpot started build #7.', 'deal_card failed: Card deal_card failed to compile', "• src/app/cards/DealCard.tsx(3,1): error TS2304: Cannot find name 'x'."],
         }),
       ],
     });
     renderPanel(client);
     typeKey();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy to HubSpot' }));
-    expect(await screen.findByText('The deploy didn’t finish')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Publish to HubSpot' }));
+    expect(await screen.findByText('The publish didn’t finish')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent(/couldn't build your project/);
-    expect(screen.getByRole('log', { name: 'Deploy log' })).toHaveTextContent('error TS2304');
-    const steps = within(screen.getByRole('list', { name: 'Deploy progress' })).getAllByRole('listitem');
+    expect(screen.getByRole('log', { name: 'Publish log' })).toHaveTextContent('error TS2304');
+    const steps = within(screen.getByRole('list', { name: 'Publish progress' })).getAllByRole('listitem');
     expect(steps[0]).toHaveTextContent('done');
     expect(steps[1]).toHaveTextContent('failed');
     expect(screen.getByRole('link', { name: /Open project in HubSpot/ })).toHaveAttribute('href', PROJECT_URL);
+    // Trying the same build again won't help: Back is the main action, the failing card is named,
+    // and the builder file can be downloaded to send to whoever looks after the builder.
+    expect(screen.getByRole('alert')).toHaveTextContent('In the builder: “Deal Card”.');
+    expect(screen.getByRole('region', { name: 'What to do next' })).toHaveTextContent(/usually a problem in the generated code, not something you did/);
+    expect(screen.getByRole('button', { name: 'Back' })).toHaveClass('ub-btn--primary');
+    expect(screen.getByRole('button', { name: 'Download builder file' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(client.start).toHaveBeenCalledTimes(2));
     expect((client.start.mock.calls[1][0] as DeployRequest).personalAccessKey).toBe('CiRuYTEtZmFrZS1rZXktZm9yLXRlc3Rz');
+  });
+
+  it('ticks a step when its HubSpot link is opened, celebrates when all are done, and Done closes the dialog', async () => {
+    const client = mockClient({
+      statuses: [status('success', 2, { installUrl: `https://app.hubspot.com/static-token/${PORTAL}/authorize?appId=55` })],
+    });
+    const onClose = vi.fn();
+    renderPanel(client, { onClose });
+    typeKey();
+    fireEvent.click(screen.getByRole('button', { name: 'Publish to HubSpot' }));
+    const next = await screen.findByRole('region', { name: 'Finish in HubSpot' });
+    for (const name of [/Install the app/, /Open HubSpot settings/, /Open your deals/]) fireEvent.click(within(next).getByRole('link', { name }));
+    expect(within(next).getByText('3 of 3 done')).toBeInTheDocument();
+    expect(within(next).getByText(/All done — your card is live in HubSpot/)).toBeInTheDocument();
+    // Ticked steps fold their instructions away.
+    expect(within(next).queryByText('Go to Data Management → Objects → Deals.')).toBeNull();
+    // Unticking stays possible (it didn't work out after all).
+    fireEvent.click(within(next).getByRole('checkbox', { name: 'Install the app in your account' }));
+    expect(within(next).getByText('2 of 3 done')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('says in plain words what is happening while publishing', async () => {
+    const client = mockClient({ statuses: [status('building', 1), status('deploying', 2), status('success', 3)] });
+    renderPanel(client);
+    typeKey();
+    fireEvent.click(screen.getByRole('button', { name: 'Publish to HubSpot' }));
+    expect(await screen.findByText('HubSpot is checking and building your cards…')).toBeInTheDocument();
+    expect(screen.queryByText('HubSpot is building your project (build #7).')).toBeNull();
+    expect(await screen.findByText('Published! “Deal Card” is in HubSpot.')).toBeInTheDocument();
+  });
+
+  it('coming back after changing the card: says the cards changed since the last publish', async () => {
+    const client = mockClient({ statuses: [status('success', 2)] });
+    renderPanel(client);
+    typeKey();
+    fireEvent.click(screen.getByRole('button', { name: 'Publish to HubSpot' }));
+    await screen.findByRole('region', { name: 'Finish in HubSpot' });
+    fireEvent.click(screen.getByRole('button', { name: 'Publish again' }));
+    expect(screen.queryByText(/changed your cards since then/)).toBeNull();
+    const key = `uiex-builder:publish:${useEditor.getState().project.id}`;
+    const stored = JSON.parse(window.localStorage.getItem(key)!);
+    window.localStorage.setItem(key, JSON.stringify({ ...stored, at: new Date(Date.parse(useEditor.getState().project.updatedAt) - 60_000).toISOString() }));
+    cleanup();
+    renderPanel(client);
+    expect(screen.getByText(/You’ve changed your cards since then — publish again to update them in HubSpot\./)).toBeInTheDocument();
   });
 
   it('keeps polling through brief connection problems', async () => {
@@ -247,8 +385,8 @@ describe('<DeployToHubSpotPanel> deploying', () => {
     });
     renderPanel(client);
     typeKey();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy to HubSpot' }));
-    expect(await screen.findByText('Your project is live in HubSpot.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Publish to HubSpot' }));
+    expect(await screen.findByText('Published! “Deal Card” is in HubSpot.')).toBeInTheDocument();
     expect(client.status).toHaveBeenCalledTimes(3);
   });
 
@@ -260,7 +398,7 @@ describe('<DeployToHubSpotPanel> deploying', () => {
     });
     renderPanel(client);
     typeKey('CiRuYTEtd3Jvbmcta2V5LTAwMDAwMDAw');
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy to HubSpot' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Publish to HubSpot' }));
     const err = await screen.findByText(/didn't accept this personal access key/);
     expect(err.closest('[role="alert"]')).not.toBeNull();
     expect(screen.getByRole('link', { name: 'Open the key page in HubSpot' })).toHaveAttribute('href', `https://app.hubspot.com/personal-access-key/${PORTAL}`);
@@ -269,23 +407,78 @@ describe('<DeployToHubSpotPanel> deploying', () => {
     expect(screen.queryByText(/didn't accept this personal access key/)).toBeNull();
   });
 
-  it('warns when the key belongs to another account and can deploy there instead', async () => {
+  it('warns when the key belongs to another account and offers to switch the connected account', async () => {
+    const client = mockClient({
+      start: async () => {
+        throw new DeployClientError(409, 'portal_mismatch', "This personal access key belongs to HubSpot account 999, but you're connected to account 12345678.", 999);
+      },
+    });
+    renderPanel(client);
+    typeKey();
+    fireEvent.click(screen.getByRole('button', { name: 'Publish to HubSpot' }));
+    expect(await screen.findByText('This key is for a different HubSpot account')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Publish to HubSpot' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /Publish to account 999 instead/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Switch HubSpot account' }));
+    expect(useConnection.getState().switchPortal).toHaveBeenCalled();
+  });
+
+  it('before sign-in is set up, can deploy to the account the key belongs to', async () => {
+    connect('not-configured');
     const client = mockClient({
       start: vi
         .fn<DeployClient['start']>()
-        .mockRejectedValueOnce(new DeployClientError(409, 'portal_mismatch', 'This personal access key belongs to HubSpot account 999, but the deploy is going to account 12345678.', 999))
+        .mockRejectedValueOnce(new DeployClientError(409, 'portal_mismatch', 'This personal access key belongs to HubSpot account 999, but the deploy is going to account 5.', 999))
         .mockResolvedValueOnce(status('building', 1, { portalId: 999 })),
       statuses: [status('success', 2, { portalId: 999 })],
     });
     renderPanel(client);
     typeKey();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy to HubSpot' }));
-    expect(await screen.findByText('This key is for a different HubSpot account')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Deploy to HubSpot' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy to account 999 instead' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Publish to HubSpot' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish to account 999 instead' }));
     await waitFor(() => expect(client.start).toHaveBeenCalledTimes(2));
     expect((client.start.mock.calls[1][0] as DeployRequest).portalId).toBe(999);
-    expect(await screen.findByText(/deployed to HubSpot account 999/)).toBeInTheDocument();
+    expect(await screen.findByText(/It’s in HubSpot account 999\./)).toBeInTheDocument();
+  });
+
+  it('points out a private app token pasted instead of a personal access key', () => {
+    renderPanel(mockClient());
+    typeKey(['pat', 'na1', '11111111-2222-3333-4444-555555555555'].join('-'));
+    expect(screen.getByText(/looks like a private app access token/).closest('[role="status"]')).not.toBeNull();
+    typeKey('CiRuYTEtZmFrZS1rZXktZm9yLXRlc3Rz');
+    expect(screen.queryByText(/looks like a private app access token/)).toBeNull();
+  });
+
+  it('after deploying the HubSpot sign-in app, lists what the host does next (policy, client id, settings)', async () => {
+    const app = createExtension({ kind: 'settings', name: 'UI Extension Builder' });
+    const project = createProject('UI Extension Builder', [app]);
+    project.name = 'uiex-builder-connector';
+    useEditor.getState().loadProject(project);
+    const client = mockClient({ statuses: [status('success', 2, { projectName: 'uiex-builder-connector' })] });
+    renderPanel(client);
+    typeKey();
+    fireEvent.click(screen.getByRole('button', { name: 'Publish to HubSpot' }));
+    expect(await screen.findByText('Your HubSpot sign-in app is in HubSpot.')).toBeInTheDocument();
+    const next = screen.getByRole('region', { name: 'Finish in HubSpot' });
+    expect(within(next).getByText('Sign HubSpot’s Acceptable Use Policy')).toBeInTheDocument();
+    expect(within(next).getByText('Copy the Client ID and Client secret')).toBeInTheDocument();
+    expect(within(next).getByText('Add them to your host and redeploy')).toBeInTheDocument();
+    expect(within(next).queryByText('Install the app in your account')).toBeNull();
+    expect(screen.getByRole('link', { name: /Open project in HubSpot/ })).toHaveClass('ub-btn--primary');
+  });
+
+  it('asks to connect again when the server says the sign-in is gone', async () => {
+    const client = mockClient({
+      start: async () => {
+        throw new DeployClientError(401, 'not_connected', 'Connect HubSpot first: deploying needs you to be signed in to the HubSpot account you deploy to.');
+      },
+    });
+    renderPanel(client);
+    typeKey();
+    fireEvent.click(screen.getByRole('button', { name: 'Publish to HubSpot' }));
+    expect(await screen.findByText(/Connect HubSpot first/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+    expect(useConnection.getState().connect).toHaveBeenCalled();
   });
 
   it('dismisses the account warning to try another key', async () => {
@@ -296,85 +489,28 @@ describe('<DeployToHubSpotPanel> deploying', () => {
     });
     renderPanel(client);
     typeKey();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy to HubSpot' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Publish to HubSpot' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Use a different key' }));
     expect(screen.queryByText('This key is for a different HubSpot account')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Deploy to HubSpot' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Publish to HubSpot' })).toBeEnabled();
   });
 
-  it('uses and forgets the remembered key', async () => {
-    const client = mockClient({ remembered: true, statuses: [status('success', 2)] });
-    renderPanel(client);
-    expect(await screen.findByText('Using the personal access key saved on this browser.')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Paste your key')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy to HubSpot' }));
-    await waitFor(() => expect(client.start).toHaveBeenCalled());
-    const req = client.start.mock.calls[0][0] as DeployRequest;
-    expect(req.useRememberedKey).toBe(true);
-    expect(req.personalAccessKey).toBeUndefined();
-    await screen.findByText('Your project is live in HubSpot.');
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy again' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Forget saved key' }));
-    expect(await screen.findByLabelText('Paste your key')).toBeInTheDocument();
-    expect(client.forgetKey).toHaveBeenCalled();
+  it('links the key guide to the demo HubSpot when the server uses another HubSpot address', () => {
+    connect('connected', true, { appBase: 'http://localhost:4011' });
+    renderPanel(mockClient());
+    expect(screen.getByRole('link', { name: /Open HubSpot’s key page/ })).toHaveAttribute('href', `http://localhost:4011/personal-access-key/${PORTAL}`);
+    expect(screen.getByText(/Then click Publish to HubSpot/)).toBeInTheDocument();
   });
 
-  it('offers the saved key right after a deploy that remembered it', async () => {
-    let remembered = false;
-    const client = mockClient({
-      start: async (req) => {
-        if (req.remember) remembered = true;
-        return status('building', 1);
-      },
-      statuses: [status('success', 2)],
-    });
-    client.keyInfo.mockImplementation(async () => (remembered ? { remembered: true, portalId: PORTAL } : { remembered: false }));
-    renderPanel(client);
-    await waitFor(() => expect(client.keyInfo).toHaveBeenCalledTimes(1));
-    typeKey();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Remember on this browser' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy to HubSpot' }));
-    await screen.findByText('Your project is live in HubSpot.');
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy again' }));
-    expect(await screen.findByText('Using the personal access key saved on this browser.')).toBeInTheDocument();
-    expect(client.keyInfo).toHaveBeenCalledTimes(2);
-
-    // Forgetting it also empties the key field.
-    fireEvent.click(screen.getByRole('button', { name: 'Forget saved key' }));
-    expect(await screen.findByLabelText('Paste your key')).toHaveValue('');
-    expect(screen.getByRole('checkbox', { name: 'Remember on this browser' })).not.toBeChecked();
-  });
-
-  it('lets a disconnected admin deploy, but only a connected one remember the key', async () => {
-    connect('disconnected');
-    const client = mockClient();
-    renderPanel(client);
-    expect(screen.getByText(/goes to the HubSpot account your personal access key belongs to/)).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: 'Remember on this browser' })).toBeDisabled();
-    expect(screen.getByText('Connect HubSpot to remember the key.')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Connect HubSpot' }));
-    expect(useConnection.getState().connect).toHaveBeenCalled();
-    expect(client.keyInfo).not.toHaveBeenCalled();
-    // Not connected: the guide links to the account chooser.
-    fireEvent.click(screen.getByRole('button', { name: /How do I get this\?/ }));
-    expect(screen.getByRole('link', { name: /Open the personal access key page/ })).toHaveAttribute('href', 'https://app.hubspot.com/l/personal-access-key');
-    typeKey();
-    fireEvent.keyDown(screen.getByLabelText('Paste your key'), { key: 'Enter' });
-    await waitFor(() => expect(client.start).toHaveBeenCalled());
-    const req = client.start.mock.calls[0][0] as DeployRequest;
-    expect(req.portalId).toBeUndefined();
-    expect(req.remember).toBeUndefined();
-  });
-
-  it('gates on validation errors until "Deploy anyway"', () => {
+  it('gates on validation errors until "Publish anyway"', () => {
     mocks.issues = [{ severity: 'error', rule: 'project-name', message: 'Bad name' } as Issue];
     const onClose = vi.fn();
     renderPanel(mockClient(), { onClose });
     typeKey();
-    const deployBtn = screen.getByRole('button', { name: 'Deploy to HubSpot' });
+    const deployBtn = screen.getByRole('button', { name: 'Publish to HubSpot' });
     expect(screen.getByText(/1 problem will probably stop HubSpot/)).toBeInTheDocument();
     expect(deployBtn).toBeDisabled();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Deploy anyway' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Publish anyway' }));
     expect(deployBtn).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Show problems' }));
     expect(onClose).toHaveBeenCalled();
@@ -390,7 +526,7 @@ describe('<DeployToHubSpotPanel> deploying', () => {
     });
     renderPanel(client, { onShowCli });
     typeKey();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy to HubSpot' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Publish to HubSpot' }));
     expect(await screen.findByText("Couldn't reach the builder's server.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Use the HubSpot CLI instead' }));
     expect(onShowCli).toHaveBeenCalled();
@@ -407,7 +543,7 @@ describe('<DeployToHubSpotPanel> deploying', () => {
     });
     renderPanel(client, { onShowCli });
     typeKey();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy to HubSpot' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Publish to HubSpot' }));
     expect(await screen.findByText(/needs SESSION_SECRET/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Use the HubSpot CLI instead' }));
     expect(onShowCli).toHaveBeenCalled();
@@ -417,7 +553,7 @@ describe('<DeployToHubSpotPanel> deploying', () => {
     const client = mockClient({ statuses: [status('building', 2), status('building', 3), status('building', 4)] });
     const view = renderPanel(client);
     typeKey();
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy to HubSpot' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Publish to HubSpot' }));
     await waitFor(() => expect(client.status).toHaveBeenCalled());
     view.unmount();
     const calls = client.status.mock.calls.length;

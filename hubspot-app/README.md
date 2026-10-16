@@ -14,14 +14,16 @@ Open `src/app/app-hsmeta.json` and replace `YOUR-DOMAIN` with your builder's add
 
 ```json
 "redirectUrls": [
-  "https://builder.example.com/api/auth/callback",
-  "http://localhost:5173/api/auth/callback"
+  "https://builder.example.com/api/auth/callback"
 ],
 ```
 
-- The first line must match your builder exactly (`https://`, no trailing slash before `/api`).
-- The `localhost` line is only for developers running the builder on their own computer; you
-  can delete it.
+- It must match your builder exactly (`https://`, no trailing slash before `/api`).
+- Keep `http://localhost` addresses **out** of the app people use: anyone who can reach a
+  developer's computer could then finish a sign-in there. Developers who want to sign in to a real
+  account from `npm run dev` create a **separate** development app (same files, its own name and
+  `uid`, redirect URL `http://localhost:5173/api/auth/callback`, distribution `private`) and put
+  its Client ID / secret in `.env.local`.
 - Optionally replace the `support` details (shown on HubSpot's consent screen) with your own.
 
 ## Upload it (choose one)
@@ -47,9 +49,14 @@ Auth** - copy the **Client ID** and **Client secret** into your host's settings
 
 ## Who can sign in?
 
-`"distribution": "marketplace"` (the default here) means **any HubSpot account can connect** by
-signing in from your builder. The app is *not* listed on the HubSpot Marketplace - nobody finds it
-unless they use your builder.
+`"distribution": "marketplace"` (the default here) means HubSpot accounts other than yours can
+connect by signing in from your builder: up to **25 accounts** once you have signed HubSpot's
+Acceptable Use Policy for the app (**Distribution → Begin publishing**; more needs a Marketplace
+listing). The app is *not* listed on the HubSpot Marketplace - nobody finds it unless they use your
+builder.
+
+To allow only your own accounts, set `ALLOWED_PORTALS` on your host to their account numbers
+(comma separated): the builder then refuses sign-ins and deploys from any other account.
 
 Prefer to restrict it to your own accounts? Change it to `"distribution": "private"` before the
 first upload (decide up front - HubSpot may not let you switch an uploaded app). A private OAuth app can only be installed in the

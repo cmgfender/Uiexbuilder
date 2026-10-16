@@ -3,17 +3,22 @@
  *  checking / unavailable – muted; explains that connecting needs the hosted version
  *  not-configured          – muted; explains what whoever hosts the builder must set up
  *  disconnected            – outlined "Connect HubSpot" (consent explainer before the first time)
- *  connecting              – spinner (click brings the HubSpot window forward) + Cancel
+ *  connecting              – spinner (click brings the HubSpot window forward) + Cancel; after a few
+ *                            seconds a visible "Waiting for HubSpot…" panel (show window / start
+ *                            again / cancel)
  *  connected               – account chip "acme.com · 12345678" opening the account menu
  *  error                   – "Connect HubSpot" with a warning; click retries
+ * It also turns connection notices (connected / disconnected / sign-in expired) into toasts.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ExternalLink, Info, LoaderCircle, TriangleAlert, X } from 'lucide-react';
-import { IconButton, cx } from '../../ui';
-import { useConnection, type ConnectionStatus } from '../store';
+import { Button, cx, useToast } from '../../ui';
+import { CONNECT_TIMINGS, useConnection, type ConnectionNotice, type ConnectionStatus } from '../store';
 import { AccountMenu, accountInitial } from './AccountMenu';
 import { ConnectDialog, connectExplained, markConnectExplained, type ConnectDialogMode } from './ConnectDialog';
 import { HubSpotMark } from './HubSpotMark';
+import { useConnectUiHost } from './host';
 import { HOSTING_DOCS_URL, setupPageUrl } from './links';
 import { Popover } from './Popover';
 import './connect.css';
@@ -26,7 +31,56 @@ const TOOLTIP: Partial<Record<ConnectionStatus, string>> = {
   connecting: 'Waiting for you to finish in the HubSpot window — click to show it',
 };
 
+/** Toast text for a connection notice. */
+export function noticeText(notice: ConnectionNotice): string {
+  switch (notice.kind) {
+    case 'connected':
+      return `Connected to ${notice.account ?? 'HubSpot'}. Pick a sample record above the card to see real data.`;
+    case 'disconnected':
+      return 'Disconnected from HubSpot. Previews use mock data again; your sample records are kept for next time.';
+    case 'expired':
+      return 'Your HubSpot sign-in expired, so the preview is back to mock data.';
+  }
+}
+
+/** Shows connection notices as toasts (once each). */
+function useConnectionToasts(): void {
+  const toast = useToast();
+  const notice = useConnection((s) => s.notice);
+  const shown = useRef<number | null>(notice?.id ?? null);
+  useEffect(() => {
+    if (!notice || shown.current === notice.id) return;
+    shown.current = notice.id;
+    // The guided setup shows "Connected to …" in place.
+    if (notice.kind === 'connected' && useConnectUiHost.getState().inline) return;
+    if (notice.kind === 'expired') {
+      toast(noticeText(notice), { action: { label: 'Reconnect', onClick: () => void useConnection.getState().connect() } });
+    } else {
+      toast(noticeText(notice), { durationMs: 6000 });
+    }
+  }, [notice, toast]);
+}
+
+/** True once the sign-in has been waiting for `waitingHintMs`. */
+function useWaitingLong(connecting: boolean): boolean {
+  const since = useConnection((s) => s.connectingSince);
+  const [long, setLong] = useState(false);
+  useEffect(() => {
+    setLong(false);
+    if (!connecting || since === null) return;
+    const left = since + CONNECT_TIMINGS.waitingHintMs - Date.now();
+    if (left <= 0) {
+      setLong(true);
+      return;
+    }
+    const t = setTimeout(() => setLong(true), left);
+    return () => clearTimeout(t);
+  }, [connecting, since]);
+  return connecting && long;
+}
+
 export function ConnectButton() {
+  useConnectionToasts();
   const status = useConnection((s) => s.status);
   const info = useConnection((s) => s.info);
   const health = useConnection((s) => s.health);
@@ -36,11 +90,14 @@ export function ConnectButton() {
   const [dialog, setDialog] = useState<ConnectDialogMode | null>(null);
   const [panel, setPanel] = useState<'account' | 'info' | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
+  const waitingLong = useWaitingLong(status === 'connecting');
 
   // A sign-in (popup or full-page) or sign-out that did not work out: explain it and offer to try
   // again. Startup problems show on the button itself.
   useEffect(() => {
     if (!error || !errorCode || (errorSource !== 'sign-in' && errorSource !== 'sign-out')) return;
+    // The guided setup explains a failed sign-in in place.
+    if (errorSource === 'sign-in' && useConnectUiHost.getState().inline) return;
     if ((status === 'disconnected' || status === 'connected') && panel !== 'account') setDialog('result');
     // Only when a new problem is reported (status / panel are read at that moment).
   }, [error]);
@@ -165,10 +222,11 @@ export function ConnectButton() {
         {content}
       </button>
       {status === 'connecting' && (
-        <IconButton size="sm" label="Cancel connecting" onClick={() => useConnection.getState().cancelConnect()}>
-          <X size={13} />
-        </IconButton>
+        <Button size="sm" variant="ghost" icon={<X size={13} aria-hidden />} aria-label="Cancel connecting" onClick={() => useConnection.getState().cancelConnect()}>
+          <span className="ub-cn-cancel-label">Cancel</span>
+        </Button>
       )}
+      {waitingLong && <WaitingPanel anchor={btnRef.current} />}
       {panel === 'account' && status === 'connected' && info.connected && (
         <Popover anchor={btnRef.current} label="HubSpot account" align="end" width={320} onClose={() => setPanel(null)}>
           <AccountMenu info={info} onDone={() => setPanel(null)} />
@@ -204,12 +262,11 @@ function AvailabilityNote({ status }: { status: 'unavailable' | 'not-configured'
   return (
     <div className="ub-cn-note">
       <div className="ub-cn-note__title">
-        <Info size={15} aria-hidden /> Sign in with HubSpot isn't set up yet
+        <Info size={15} aria-hidden /> HubSpot sign-in isn't switched on yet
       </div>
       <p>
-        The builder's server is running, but whoever hosts it still needs to create a HubSpot app and add its settings to the server (
-        <code>HUBSPOT_CLIENT_ID</code>, <code>HUBSPOT_CLIENT_SECRET</code>, <code>SESSION_SECRET</code> and <code>APP_URL</code>). It takes about
-        30 minutes and no coding.
+        The person who set up this builder needs to finish one step. Send them this link: <strong>the setup checklist</strong>. You can keep
+        building with mock data in the meantime.
       </p>
       <p className="ub-cn-note__links">
         <a href={setupPageUrl()} target="_blank" rel="noopener noreferrer">
@@ -220,5 +277,48 @@ function AvailabilityNote({ status }: { status: 'unavailable' | 'not-configured'
         </a>
       </p>
     </div>
+  );
+}
+
+/**
+ * Shown under the button once the HubSpot window has been open for a while: where to finish, and
+ * a way out when the window was closed or got stuck. Doesn't take focus (the person may still be
+ * busy in the HubSpot window).
+ */
+function WaitingPanel({ anchor }: { anchor: HTMLElement | null }) {
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  useLayoutEffect(() => {
+    const place = () => {
+      if (!anchor) return;
+      const r = anchor.getBoundingClientRect();
+      const width = 300;
+      setPos({ top: r.bottom + 6, left: Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8)) });
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
+  }, [anchor]);
+  return createPortal(
+    <div className="ub-cn-waiting" role="region" aria-label="Waiting for HubSpot" style={{ top: pos?.top ?? -9999, left: pos?.left ?? -9999 }}>
+      <div className="ub-cn-waiting__title" role="status">
+        <LoaderCircle size={14} className="ub-cn-spin" aria-hidden /> Waiting for HubSpot…
+      </div>
+      <p>Finish in the HubSpot window: choose your account and click Connect app.</p>
+      <div className="ub-cn-waiting__actions">
+        <Button size="sm" onClick={() => useConnection.getState().focusPopup()}>
+          Show HubSpot window
+        </Button>
+      </div>
+      <p>Closed it, or stuck on a HubSpot message?</p>
+      <div className="ub-cn-waiting__actions">
+        <Button size="sm" variant="primary" onClick={() => void useConnection.getState().restartConnect()}>
+          Start again
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => useConnection.getState().cancelConnect()}>
+          Cancel
+        </Button>
+      </div>
+    </div>,
+    document.body,
   );
 }

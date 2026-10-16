@@ -41,7 +41,10 @@ function projectForBlock(block: BlockTemplate): { project: Project; ext: Extensi
   ext.state = (block.state ?? []).map((s) => ({ ...s, id: newId('s') }));
   for (let i = 0; i < 2; i++) {
     // Insert twice: blocks must be insertable more than once (unique overlay ids).
-    const sub = instantiateTemplate(freshBlockTemplate(block.template, ext));
+    // Data blocks are built for the card (their data sources get names that don't clash).
+    const built = block.create ? block.create(ext, { functions: [] }) : null;
+    if (built) ext.dataSources.push(...built.dataSources);
+    const sub = instantiateTemplate(freshBlockTemplate(built ? built.template : block.template, ext));
     Object.assign(ext.nodes, sub.nodes);
     ext.nodes[ext.rootId].children.push(sub.rootId);
   }

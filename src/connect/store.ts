@@ -17,6 +17,7 @@ import { create } from 'zustand';
 import type { ConnectionInfo, ConnectorHealth } from './types';
 import { getConnectorClient, isAbortError, isConnectorError, type ConnectorClient } from './client';
 import { describeAuthResult, describeError } from './describe';
+import { setHubSpotAccess } from '../model/trust';
 
 /**
  * 'checking'     – probing /api/health and /api/me on startup
@@ -30,6 +31,17 @@ import { describeAuthResult, describeError } from './describe';
 export type ConnectionErrorSource = 'sign-in' | 'sign-out' | 'startup';
 
 export type ConnectionStatus = 'checking' | 'unavailable' | 'not-configured' | 'disconnected' | 'connecting' | 'connected' | 'error';
+
+/**
+ * Something worth telling the person once (the shell shows it as a toast): connected, disconnected,
+ * or the sign-in expired / was removed while they were working. `id` changes for every notice.
+ */
+export interface ConnectionNotice {
+  id: number;
+  kind: 'connected' | 'disconnected' | 'expired';
+  /** Account name for 'connected'. */
+  account?: string;
+}
 
 export interface ConnectionState {
   status: ConnectionStatus;
@@ -58,6 +70,12 @@ export interface ConnectionState {
   /** Bring the open sign-in window to the front. */
   focusPopup: () => void;
   clearError: () => void;
+  /** Epoch ms when the current sign-in attempt started ('connecting'); null otherwise. */
+  connectingSince: number | null;
+  /** Last thing worth a toast (see ConnectionNotice). */
+  notice: ConnectionNotice | null;
+  /** Give up on the open sign-in window and open a new one (must run inside a click). */
+  restartConnect: () => Promise<void>;
 }
 
 /** Message posted by the connector's sign-in result page (server/core/authPage.ts). */
@@ -75,11 +93,16 @@ export const CONNECT_TIMINGS = {
   /**
    * A popup that "closes" this soon after opening was most likely cut off by HubSpot's security
    * headers (Cross-Origin-Opener-Policy) rather than closed by the user: keep waiting for the
-   * result (BroadcastChannel / polling /api/me) until the timeout or Cancel.
+   * result (BroadcastChannel / polling /api/me, and again whenever this window regains focus) —
+   * but only for `cutOffGiveUpMs`, then report "HubSpot was not connected".
    */
   earlyCloseMs: 4000,
   /** Polling interval of /api/me while waiting for a cut-off popup. */
   waitPollMs: 3000,
+  /** How long to keep waiting for a cut-off popup before giving up (popup_closed). */
+  cutOffGiveUpMs: 60_000,
+  /** After this long in 'connecting' the button shows a visible "Waiting for HubSpot…" panel. */
+  waitingHintMs: 8000,
   /** Give up waiting for the sign-in after this long. */
   timeoutMs: 5 * 60_000,
   /** Minimum time between /api/me re-checks triggered by window focus. */
@@ -138,7 +161,7 @@ function isValidHealth(h: unknown): h is ConnectorHealth {
 function normalizeHealth(h: ConnectorHealth): ConnectorHealth {
   const features = h.features && typeof h.features === 'object' ? h.features : { crm: h.oauthConfigured, fetchProxy: false, deploy: false };
   const scopes = h.scopes && typeof h.scopes === 'object' ? h.scopes : { required: [], optional: [] };
-  return {
+  const out: ConnectorHealth = {
     ok: true,
     version: typeof h.version === 'string' ? h.version : '',
     oauthConfigured: h.oauthConfigured,
@@ -148,6 +171,26 @@ function normalizeHealth(h: ConnectorHealth): ConnectorHealth {
       optional: Array.isArray(scopes.optional) ? scopes.optional.filter((s) => typeof s === 'string') : [],
     },
   };
+  if (features.deployUnavailableReason === 'disabled' || features.deployUnavailableReason === 'session_secret') {
+    out.features.deployUnavailableReason = features.deployUnavailableReason;
+  }
+  if (features.deployNeedsSignIn === true) out.features.deployNeedsSignIn = true;
+  if (Array.isArray(h.missingSettings)) out.missingSettings = h.missingSettings.filter((s): s is string => typeof s === 'string' && /^[A-Z_]{2,40}$/.test(s));
+  if (typeof h.appBase === 'string' && /^https?:\/\/[a-z0-9.-]+(:\d+)?(\/[\w./-]*)?$/i.test(h.appBase)) out.appBase = h.appBase.replace(/\/+$/, '');
+  return out;
+}
+
+let noticeSeq = 0;
+function notify(kind: ConnectionNotice['kind'], account?: string): void {
+  useConnection.setState({ notice: { id: ++noticeSeq, kind, ...(account ? { account } : {}) } });
+}
+
+/** The HubSpot app base for links: health.appBase (EU / demo) or https://<appHost>. */
+export function hubspotAppOrigin(appHost: string | undefined): string {
+  const base = useConnection.getState().health?.appBase;
+  if (base) return base;
+  const host = appHost && /^[a-z0-9.-]+$/i.test(appHost) ? appHost : 'app.hubspot.com';
+  return `https://${host}`;
 }
 
 /** Reads and removes `?uiex_auth=<result>` (full-page sign-in result) from the address bar. */
@@ -201,6 +244,7 @@ interface Flow {
 }
 
 let flow: Flow | null = null;
+let attemptSeq = 0;
 let initPromise: Promise<void> | null = null;
 let focusWatcher: (() => void) | null = null;
 let lastMeCheck = 0;
@@ -217,6 +261,7 @@ function client(): ConnectorClient {
       if (s.status === 'connected') {
         c.setCacheScope(null);
         useConnection.setState({ status: 'disconnected', info: { connected: false, reason: 'expired' } });
+        notify('expired');
       }
     });
   }
@@ -244,16 +289,20 @@ function applyInfo(info: ConnectionInfo): void {
     useConnection.setState({ status: 'connected', info: same ? prev : info });
   } else {
     c.setCacheScope(null);
+    const was = useConnection.getState();
     useConnection.setState({ status: 'disconnected', info });
+    if (was.status === 'connected' && (info.reason === 'expired' || info.reason === 'revoked')) notify('expired');
   }
 }
 
 function settle(outcome: Outcome, previous: { status: ConnectionStatus; info: ConnectionInfo }): void {
   if (outcome.kind === 'connected' && outcome.info.connected) {
     applyInfo(outcome.info);
-    useConnection.setState({ error: null, errorCode: null, errorSource: null, connectedAt: connectEnv.now() });
+    useConnection.setState({ error: null, errorCode: null, errorSource: null, connectedAt: connectEnv.now(), connectingSince: null });
+    notify('connected', outcome.info.hubDomain || `account ${outcome.info.portalId}`);
     return;
   }
+  useConnection.setState({ connectingSince: null });
   if (outcome.kind === 'cancelled') {
     useConnection.setState({ status: previous.status === 'connecting' ? 'disconnected' : previous.status, info: previous.info });
     return;
@@ -282,6 +331,7 @@ function watchPopup(popup: Window, openedAt: number): { promise: Promise<Outcome
 
     const cleanup = () => {
       window.removeEventListener('message', onMessage);
+      window.removeEventListener('focus', onFocus);
       clearInterval(timer);
       if (channel) {
         try {
@@ -319,6 +369,12 @@ function watchPopup(popup: Window, openedAt: number): { promise: Promise<Outcome
       void onResult(event.data);
     };
     window.addEventListener('message', onMessage);
+    // Back in the builder after finishing (or giving up) in a cut-off HubSpot window: check right away.
+    const onFocus = () => {
+      if (done || checking || closedAt === null) return;
+      lastPoll = 0;
+    };
+    window.addEventListener('focus', onFocus);
     // Fallback when HubSpot's pages cut the popup's link to this window (same-origin connector only).
     if (c.sameOrigin && typeof BroadcastChannel === 'function') {
       try {
@@ -354,14 +410,15 @@ function watchPopup(popup: Window, openedAt: number): { promise: Promise<Outcome
       const cutOff = closedAt - openedAt < CONNECT_TIMINGS.earlyCloseMs;
       if (!cutOff && now - closedAt < CONNECT_TIMINGS.closedGraceMs) return;
       if (cutOff && lastPoll !== 0 && now - lastPoll < CONNECT_TIMINGS.waitPollMs) return;
+      const givingUp = cutOff && now - closedAt >= CONNECT_TIMINGS.cutOffGiveUpMs;
       lastPoll = now;
       checking = true;
       void fetchMe().then((info) => {
         checking = false;
         if (done) return;
         if (info?.connected) finish({ kind: 'connected', info });
-        else if (!cutOff) finish({ kind: 'failed', code: 'popup_closed' });
-        // A cut-off popup: keep waiting (BroadcastChannel / next poll / timeout / Cancel).
+        else if (!cutOff || givingUp) finish({ kind: 'failed', code: 'popup_closed' });
+        // A cut-off popup: keep waiting a little (BroadcastChannel / next poll / focus / Cancel).
       });
     }, CONNECT_TIMINGS.popupPollMs);
   });
@@ -387,7 +444,8 @@ function startSignIn(beforeAuth?: () => Promise<void>): Promise<void> {
   const url = c.authStartUrl({ returnTo: window.location.origin, mode: 'popup' });
   let popup: Window | null = null;
   try {
-    popup = connectEnv.open(beforeAuth ? 'about:blank' : url, POPUP_NAME, popupFeatures());
+    // A fresh window name per attempt: "Start again" must never reuse (and then close) the old window.
+    popup = connectEnv.open(beforeAuth ? 'about:blank' : url, `${POPUP_NAME}-${++attemptSeq}`, popupFeatures());
   } catch {
     popup = null;
   }
@@ -397,7 +455,7 @@ function startSignIn(beforeAuth?: () => Promise<void>): Promise<void> {
   } catch {
     /* treat as open */
   }
-  useConnection.setState({ status: 'connecting', error: null, errorCode: null, errorSource: null });
+  useConnection.setState({ status: 'connecting', error: null, errorCode: null, errorSource: null, connectingSince: connectEnv.now() });
 
   if (blocked || !popup) {
     // Popup blocked: continue in this tab and come back here afterwards (autosave flushes on unload).
@@ -410,6 +468,7 @@ function startSignIn(beforeAuth?: () => Promise<void>): Promise<void> {
   const win = popup;
   const openedAt = connectEnv.now();
   const watcher = watchPopup(win, openedAt);
+  let self: Flow | null = null;
   const promise = (async () => {
     let prepError: unknown = null;
     if (beforeAuth) {
@@ -422,7 +481,9 @@ function startSignIn(beforeAuth?: () => Promise<void>): Promise<void> {
       }
     }
     const outcome = await watcher.promise;
-    flow = null;
+    // "Start again" replaced this attempt with a new window: the new attempt reports the result.
+    const superseded = flow !== self;
+    if (!superseded) flow = null;
     if (outcome.kind !== 'connected') {
       try {
         if (!win.closed) win.close();
@@ -430,6 +491,7 @@ function startSignIn(beforeAuth?: () => Promise<void>): Promise<void> {
         /* ignore */
       }
     }
+    if (superseded && outcome.kind === 'cancelled') return;
     if (prepError) {
       // Signing out of the current account failed: nothing changed.
       settle({ kind: 'cancelled' }, previous);
@@ -442,7 +504,8 @@ function startSignIn(beforeAuth?: () => Promise<void>): Promise<void> {
     }
     settle(outcome, beforeAuth ? { status: 'disconnected', info: useConnection.getState().info } : previous);
   })();
-  flow = { popup: win, promise, cancel: watcher.cancel };
+  self = { popup: win, promise, cancel: watcher.cancel };
+  flow = self;
   return promise;
 }
 
@@ -513,7 +576,10 @@ async function runInit(): Promise<void> {
   applyInfo(info);
   if (redirectResult) {
     if (redirectResult === 'connected') {
-      if (info.connected) useConnection.setState({ connectedAt: connectEnv.now() });
+      if (info.connected) {
+        useConnection.setState({ connectedAt: connectEnv.now() });
+        notify('connected', info.hubDomain || `account ${info.portalId}`);
+      }
       else settle({ kind: 'failed', code: 'session_not_kept' }, { status: 'disconnected', info });
     } else {
       settle({ kind: 'failed', code: redirectResult }, { status: 'disconnected', info });
@@ -529,6 +595,8 @@ export const useConnection = create<ConnectionState>()((_set, get) => ({
   errorCode: null,
   errorSource: null,
   connectedAt: null,
+  connectingSince: null,
+  notice: null,
 
   init: () => {
     const s = get();
@@ -576,7 +644,9 @@ export const useConnection = create<ConnectionState>()((_set, get) => ({
       }
     }
     c.setCacheScope(null);
+    const wasConnected = get().status === 'connected';
     useConnection.setState({ status: 'disconnected', info: SIGNED_OUT, error: null, errorCode: null, errorSource: null });
+    if (wasConnected) notify('disconnected');
   },
 
   refresh: async () => {
@@ -598,6 +668,23 @@ export const useConnection = create<ConnectionState>()((_set, get) => ({
     flow.cancel();
   },
 
+  restartConnect: () => {
+    const current = flow;
+    flow = null;
+    // Open the new window first (synchronously, inside the click, so it isn't blocked)…
+    const next = startSignIn();
+    // …then drop the old attempt; it sees it was superseded and reports nothing.
+    if (current) {
+      try {
+        current.popup.close();
+      } catch {
+        /* ignore */
+      }
+      current.cancel();
+    }
+    return next;
+  },
+
   focusPopup: () => {
     try {
       flow?.popup.focus();
@@ -609,6 +696,9 @@ export const useConnection = create<ConnectionState>()((_set, get) => ({
   clearError: () => useConnection.setState({ error: null, errorCode: null, errorSource: null }),
 }));
 
+// Code of imported projects asks for trust again once HubSpot is connected (model/trust.ts).
+useConnection.subscribe((s) => setHubSpotAccess(s.status === 'connected' && s.info.connected));
+
 /** Test helper: forget the startup check, the sign-in flow and the focus watcher. */
 export function resetConnectionForTests(): void {
   flow?.cancel();
@@ -617,7 +707,7 @@ export function resetConnectionForTests(): void {
   focusWatcher?.();
   focusWatcher = null;
   lastMeCheck = 0;
-  useConnection.setState({ status: 'checking', health: null, info: SIGNED_OUT, error: null, errorCode: null, errorSource: null, connectedAt: null });
+  useConnection.setState({ status: 'checking', health: null, info: SIGNED_OUT, error: null, errorCode: null, errorSource: null, connectedAt: null, connectingSince: null, notice: null });
 }
 
 /** The connected account, or null. */

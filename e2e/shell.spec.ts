@@ -46,7 +46,7 @@ test.describe('shell: keyboard and focus', () => {
       return { scroll: vp.scrollWidth, client: vp.clientWidth };
     });
     expect(widths.scroll).toBe(widths.client);
-    await expect(topBar(page).getByRole('button', { name: 'Export', exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(topBar(page).getByRole('button', { name: 'Publish', exact: true })).toBeInViewport({ ratio: 1 });
     await expect(page.getByRole('button', { name: 'Show left sidebar' })).toBeVisible();
     await page.getByRole('button', { name: 'Show left sidebar' }).click();
     await expect(page.getByLabel('Search components')).toBeVisible();

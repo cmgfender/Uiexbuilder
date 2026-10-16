@@ -39,6 +39,19 @@ and examples in `/home/user/hubspot/ui-extensions-examples`.
   the card) says what is paused and offers “Trust and run code” (`trustProject`). Every place that
   runs document code checks `codeExecutionAllowed()` (runtime scope / expr, power Helpers status,
   inspector live previews). Projects created in this browser are trusted.
+* **Code trust and HubSpot**: document code runs in the builder's own page, on the same origin as
+  the connector, so trusted code could call `/api` as the signed-in admin. `trust.ts` therefore
+  remembers which projects were *imported* (`uiex-builder:imported-projects`) and which of those
+  the admin trusted *while connected* (`uiex-builder:hubspot-trusted-projects`).
+  `codeTrustState()` is `untrusted`, `needs-hubspot-confirmation` (imported, trusted before, but
+  now connected) or `trusted`; `codeExecutionAllowed()` is true only for `trusted`. The connection
+  store feeds `setHubSpotAccess()`. While connected, `CodeTrustNotice` says plainly that the code
+  can read the connected account's CRM data and offers **Trust it with my HubSpot data**. Copies
+  and re-imports carry the state (`snapshotCodeTrust` / `restoreCodeTrust` / `copyCodeTrust`).
+  Deploying additionally needs the personal access key pasted each time and a sign-in to the
+  same account (see Deploy below), so page code alone can't deploy. Residual risk: code the admin
+  explicitly trusts while connected can still read CRM data; a sandboxed (opaque-origin) preview
+  would be the next step.
 * `src/model/jsTokens.ts` is the shared lossless JavaScript tokenizer (loop guards, safe
   expressions, codegen rewrites, validation's `context.crm` / async-data checks).
 
@@ -233,6 +246,14 @@ of the full file); the root id yields the `<>…</>` fragment, unknown ids `''`.
   the functions with unique uid / file name and passes their ids to `build`. `BlockTemplate` may
   list `keywords`. `freshBlockTemplate(template, ext)` renames Modal/Panel ids (and `@id`
   closeOverlay refs) that the extension already uses — call it before inserting / dragging a block.
+* **Data blocks** (`BlockTemplate.create(ext, project) → BuiltBlock { template, dataSources }`,
+  additive): a block that brings the data it reads, built for the card it goes into (data source
+  names that don't clash, the card's record type). `template` stays the gallery thumbnail.
+  `prepareBlock(block)` builds it for the active card; `insertBlock(…, at?, dataSources?)` adds the
+  sources in the same undo step; the template drag payload carries `dataSources?`. The first one is
+  **Associated records** (`associated-records`): an associations source (deals, or contacts on a
+  deal card) shown by `panels/generators.resultsTableBlock` under a heading — loading spinner,
+  error + Try again, table, “none yet” empty state.
 * `validateProject(project)` issues carry a stable `rule` id (see the list at the top of
   validate.ts); `field` follows the Issue doc (`state:<id>`, `dataSource:<id>`, `computed:<id>`,
   `helpers`, `function:<id>`, `app.*`, `project.name`, extension fields, prop names, `text`,
@@ -306,9 +327,20 @@ of the full file); the root id yields the `<>…</>` fragment, unknown ids `''`.
   (`data-source-computed`, error) because data hooks and loaders are emitted before the computed
   constants. HubSpot uids follow `uidProblem` (`src/model/ids.ts`): letters, digits, `_`, `-`, `.`,
   at most 64 characters — shared by validation and the inspector.
-* **Blocks**: `insertBlock(template, state, label, at?)` (src/templates/actions) inserts at an
-  explicit drop target or the smart target; the canvas and the layers tree use it so a block and
-  the state it needs are one undo step.
+* **Blocks**: `insertBlock(template, state, label, at?, dataSources?)` (src/templates/actions)
+  inserts at an explicit drop target or the smart target; the canvas and the layers tree use it so
+  a block and the state / data it needs are one undo step.
+* **Smart insert target** (`dnd/dragState.smartInsertTarget`, palette clicks, blocks, command
+  palette): into the selected container, else after the selection, else at the end of the card's
+  **main column** (`mainColumn(ext)`: the root's only child when it is a Flex column), else the
+  root. Full-width components (`isFullWidthComponent`: CRM data, charts, tables, data display,
+  forms, tabs, accordions, alerts, empty / error states, dividers, tiles) never land inside a
+  side-by-side row (`isSideBySide`: Flex row — HubSpot's default — Inline, AutoGrid) next to the
+  selection, e.g. beside a name and a status tag; they go after the row. Deliberate columns
+  layouts (every child a Flex / Box / Tile) keep content in the selected column.
+* **Design-mode flags**: a node hidden by its condition shows a striped “Hidden right now” flag.
+* **Copy to clipboard in preview**: HubSpot copies silently, so the preview adds a “Copied to
+  clipboard (preview)” alert — unless the same handler shows an alert of its own afterwards.
 * **Drag sources** must not re-render their own list on `dragstart` (moving or detaching the
   dragged element cancels a native drag). The palette records "recently used" on a successful
   `dragend` (`dropEffect !== 'none'`).
@@ -367,7 +399,9 @@ of the full file); the root id yields the `<>…</>` fragment, unknown ids `''`.
 * TypeScript strict, no `any` leaks into public APIs (internal `any` in previews is fine).
 * Tests: Vitest (`*.test.ts(x)` next to the code; server tests start with
   `// @vitest-environment node`), Playwright e2e in `/e2e` (static build, no connector) and
-  `/e2e-connect` (production server + fake HubSpot, `npm run e2e:connect`). Vitest globals are
+  `/e2e-connect` (production server + fake HubSpot, `npm run e2e:connect`). The e2e helper
+  `openEditor` skips the first-run welcome (“I know what I’m doing”); `first-run.spec.ts` in both
+  suites covers the welcome, setup and tour. Vitest globals are
   off; `src/test/setup.ts` registers Testing Library's `cleanup` after each test. Generated code is
   type-checked with the helpers in `src/test/typecheck.ts`.
 * Builder chrome uses `src/ui` primitives and `ub-` CSS classes (`src/styles/app.css`).
@@ -398,9 +432,18 @@ popup /api/auth/start ──────────────▶  302 → Hub
 * `server/core/index.ts`:
   * `configFromEnv(env, overrides?)`, which reads APP_URL, HUBSPOT_CLIENT_ID / _SECRET,
     SESSION_SECRET, HUBSPOT_SCOPES / _OPTIONAL_SCOPES, HUBSPOT_API_BASE / _APP_BASE,
-    ENABLE_FETCH_PROXY, ENABLE_DEPLOY, ALLOWED_ORIGINS and NODE_ENV;
-  * `createConnector(config, options?).handle(request)`, which returns `null` for non-`/api`
-    paths so an adapter can serve static files instead.
+    ENABLE_FETCH_PROXY, ENABLE_DEPLOY, ALLOWED_ORIGINS, ALLOWED_PORTALS and NODE_ENV;
+  * `createConnector(config, options?).handle(request, meta?)`, which returns `null` for
+    non-`/api` paths so an adapter can serve static files instead. `meta.clientIp` (optional) is
+    the caller's address as the adapter sees it (rate limits, loopback checks).
+* Additive contract changes (security / UX review): `CONNECTOR_ROUTES.deployPoll`
+  (`POST /api/deploy/status`); `ConnectorHealth.appBase`, `features.deployUnavailableReason`,
+  `features.deployNeedsSignIn`, `missingSettings`; `formatted: boolean | string[]` on CRM search
+  and record requests; `DeployRequest.useRememberedKey` / `remember` are deprecated (ignored);
+  `ServerConfig.allowedPortals` and `ServerConfig.proxyFetch` (`ProxyFetch`, `ProxyFetchInit`);
+  `RequestContext.signedIn(opts?: { confirm?: boolean })`; optional
+  `LiveDataAdapter.getPropertyDefinitions` / `getPipelines`; `DataSource.formatted` may list
+  property names (`FormattedSetting`).
 * `LiveDataAdapter` (end of `src/runtime/types.ts`) and `RuntimeProviderProps.live` connect the
   connector to the preview runtime.
 
@@ -416,12 +459,18 @@ popup /api/auth/start ──────────────▶  302 → Hub
     `public/hubspot-connector-app.uiex.json` must list the same scopes (tests check this; run
     `node scripts/make-connector-app.mjs` after a change).
 * **Sessions** (`crypto.ts`, `cookies.ts`, `session.ts`):
-  * The session is the cookie `uiex_session`: AES-256-GCM, with a key derived by HKDF from
-    `SESSION_SECRET`, the cookie name bound as additional data and a server-checked expiry.
-    It is HttpOnly, SameSite=Lax, Secure on https, Max-Age 30 days and at most 4 KB. There is
-    no database.
-  * The single-use OAuth `state` lives in `uiex_oauth` (Path=/api/auth, 10 minutes).
-  * A tampered, expired or old-secret cookie reads as signed out.
+  * The session is the cookie `__Host-uiex_session` (`uiex_session` on plain-http local
+    development): AES-256-GCM, with a key derived by HKDF from `SESSION_SECRET`, the cookie name
+    bound as additional data and a server-checked expiry. It is HttpOnly, SameSite=Lax, Secure on
+    https, Path=/, no Domain, Max-Age 30 days and at most 4 KB. There is no database.
+  * The single-use OAuth `state` lives in `__Host-uiex_oauth` (Path=/, 10 minutes).
+  * A tampered, expired or old-secret cookie reads as signed out, and so does a cookie name sent
+    twice (cookie tossing from a sibling subdomain). Old unprefixed cookies are deleted.
+  * The session holds no personal access key. A copied session cookie stops working for
+    anything that needs a live grant: `/api/me`, catalog calls and deploy re-check the grant with
+    HubSpot at least every 5 minutes (`GRANT_CHECK_INTERVAL_MS`), and deploy always forces a
+    refresh, so after **Disconnect** (refresh token revoked) a replayed cookie is refused.
+    Rotating `SESSION_SECRET` signs everyone out.
 * **Security** (`security.ts`):
   * `X-UIEX-Request` is required on every route except `auth/start`, `auth/callback` and the
     health check.
@@ -429,6 +478,11 @@ popup /api/auth/start ──────────────▶  302 → Hub
   * `returnTo` is validated, so there are no open redirects.
   * Every `/api` response has `Cache-Control: no-store`, nosniff, `X-Frame-Options: DENY` and
     no-referrer.
+  * `ALLOWED_PORTALS` (optional): only these HubSpot accounts can sign in (the callback gives
+    other grants back and keeps no session) and deploy.
+  * Rate limits (`rateLimit.ts`, in-memory token buckets per instance): sign-in start / callback
+    per client IP, deploy and the fetch proxy per signed-in user (else per client IP). Auth pages
+    answer with a plain HTML page, API calls with `rate_limited` and Retry-After.
 * **OAuth** (`oauth.ts`, `routes/auth.ts`, `authPage.ts`):
   * start → HubSpot authorize (`scope` + `optional_scope`) → callback (state check, code
     exchange, token info) → a self-contained HTML page.
@@ -445,22 +499,64 @@ popup /api/auth/start ──────────────▶  302 → Hub
     correlation id; plus `timeout` and `hubspot_unreachable`.
 * **Routes** (all read-only):
   * `routes/crm.ts`: object types (standard plus custom objects), properties, pipelines, owners,
-    record-picker search, a record (`formatted=1` gives en-US / UTC display values), associations
-    (v4 plus batch read) and a validated CRM search passthrough.
-  * `routes/proxy.ts`: preview `hubspot.fetch` through `ssrf.ts`. It allows https only, blocks
-    private, loopback and metadata hosts, follows at most 3 redirects (each re-checked), times
-    out after 10 s and caps responses at 1 MB.
+    record-picker search, a record (`formatted=1` gives en-US / UTC display values for every
+    property, `formatted=a,b` only for the listed ones), associations (v4 plus batch read) and a
+    validated CRM search passthrough.
+  * `routes/proxy.ts`: preview `hubspot.fetch` through `ssrf.ts`. It allows https only on
+    ordinary ports, blocks private, loopback, metadata and special-purpose hosts (IPv4 lists; IPv6
+    only global unicast `2000::/3` outside NAT64 / Teredo / 6to4 / documentation ranges, IPv4-mapped
+    addresses checked as IPv4), follows at most 3 redirects (each re-checked), times out after
+    10 s and caps responses at 1 MB. On Node (`server/node.ts`) the request goes through
+    `server/guardedFetch.ts` (`ServerConfig.proxyFetch`): every DNS answer is checked and the
+    connection is pinned to the checked address, so names that resolve to private addresses and
+    DNS rebinding are refused too. Edge hosts (Vercel, Cloudflare) have no DNS hook and rely on
+    their platform's network isolation. Local development (`APP_URL` on localhost) may fetch
+    http://localhost backends only for a browser on the same computer (`meta.clientIp` is
+    loopback).
   * `routes/deploy.ts`: see below.
 * **Deploy to HubSpot (beta)** (`server/core/deploy/**`, `src/panels/deploy/**`):
   * The personal access key is exchanged for a short-lived token; the project is found or
     created, zipped (`zip.ts`, HubSpot's ignore rules) and uploaded with the project IR
     (`ir.ts`, platform 2025.2 and later).
-  * Build and deploy are followed one step per `GET /api/deploy/:deployId`. The deployId is an
-    encrypted job token that never holds the key.
-  * The key is stored (in the session cookie) only when the admin ticks **Remember on this
-    browser**.
-  * Deploy works without OAuth sign-in; `features.deploy` needs only a usable `SESSION_SECRET`.
+  * The key is pasted for every deploy and never stored. A private app token (`pat-…`) is
+    recognised and explained.
+  * When sign-in is set up, deploying needs a signed-in session (grant re-checked with HubSpot)
+    and the key must belong to that same account (`portal_mismatch` otherwise) and to
+    `ALLOWED_PORTALS` when set. While sign-in isn't set up yet (first-time setup: deploying the
+    connector app itself), deploy works with the key alone, with a stricter per-IP rate limit.
+  * Build and deploy are followed one step per `POST /api/deploy/status` `{ deployId }` (the
+    legacy `GET /api/deploy/:deployId` still answers; Node access logs redact the id). The
+    deployId is an encrypted job token that never holds the key, and it only works in the browser
+    that started the deploy: the job holds a hash of a random HttpOnly cookie
+    (`__Host-uiex_deploy`, 2 hours). The queue step is safe to replay: it checks the project's
+    deployed build first (already deployed → finish; a newer build deployed → `superseded`).
+  * `features.deploy` needs a usable `SESSION_SECRET` (`deployUnavailableReason` says why it is
+    off: `session_secret` or `disabled`).
   * Without a connector, the panel falls back to the CLI steps.
+  * The UI says **Publish to HubSpot** (code keeps `deploy` / `export` names): the top bar's
+    **Publish** button opens the dialog (`ExportDialog`, title “Publish to HubSpot”, tabs Publish
+    to HubSpot · Download · Files · Use the HubSpot CLI). `DeployPanel` is a 3-step wizard:
+    1 **Get your key** (a direct link to the page the HubSpot CLI opens — verified in
+    @hubspot/cli 8.16 `personalAccessKeyPrompt`: `<app>/personal-access-key/<portalId>`, else
+    `<app>/l/personal-access-key` — plus the clicks and the paste field), 2 **Publish** (progress
+    bar and stepper Uploading → Building → Going live → Published), 3 **Finish in HubSpot**
+    (`publishChecklist`: install the app, add each card to its record page with the exact
+    clicks — Settings → Data Management → Objects → <type> → Record / Preview Customization —
+    linking `<app>/settings/<portal>`, open the sample record or the object's records). Ticks and
+    the last publish are remembered per project (`deploy/checklist.ts`, localStorage
+    `uiex-builder:publish:<projectId>`, links and ids only). Failures add **What to do next**
+    (`failureAdvice(code)`).
+  * Usability pass: the form's **Publish to HubSpot** button and the target account sit in a
+    sticky footer (`.ub-dp-actions`), always in view; the key guide is one line per click and
+    starts folded (“How do I get my key?”) for someone who published this project before;
+    “Last published … · Finish in HubSpot: n of m done” plus “You’ve changed your cards since
+    then” when `project.updatedAt` is newer. Progress says what is happening in plain words
+    (`phaseMessage(phase)`; build numbers stay in the log). Success says which card went where
+    (“Published! “Contact Summary” is in HubSpot. It’s in the HubSpot account …”), drops the
+    stage tiles, and ends with **Done** (closes the dialog). Checklist items may carry numbered
+    `steps` (`placementSteps(card, plural)`, additive); opening an item's HubSpot link ticks it
+    (it can be unticked); a ticked item folds its instructions; all ticked → “All done”. A new
+    publish keeps the one-time ticks but clears “Open a … to see your card”.
 
 ### Hosting adapters (all thin, same core)
 * `server/node.ts` is the production Node server (`npm start`, `dist-server/node.mjs`, built by
@@ -468,7 +564,9 @@ popup /api/auth/start ──────────────▶  302 → Hub
   * It serves `dist/` with caching, ETags, brotli/gzip, the SPA fallback and security headers.
     COOP is left unset so the popup keeps `window.opener`.
   * `/api` goes to the connector.
-  * It prints a start-up log with no secrets.
+  * It prints a start-up log with no secrets. The access log redacts deploy job ids.
+  * The client address passed to the core is the socket address, or with `TRUST_PROXY` the
+    rightmost `X-Forwarded-For` entry; it injects `proxyFetch: createGuardedFetch()`.
 * The other adapters:
   * `api/[...path].ts`: Vercel Edge, with `vercel.json` rewrites.
   * `server/cloudflare.ts`: Workers, with `wrangler.toml`.
@@ -486,7 +584,17 @@ popup /api/auth/start ──────────────▶  302 → Hub
   * an OAuth consent page (Approve / Deny), the token, token-info and revoke endpoints;
   * every CRM endpoint the connector uses, with scope checks and HubSpot-format errors;
   * developer-project endpoints for deploy (`projects.ts`). Keys containing `fail-build`,
-    `fail-deploy` and similar markers trigger failures; `FAKE_PERSONAL_ACCESS_KEY` always works.
+    `fail-deploy` and similar markers trigger failures; `FAKE_PERSONAL_ACCESS_KEY` (a realistic
+    `CiRuYTEt…` value) always works, and so does the older `LEGACY_FAKE_PERSONAL_ACCESS_KEY`.
+  * a demo personal access key page (`/l/personal-access-key`, `/personal-access-key/<portal>`)
+    with a Copy button. The connector reports the fake app host as `appBase` in `/api/health`,
+    so the builder's links open the fake.
+  * the signed-in user is Sam Rivera (not the mock user's name), so live previews visibly change.
+  * stand-in pages for the web-app links the “Finish in HubSpot” checklist opens (install the
+    app `/static-token/<portal>/authorize`, `/settings/<portal>`, a record
+    `/contacts/<portal>/record/<type>/<id>`, a record list `/contacts/<portal>/objects/<type>`,
+    the project page `/developer-projects/<portal>/project/<name>`), each saying what the real
+    page does — so the demo never ends on an error page.
 * The seed is portal 12345678 (acmedemo.com): contacts, companies, deals, tickets, products,
   line items, the custom object `p_projects`, custom properties, pipelines and owners.
 * `server/fake-hubspot/server.ts` runs it on a port. `npm run dev:full` and
@@ -529,9 +637,16 @@ popup /api/auth/start ──────────────▶  302 → Hub
   * `RecordPicker` (canvas toolbar): Mock | Live switch and sample-record search. In preview it
     collapses into one chip.
   * `PreviewDataNote` (preview banner).
-  * `ConnectDialog`, and `connect.css` (`ub-cn-` classes).
+  * `ConnectDialog` (its consent body is `ConsentDetails`, reused by the guided setup), and
+    `connect.css` (`ub-cn-` classes).
+  * `host.ts` (`useConnectUiHost`, `setConnectResultsInline`): while the first-run screen runs
+    the sign-in itself, the top-bar button shows no result dialog / "Connected" toast.
+  * Fix-it buttons: `FriendlyError.actionLabel` / `LiveDataError.actionLabel` name the fix
+    (**Reconnect to grant access** for a missing permission, **Reconnect** for an expired
+    sign-in); the expired toast offers **Reconnect**; property pickers offer **Reconnect to grant
+    access** when `isMissingAccessMessage(error)`; `RecordSearch` takes `offerMock`.
 * **Mount points**:
-  * `src/shell/TopBar.tsx`: `<ConnectButton />` before Export.
+  * `src/shell/TopBar.tsx`: `<ConnectButton />` before Publish.
   * `src/shell/AppShell.tsx`: `init()` once, and `live={useLiveAdapter()}`.
   * `src/canvas/Toolbar.tsx`: `<RecordPicker />` and `<PreviewDataNote />`.
 
@@ -551,6 +666,17 @@ popup /api/auth/start ──────────────▶  302 → Hub
   `NO_RECORD_CONTEXT_MESSAGE`.
 * `live.context` overrides the portal, the user's email and id, and the record in
   `context`.
+* `formatted` on CRM sources may be `true` (all properties) or a list of property names; the list
+  maps to HubSpot's `propertiesToFormat` in generated code. Templates format only the deal stage
+  (its label) and color stages from `hs_is_closed` / `hs_is_closed_won`, so custom pipelines show
+  labels instead of ids.
+* **CRM component previews** (`src/preview/liveCrm.tsx`): `RuntimeProvider` wraps the preview in
+  a `LiveCrmProvider` built from the adapter. `CrmPropertyList`, `CrmDataHighlight`,
+  `CrmStageTracker`, `CrmAssociationTable`, `CrmAssociationPropertyList` and
+  `CrmSimpleDeadline` then render the sample record's real values with the portal's labels and
+  pipeline stages (answers cached per adapter key). Components that can't be shown from real
+  data (reports, pivots, statistics, …) and any failed load show a "Sample values" badge. With
+  mock data nothing changes.
 
 ### Real-portal pickers (`src/panels`, `src/inspector`)
 * `PropertyPicker` is a combobox in single or chip mode. It shows each property's label, internal
@@ -583,3 +709,92 @@ popup /api/auth/start ──────────────▶  302 → Hub
     the sample record with live properties and associations, the custom-property picker,
     disconnect, deploy (success, failed build, wrong key) and the unavailable / not-configured
     states. `CONNECT_SCREENSHOTS=<dir>` saves screenshots of the main screens.
+
+## 9. First-run experience (`src/onboarding`)
+
+For a brand-new, non-technical HubSpot admin opening the hosted builder.
+
+* **Cold start**: `index.html` puts a pure HTML/CSS “Waking up the builder…” splash inside
+  `#root` (a note fades in after 4 s, a reload hint after 45 s); React replaces it on mount.
+* **When the welcome shows** (`store.ts`, decided once before the first paint by `initFirstRun()`
+  in `App`, skipped on the recovery screen): on a first visit only — never once completed or
+  skipped (`uiex-builder:first-run` = `{ v, status: 'completed' | 'skipped', at }`), nor for
+  returning users (old `uiex-builder:welcome-dismissed`, or any saved project). `?welcome=1` /
+  `?welcome=0` force it. **Help › Getting started** reopens it (`useOnboarding.reopen()`).
+* **`FirstRun`** (full window, `role="dialog"`, `data-uiex-exclusive` — the editor behind it is
+  `inert` + `aria-hidden` via `AppShell`, and global shortcuts / the command palette stay off):
+  * Welcome: one-line promise; **Connect my HubSpot** (recommended; `aria-disabled` with a
+    one-line reason while checking / without a connector / sign-in not set up / server error),
+    **Try it with sample data**, and “I know what I’m doing → open the editor” (skipped, no tour).
+  * Guided setup (`SETUP_STEPS`: HubSpot `connect → where → start`, sample `where → start`),
+    progress dots, Back / Next / Skip setup, focus moves to each step's heading:
+    1. Connect — `ConsentDetails` in place, the existing popup flow (`useConnection.connect()`),
+       waiting / failure / “Connected to <portal>” shown in place (`setConnectResultsInline`).
+    2. Where — record type (standard four, plus the portal's custom objects by label when
+       connected; native radio cards) and place on the page with small illustrations
+       (`illustrations.tsx`): middle of the record page = `crm.record.tab`, right sidebar =
+       `crm.record.sidebar`, preview panel = `crm.preview`, help desk = `helpdesk.sidebar`
+       (tickets only).
+    3. Start — `RecordSearch` for a real sample record (optional) and the “Start from…” gallery
+       (`starters.ts` `startersFor`): **<Type> details** first (a heading + DescriptionList of
+       up to six properties, `formatted: true`; from the portal's schema when connected —
+       labels, custom properties first-class — else standard presets), then the ready-made cards
+       for that type whose components fit the place and that need no external setup (no fetch /
+       app functions; friendlier descriptions), then **Blank card**. Every starter gets the
+       chosen `location` and `objectTypes`.
+  * `finishSetup()` (`finish.ts`): replaces the untouched starter project
+    (`shell/persistence.isUntouchedStarterProject`; its saved copy, if choosing live data saved
+    it, is deleted) or saves real work first; creates the project “My HubSpot Cards” with the
+    card; sets live data (`useLiveData`: mode live + the sample record when connected, else
+    mock); leaves the selection empty (the inspector shows the card's settings in plain words and
+    a palette click adds to the end of the card); records `completed`; starts the tour.
+  * Step 3 picks the most recently updated record by itself when connected (once per record type
+    and visit, `autoPickedRecordTypes`), so the card previews real data by default; **Change**
+    opens the search. The keyboard-active row of `RecordSearch` only shows its focus ring while
+    the search has focus (it looked already picked).
+* **`Tour`** (4 coach marks: palette, inspector, preview data / Design-Preview, Publish), anchored
+  to `data-tour="palette" | "inspector" | "preview-data" | "preview-mode" | "publish"`, placed by
+  the pure `placeTour()` (beside tall sidebars it points at their lower part, so the tip sits
+  next to the canvas below the card instead of over it); non-blocking (no backdrop, `aria-modal="false"`,
+  `data-uiex-nonblocking` so `isOverlayOpen()` ignores it); Next / Skip tour / Escape; replay
+  from **Help › Take the tour**; `uiex-builder:tour` remembers done / skipped.
+* **Plain language**: “Publish” instead of Deploy / Export in the UI, “card” / “cards and pages”
+  instead of extension(s), “Card Builder” in the top bar, uid only under the inspector's
+  “Advanced: project files” with an explanation. Code / Problems / Console start collapsed
+  (`ShellLayout.bottomOpen` false) and the choice is remembered.
+
+### Contract changes (first-run work, all additive unless noted)
+* `src/connect/ui`: `ConsentDetails`, `useConnectUiHost`, `setConnectResultsInline`;
+  `RecordSearchProps.offerMock`; `data-tour="preview-data"` on the live-data controls.
+* `src/connect/describe.ts`: `FriendlyError.actionLabel`, `isMissingAccessMessage()`;
+  `src/connect/records.ts`: `LiveDataError.actionLabel`.
+* `src/panels/deploy/model.ts`: `hubspotOrigin`, `WIZARD_STEPS`, `publishChecklist`,
+  `placementInstructions`, `failureAdvice`, `ChecklistItem`, `ChecklistContext`;
+  `deploy/checklist.ts` (new). `DEPLOY_STEPS` labels changed (Going live / Published).
+* `src/shell/persistence.ts`: `isUntouchedStarterProject()`. `src/shell/shortcuts.ts`:
+  `isOverlayOpen()` ignores `[data-uiex-nonblocking]`. `useAnchoredMenu`: only a press outside
+  the menu swallows the next click on the trigger (choosing an item no longer does).
+* **Removed**: `WelcomeCard` (and its export from `src/shell/index.ts`), replaced by
+  `src/onboarding`.
+
+### Contract changes (usability pass, all additive unless noted)
+* `src/templates/catalog.ts`: `BlockTemplate.create?`, `BuiltBlock`; `src/templates/actions.ts`:
+  `prepareBlock()`, `insertBlock(…, at?, dataSources?)`; `src/dnd/dragState.ts`: the template
+  `DragPayload` carries `dataSources?`; `isFullWidthComponent()`, `isSideBySide()`, `mainColumn()`
+  (exported helpers of `smartInsertTarget`, whose targets changed as described in §6b).
+* `src/power/commands.ts`: `PaletteBlock.create?`.
+* `src/shell/shellStore.ts`: `requestPaletteFocus(query?)`, `paletteFocusQuery`,
+  `focusPaletteSearch(query?)` (Templates › “No blocks match” offers **Search components for …**).
+* `src/panels/deploy/model.ts`: `ChecklistItem.steps?`, `placementSteps()`, `phaseMessage()`;
+  checklist card items now have a short `body` plus `steps` (was one long `body`).
+* `src/onboarding/store.ts`: `autoPickedRecordTypes`. `finishSetup()` no longer selects a node.
+* `src/registry/components/crm.tsx`: `objectTypeId` props are labelled **Record type** (association
+  components: **Associated records**); the Association table's description says HubSpot shows its
+  loading and “none yet” states.
+* `src/templates/projectTemplates.ts`: the Contact summary starter reads named computed values
+  (`fullName`, `jobLine`, `lifecycleStage`, `lifecycleColor`, `leadStatus`, `cityAndCountry`);
+  unknown lifecycle stages / lead statuses show the stored value instead of “none”.
+* `src/panels/generators.ts`: the generated “none yet” empty state uses `imageWidth: 120`.
+* `server/fake-hubspot/handler.ts`: demo stand-in pages (see Fake HubSpot).
+* Copy: the design-mode flag reads **Hidden right now** (was “Hidden by condition”); the
+  inspector's “Advanced: project files” section starts collapsed.

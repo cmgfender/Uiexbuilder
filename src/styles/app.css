@@ -553,6 +553,30 @@ pre,
   border-radius: var(--ub-radius);
   box-shadow: var(--ub-shadow);
   font-weight: 500;
+  max-width: min(560px, calc(100vw - 32px));
+}
+.ub-toast--action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.ub-toast__action {
+  flex: none;
+  font: inherit;
+  font-weight: 600;
+  color: #7fd1e3;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: var(--ub-radius);
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.ub-toast__action:hover {
+  background: rgba(127, 209, 227, 0.12);
+}
+.ub-toast__action:focus-visible {
+  outline: 2px solid #7fd1e3;
+  outline-offset: 2px;
 }
 
 /* ---------- Screen-reader only ---------- */

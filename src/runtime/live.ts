@@ -18,7 +18,7 @@ import type {
 } from '../connect/types';
 import { isPropertyName, tokenize } from '../model/jsTokens';
 import { hasTemplate, singleExpression } from '../model/template';
-import type { CrmSearchSource, DataSource, Extension, FetchSource } from '../model/types';
+import type { CrmSearchSource, DataSource, Extension, FetchSource, FormattedSetting } from '../model/types';
 import { previewRequestToProxy, readProxyJson, RUNTIME_TIMING } from './actions';
 import { evaluate, interpolate, resolveTemplateString, type Scope } from './expr';
 import { isDeferredSource, objectTypeName } from './mockData';
@@ -95,6 +95,16 @@ export class LiveRequestError extends Error {
   }
 }
 
+/** A data source's `formatted` as sent to HubSpot: true (all), a non-empty property list, or false. */
+export function formattedSetting(setting: FormattedSetting | undefined): boolean | string[] {
+  if (setting === true) return true;
+  if (Array.isArray(setting)) {
+    const list = setting.filter((p) => typeof p === 'string' && p.trim() !== '');
+    return list.length ? list : false;
+  }
+  return false;
+}
+
 /**
  * The useCrmSearch request of a source, built against `scope` exactly like the generated code:
  * properties, the interpolated query, one filter group (BETWEEN `value`+`highValue`, IN / NOT_IN
@@ -154,7 +164,8 @@ export function buildSearchRequest(ds: CrmSearchSource, scope: Scope): CrmSearch
     }));
   }
   if (typeof ds.pageLength === 'number' && Number.isFinite(ds.pageLength)) request.pageLength = ds.pageLength;
-  if (ds.formatted) request.formatted = true;
+  const formatted = formattedSetting(ds.formatted);
+  if (formatted !== false) request.formatted = formatted;
   if (failures.length) throw new LiveRequestError(`Search request failed — ${failures.join('; ')}`);
   return request;
 }
@@ -240,7 +251,7 @@ export function planLiveRequest(
       const label = crm ? `GET ${singularType(crm.objectTypeId)} properties` : 'GET record properties';
       if (!crm) return noRecord(label, extensionKind);
       const properties = stringList(ds.properties);
-      const formatted = !!ds.formatted;
+      const formatted = formattedSetting(ds.formatted);
       const sig = JSON.stringify(['properties', crm.objectTypeId, crm.objectId, properties, formatted]);
       if (properties.length === 0) {
         return { ok: true, sig, label, local: true, perform: async () => ({ data: {}, summary: ' (0)' }) };
@@ -272,7 +283,7 @@ export function planLiveRequest(
           typeof ds.pageLength === 'number' && Number.isFinite(ds.pageLength) && ds.pageLength > 0
             ? Math.floor(ds.pageLength)
             : DEFAULT_ASSOCIATIONS_PAGE_LENGTH,
-        formatted: !!ds.formatted,
+        formatted: formattedSetting(ds.formatted),
       };
       return {
         ok: true,

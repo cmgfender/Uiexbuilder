@@ -125,7 +125,7 @@ describe('fake OAuth', () => {
     expect(again).toMatchObject({ status: 400, body: { status: 'BAD_AUTH_CODE', error: 'invalid_grant' } });
 
     const info = await (await f.fetch(`${API}/oauth/v1/access-tokens/${first.body.access_token}`)).json();
-    expect(info).toMatchObject({ hub_id: 12345678, hub_domain: 'acmedemo.com', user: 'jordan.lee@acmedemo.com', user_id: 9001, token_type: 'access', expires_in: 1800 });
+    expect(info).toMatchObject({ hub_id: 12345678, hub_domain: 'acmedemo.com', user: 'sam.rivera@acmedemo.com', user_id: 9001, token_type: 'access', expires_in: 1800 });
     expect(info.scopes).toEqual(['oauth', 'crm.objects.contacts.read', 'crm.objects.tickets.read']);
 
     const refreshed = await exchange(f, { grant_type: 'refresh_token', refresh_token: first.body.refresh_token });
@@ -365,5 +365,31 @@ describe('fake controls', () => {
     expect(f.projects.personalAccessKeys.get('pat-na1-extra')).toBe(999);
     const res = await f.fetch(`${API}/localdevauth/v1/auth/refresh`, { method: 'POST', body: JSON.stringify({ encodedOAuthRefreshToken: FAKE_PERSONAL_ACCESS_KEY }) });
     expect(await res.text()).not.toContain('Unknown fake endpoint');
+  });
+});
+
+describe('demo app pages (the "Finish in HubSpot" checklist links)', () => {
+  it('serves friendly stand-ins for install, settings, a record, a record list and the project page', async () => {
+    const f = fake();
+    const page = async (path: string) => {
+      const res = await f.fetch(`${APP}${path}`);
+      return { status: res.status, type: res.headers.get('content-type') ?? '', text: await res.text() };
+    };
+    const install = await page(`/static-token/${f.portalId}/authorize?appId=1003`);
+    expect(install.status).toBe(200);
+    expect(install.type).toContain('text/html');
+    expect(install.text).toContain('Install your app');
+    expect((await page(`/settings/${f.portalId}`)).text).toContain('Record Customization');
+    const contact = f.seed.records.get('contacts')![0];
+    const record = await page(`/contacts/${f.portalId}/record/0-1/${contact.id}`);
+    expect(record.text).toContain(String(contact.properties.firstname));
+    expect(record.text).toContain('Your app cards show here');
+    const list = await page(`/contacts/${f.portalId}/objects/0-3`);
+    expect(list.text).toContain(`/contacts/${f.portalId}/record/0-3/`);
+    expect((await page(`/developer-projects/${f.portalId}/project/my-hubspot-cards`)).text).toContain('“my-hubspot-cards”');
+    // Values from the seed are escaped; unknown pages are still HubSpot-style errors.
+    expect((await page(`/contacts/${f.portalId}/record/0-1/nope`)).text).toContain('no such record');
+    const unknown = await f.fetch(`${APP}/nothing-here`);
+    expect(unknown.status).toBe(404);
   });
 });

@@ -1,9 +1,177 @@
 # Project status log
 
-_Last updated: 2026-10-16. The connector is integrated and verified end to end against the fake
-HubSpot. The 2026-10-15 notes further down are history._
+_Last updated: 2026-10-16. A usability test (a brand-new, non-technical admin role-played end to
+end against the production build + fake HubSpot) found 20 hesitations; the fixes are in and the
+journey was re-run until every task was smooth. Earlier notes further down are history._
 
-## Latest: connector integrated (2026-10-16)
+## Latest: usability pass — first-time admin journey (2026-10-16)
+
+**Method:** Playwright against `scripts/dev.mjs --fake --prod` (production build, fake portal
+12345678), fresh storage, a screenshot at every step (looked at, not just saved), clicks counted
+per task. Tasks: (1) a card with a real contact's name, email and lifecycle stage and a working
+**Copy email**, previewed with live data; (2) add a table of the contact's associated deals with a
+loading state; (3) publish with the in-app guide (demo key) and follow the post-publish checklist;
+(4) come back the next day (reload) and continue.
+
+| Task | Before | After |
+| --- | --- | --- |
+| Connect HubSpot | 3 clicks | 3 clicks |
+| 1 Contact card + Copy email (after connecting) | 7 clicks; the first record *looked* picked but wasn't; the selected name showed a code expression in the inspector; two “copied” alerts | **6 clicks**; the most recent contact is picked by itself; nothing selected (card settings in plain words); one alert |
+| 2 Associated deals with a loading state | 4 clicks + 2 searches (Blocks: no match); the table landed inside the name column (undo + drag); no way to add a loading state | **3 clicks** (Templates › **Associated records**): heading, loading spinner, error + Try again, table of real deals, “none yet” — at the end of the card |
+| 3 Publish + checklist | 12 clicks + scrolling for the key field and the Publish button; the 3 checklist links opened JSON error pages; 3 manual ticks; no way to finish | **9 clicks**, no scrolling (sticky Publish button); links open demo stand-ins and tick themselves; “All done” + **Done** |
+| 4 Next day | 0 clicks to resume; re-publishing showed the whole key tutorial again | 0 clicks to resume; “Last published … · 3 of 3 done”, “You’ve changed your cards since then”, key steps folded (edit + republish: 8 clicks) |
+
+**Fixed at the root:**
+
+- Click-to-add / blocks go to the end of the card's main column when nothing is selected, and
+  full-width components (tables, CRM data, charts, forms…) never squeeze into a row next to the
+  selection (`smartInsertTarget`); finishing the setup leaves the selection empty.
+- **Associated records** data block (new `BlockTemplate.create` contract: blocks that bring their
+  data source); “No blocks match” offers **Search components for …**; Association table says HubSpot
+  shows its loading state; `objectTypeId` reads **Record type** / **Associated records**.
+- Contact summary starter reads named computed values (`{{ fullName }}`, `{{ lifecycleStage }}` …)
+  instead of long expressions; custom lifecycle stages show their value.
+- Preview: no duplicate “Copied to clipboard (preview)” when the handler shows its own alert.
+- Design canvas: “Hidden right now” (was “Hidden by condition”); faded (not sliced) breadcrumbs;
+  coach marks beside the sidebars sit below the card.
+- Setup step 3 picks the most recent record (real data by default); the record search's
+  keyboard-active row no longer looks picked when the search isn't focused.
+- Publish dialog: sticky footer with the target account and **Publish to HubSpot**; one-line key
+  steps (folded for returning publishers); plain progress messages; success names the card and
+  the account; numbered placement clicks; links tick their step; “All done”; **Done**; a new
+  publish keeps one-time ticks; “Last published …” and “changed since then”.
+- Fake HubSpot: stand-in pages for install / settings / record / record list / project.
+- Inspector: “Advanced: project files” (uid) starts collapsed.
+
+**Screenshots** (1440×900 unless noted): `…/scratchpad/usability/b-*` (baseline), `a-*` (first
+iteration), `f-*` (final run; `f-x-*` 1024×680). The connector suite now has
+`e2e-connect/usability.spec.ts` (the whole journey, with the click budget's key assertions).
+
+**Gate results:**
+
+| Check | Result |
+| --- | --- |
+| `npx tsc -b` | Clean |
+| `npx vitest run` | 116 files, 2,658 tests, all passing |
+| `npm run build` | Builds the app and `dist-server/` |
+| `npx playwright test` | 30 passed |
+| `npm run e2e:connect` | 14 passed, twice (new: `e2e-connect/usability.spec.ts`) |
+
+**Not changed (noted):** the toolbar still says “Live data” twice (Mock | Live switch and the
+record chip); “You’re connected” still needs one **Next**; the loading spinner can only be seen
+striped in Design (live data loads too fast to catch in Preview) — Data › Mock data › Simulate
+shows it with mock data.
+
+## First-run experience for brand-new admins (2026-10-16)
+
+**Gate results:**
+
+| Check | Result |
+| --- | --- |
+| `npx tsc -b` | Clean |
+| `npx vitest run` | 116 files, 2,647 tests, all passing |
+| `npm run build` | Builds the app and `dist-server/` |
+| `npx playwright test` | 30 passed, twice (new: `e2e/first-run.spec.ts` — welcome on a first visit, sample-data path into the editor, tour skip / replay, no welcome on return, Help › Getting started) |
+| `npm run e2e:connect` | 13 passed, twice (new: `e2e-connect/first-run.spec.ts` — Connect my HubSpot → sign in → where the card appears (custom objects listed) → a real record + a starter from the portal's properties → the editor previews live data; Publish wizard checklist) |
+
+**What a new admin sees** (`src/onboarding`, details in ARCHITECTURE.md §9):
+
+- **Cold start**: `index.html` shows a pure HTML/CSS “Waking up the builder…” splash until the app
+  mounts (a note about free-plan naps after 4 s, a reload hint after 45 s).
+- **Welcome** (first visit only; never again once completed or skipped; returning users with
+  saved projects never see it; **Help › Getting started** reopens it): one-line promise,
+  **Connect my HubSpot** (recommended; disabled with a one-line reason on the static copy, while
+  sign-in isn't set up, or when the server can't be reached) and **Try it with sample data**, plus
+  “I know what I’m doing → open the editor”.
+- **Guided setup** (progress dots, Back / Next / Skip setup, keyboard friendly, survives a reload or
+  a full-page sign-in): 1 Connect (the consent explainer in place, the existing popup flow,
+  “Connected to acmedemo.com”); 2 Where should your card appear (contacts / companies / deals /
+  tickets + the portal's custom objects by label; middle of the record page, right sidebar,
+  preview panel, help desk — tickets only — with small pictures); 3 a real sample record (search,
+  optional) and **Start from…** (a “<Type> details” card built from the portal's real properties,
+  matching ready-made cards that fit the place, Blank). Finishing creates the card with that type
+  and place, selects the record, switches the preview to Live data and opens the editor.
+- **Tour**: 4 non-blocking coach marks (add components, edit, preview with real data, publish);
+  Next / Skip tour / Escape; replay from **Help › Take the tour**.
+- **Plain language**: **Publish** (top bar) / **Publish to HubSpot** instead of Export / Deploy;
+  “card” / “cards and pages” instead of extension(s); uid only under “Advanced: project files”
+  with an explanation; Code / Problems / Console start collapsed (remembered).
+- **Publish to HubSpot wizard**: 1 Get your key — a direct link to the connected account's personal
+  access key page (`https://app.hubspot.com/personal-access-key/<portalId>`, exactly what
+  `@hubspot/cli` 8.16 opens; `/l/personal-access-key` when the account isn't known); 2 Publish with
+  a progress bar; 3 **Finish in HubSpot** checklist with direct links (install the app, add the
+  card to the record page with the exact clicks for its object and place, open the sample record)
+  — ticks remembered per project. Failures list **What to do next**.
+- **Fix-it buttons**: missing permission → **Reconnect to grant access** (record search, live-data
+  problems, property pickers); expired sign-in → **Reconnect** (toast and notes).
+- Also fixed: choosing an item in a top-bar menu no longer makes a quick second click on the same
+  menu do nothing (found by the e2e suite).
+
+**Screenshots** of every step (1440×900, plus 1024 and 390 wide) were taken and reviewed; the
+connector suite saves them with `CONNECT_SCREENSHOTS=<dir>` (`frx-*.png`).
+
+**Not verified here** (needs a real HubSpot account): the record-customization click path and the
+`/settings/<portalId>` link in the checklist were written from HubSpot's documentation, not
+clicked through; the personal access key URL is taken from the HubSpot CLI source.
+
+**Next (optional)**: an agent usability test (a first-time admin role-played end to end on the
+hosted app), then push and redeploy Render.
+
+## Latest: security and first-time-admin review fixes (2026-10-16)
+
+Two independent reviews reported 27 findings (sec-1..sec-7, ux-1..ux-20). Each was reproduced and
+fixed at the root, with regression tests.
+
+**Gate results:**
+
+| Check | Result |
+| --- | --- |
+| `npx tsc -b` | Clean |
+| `npx vitest run` | 111 files, 2,523 tests, all passing |
+| `npm run build` | Builds the app and `dist-server/` |
+| `npx playwright test` | 27 passed, twice |
+| `npm run e2e:connect` | 12 passed, twice (new: trust prompt while connected, deploy needs sign-in, private-app token, SESSION_SECRET missing + setup page) |
+
+**Security (behaviour changes):**
+
+- Deploy: the personal access key is never stored ("remember" is gone). Once sign-in is set up,
+  deploying needs a signed-in session (grant re-checked with HubSpot) and the key must belong to
+  that account. Deploy jobs are bound to the browser that started them (HttpOnly cookie), followed
+  with `POST /api/deploy/status`, redacted from logs, and the queue step is safe to replay.
+- Imported projects: while HubSpot is connected, the trust prompt says plainly that trusted code can
+  read the connected account's CRM data, and a project trusted before connecting is asked about
+  again. (Residual risk: code the admin trusts still runs in the builder's page; a sandboxed
+  opaque-origin preview is the next step.)
+- Fetch proxy: Node checks every DNS answer and pins the connection (`server/guardedFetch.ts`);
+  IPv6 is allowlisted to global unicast without NAT64/Teredo/6to4; unsafe ports refused; rate limited.
+- `ALLOWED_PORTALS` restricts sign-in and deploy to listed HubSpot accounts.
+- Rate limits on sign-in start/callback, deploy and the proxy.
+- `__Host-` cookies on https; duplicate cookie names read as signed out; a copied cookie stops
+  working within 5 minutes of Disconnect (immediately for deploys).
+- `npm run dev` listens on localhost only; loopback fetches only for a browser on the same computer;
+  no localhost redirect URL in the production app template.
+
+**First-time admin (behaviour changes):**
+
+- CRM components (property list, highlight, stage tracker, association tables, deadline) show the
+  sample record's real values in Live mode; others say "Sample values". Deal stages show labels for
+  custom pipelines.
+- Deploy tab: explains a missing `SESSION_SECRET` (links `/setup.html`), recognises `pat-` tokens,
+  connector-app success steps (policy, Client ID/secret), Install as the primary action, failed
+  builds name the card and offer the builder file. Export opens on the Deploy tab.
+- Connect: toasts after connect / disconnect / expiry, a visible "Waiting for HubSpot" panel with
+  Start again / Cancel, give-up after 60 s, Super Admin note in the consent dialog, admin-friendly
+  "not switched on yet" copy, clearer missing-permission copy with "Use mock data".
+- Live data: the picker opens when switching to Live, the choice survives a reload of an unsaved
+  starter project, the demo user is Sam Rivera, property suggestions show name and group on a
+  second line.
+- Docs: HOSTING.md, setup.html (SESSION_SECRET warning, Developer projects, Acceptable Use Policy,
+  `ALLOWED_PORTALS`), README and ARCHITECTURE.md updated. The demo has a fake personal access key
+  page.
+
+**Additive contract changes:** see ARCHITECTURE.md §8 "Contracts".
+
+## Connector integrated (2026-10-16)
 
 **Gate results:**
 
@@ -76,7 +244,7 @@ The contracts are committed:
 | Live data in the preview runtime | `src/runtime/**` | **Done** |
 | Real-portal pickers in the Data panel and inspector | `src/panels/**`, `src/inspector/**` | **Done** |
 | Integration and connector end-to-end tests (`e2e-connect/`, `npm run e2e:connect`) | whole repo | **Done** (2026-10-16) |
-| Security and first-time-admin reviews, then fixes | whole repo | **Not started** |
+| Security and first-time-admin reviews, then fixes | whole repo | **Done** (2026-10-16, see the top of this file) |
 
 **Current typecheck state:** 8 errors in the paused work.
 
@@ -129,7 +297,7 @@ The script path is local to this session. In a new session, ask Claude to "finis
 
 Resumed. The build phase is still running.
 
-### Next: first-run experience for brand-new users (queued after the connector)
+### First-run experience for brand-new users — done 2026-10-16 (see the top of this file)
 
 - **Welcome screen:** "Connect my HubSpot" (recommended) or "Try with sample data".
 - **Guided setup:**

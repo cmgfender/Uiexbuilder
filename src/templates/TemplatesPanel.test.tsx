@@ -22,6 +22,8 @@ const rootTypes = () => {
   return ext.nodes[ext.rootId].children.map((id) => ext.nodes[id].type);
 };
 const named = (name: string) => Object.values(active().nodes).find((n) => n.name === name)!;
+/** Children of the card's main column (where click-to-add puts things when nothing is selected). */
+const mainTypes = () => named('Main').children.map((id) => active().nodes[id].type);
 
 function renderPanel() {
   return render(
@@ -46,7 +48,9 @@ describe('template flows', () => {
     const search = BLOCK_TEMPLATES.find((b) => b.id === 'search-results')!;
     const r = insertBlock(search.template, search.state, search.name);
     expect(r.ok).toBe(true);
-    expect(rootTypes()).toEqual(['Flex', 'Flex']);
+    // Nothing selected: the end of the card's main column.
+    expect(rootTypes()).toEqual(['Flex']);
+    expect(mainTypes()).toEqual(['Text', 'Flex']);
     expect(active().state.map((s) => s.name)).toEqual(['query']);
     expect(useEditor.getState().selectedNodeId).toBe(r.ok ? r.value : null);
     // Existing state is reused, not duplicated.
@@ -55,7 +59,7 @@ describe('template flows', () => {
     // One undo removes both the block and the state variable it added.
     useEditor.getState().undo();
     useEditor.getState().undo();
-    expect(rootTypes()).toEqual(['Flex']);
+    expect(mainTypes()).toEqual(['Text']);
     expect(active().state).toEqual([]);
   });
 
@@ -187,10 +191,10 @@ describe('<TemplatesPanel>', () => {
     reset();
     renderPanel();
     fireEvent.click(screen.getByRole('button', { name: /^Stat row:/ }));
-    expect(rootTypes()).toEqual(['Flex', 'Statistics']);
+    expect(mainTypes()).toEqual(['Text', 'Statistics']);
     expect(screen.getByText('Added “Stat row”.')).toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole('button', { name: /^Info alert:/ }), { key: 'Enter' });
-    expect(rootTypes()).toEqual(['Flex', 'Statistics', 'Alert']);
+    expect(mainTypes()).toEqual(['Text', 'Statistics', 'Alert']);
   });
 
   it('starts a template drag with the block’s state', () => {
@@ -257,7 +261,7 @@ describe('<TemplatesPanel>', () => {
     expect(screen.getByText(/Text · 1 component · uses who/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Insert Greeting' }));
-    expect(rootTypes()).toEqual(['Flex', 'Text']);
+    expect(mainTypes()).toEqual(['Text', 'Text']);
     expect(active().state.map((s) => s.name)).toEqual(['who']);
 
     fireEvent.click(screen.getByRole('button', { name: 'Rename Greeting' }));

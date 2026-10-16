@@ -8,8 +8,7 @@
     "auth": {
       "type": "oauth",
       "redirectUrls": [
-        "https://YOUR-DOMAIN/api/auth/callback",
-        "http://localhost:5173/api/auth/callback"
+        "https://YOUR-DOMAIN/api/auth/callback"
       ],
       "requiredScopes": [
         "oauth",

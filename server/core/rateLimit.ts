@@ -19,10 +19,10 @@ export interface RateRule {
 export const RATE_RULES = {
   authStart: { what: 'sign-in attempts', capacity: 20, refillMs: 30_000 },
   authCallback: { what: 'sign-in attempts', capacity: 20, refillMs: 30_000 },
-  deploy: { what: 'deploys', capacity: 6, refillMs: 60_000 },
+  deploy: { what: 'deploys', capacity: 10, refillMs: 30_000 },
   /** Deploy while sign-in isn't set up yet (first-time setup): stricter, per client IP. */
   deploySetup: { what: 'deploys', capacity: 4, refillMs: 2 * 60_000 },
-  proxy: { what: 'preview requests', capacity: 60, refillMs: 1_000 },
+  proxy: { what: 'preview requests', capacity: 40, refillMs: 2_000 },
 } satisfies Record<string, RateRule>;
 
 interface Bucket {

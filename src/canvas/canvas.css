@@ -74,6 +74,10 @@
 .ub-cv-crumbs__list::-webkit-scrollbar {
   display: none;
 }
+.ub-cv-crumbs__list[data-overflow] {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 28px);
+  mask-image: linear-gradient(to right, transparent 0, #000 28px);
+}
 .ub-cv-crumbs__item {
   display: inline-flex;
   align-items: center;

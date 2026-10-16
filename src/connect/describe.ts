@@ -51,8 +51,38 @@ export interface FriendlyError {
   message: string;
   /** Suggested fix the UI can offer as a button. */
   action?: 'reconnect' | 'retry' | 'none';
+  /** Label of that button when it needs saying more precisely ("Reconnect to grant access"). */
+  actionLabel?: string;
   /** For missing permissions: the scopes needed. */
   requiredScopes?: string[];
+  /** 'warning' (amber: not broken, just not included) or 'error' (default). */
+  tone?: 'warning' | 'error';
+  /** One line for compact places (e.g. under a field in the Data panel). */
+  short?: string;
+  /** The person can keep going with mock data (the UI offers "Use mock data"). */
+  offerMock?: boolean;
+}
+
+/**
+ * Whether a one-line message (FriendlyError.short, as catalog hooks report it) is about a
+ * permission the connection doesn't include — the fix is "Reconnect to grant access".
+ */
+export function isMissingAccessMessage(text: string | null | undefined): boolean {
+  return !!text && /included in (this|your) HubSpot connection/.test(text);
+}
+
+/** "crm.objects.tickets.read" → "tickets"; "crm.schemas.deals.read" → "deal properties". */
+export function scopeNoun(scope: string): string {
+  const label = scopeLabel(scope);
+  if (label === scope) return scope;
+  const noun = label.replace(/^(See|Change) /, '').replace(/\s*\(.*\)$/, '');
+  return noun.charAt(0).toLowerCase() + noun.slice(1);
+}
+
+function nounList(scopes: readonly string[]): string {
+  const nouns = [...new Set(scopes.map(scopeNoun))];
+  if (nouns.length <= 1) return nouns[0] ?? '';
+  return `${nouns.slice(0, -1).join(', ')} and ${nouns[nouns.length - 1]}`;
 }
 
 interface ErrorLike {
@@ -71,18 +101,28 @@ export function describeError(err: unknown): FriendlyError {
   switch (code) {
     case 'missing_scope': {
       const scopes = e.requiredScopes?.filter(Boolean) ?? [];
-      const list = scopeList(scopes);
-      const what = scopes.length ? `“${list}”` : 'this information';
-      const doWhat = scopes.length ? list.charAt(0).toLowerCase() + list.slice(1) : 'see this';
+      const noun = nounList(scopes);
+      const What = noun ? noun.charAt(0).toUpperCase() + noun.slice(1) : '';
       return {
-        title: 'Permission needed',
-        message: `Your HubSpot connection isn't allowed to ${doWhat}. Reconnect HubSpot and, on the HubSpot screen, allow ${what}. If the option isn't offered, a HubSpot Super Admin may need to approve it.`,
+        title: noun ? `${What} aren’t available in this connection` : 'Not available in this connection',
+        message: noun
+          ? `The builder can’t see ${noun} in your HubSpot account yet. Usually the connection was made before ${noun} were included, or your HubSpot plan or user doesn’t include them. Click Reconnect to grant access and approve in HubSpot. If you still see this, ask a HubSpot Super Admin to check your user’s permissions — or keep designing with mock data.`
+          : 'Your HubSpot connection doesn’t include this yet. Click Reconnect to grant access and approve in HubSpot. If you still see this, ask a HubSpot Super Admin to check your user’s permissions — or keep designing with mock data.',
+        short: noun ? `${What} aren’t included in this HubSpot connection.` : 'This isn’t included in your HubSpot connection.',
         action: 'reconnect',
+        actionLabel: 'Reconnect to grant access',
+        tone: 'warning',
+        offerMock: true,
         requiredScopes: scopes,
       };
     }
     case 'not_connected':
-      return { title: 'HubSpot is disconnected', message: 'Your HubSpot sign-in has expired or was removed. Connect HubSpot again to keep using real data.', action: 'reconnect' };
+      return {
+        title: 'Your HubSpot sign-in expired',
+        message: 'Your HubSpot sign-in has expired or was removed. Reconnect to keep using real data — nothing you built is lost.',
+        action: 'reconnect',
+        actionLabel: 'Reconnect',
+      };
     case 'rate_limited': {
       const secs = typeof e.retryAfter === 'number' && e.retryAfter > 0 ? Math.ceil(e.retryAfter) : null;
       return {
@@ -139,7 +179,14 @@ export function describeAuthResult(code: string, serverMessage?: string): { titl
     case 'token_exchange_failed':
       return { title: "Couldn't finish connecting", message: "HubSpot didn't accept the sign-in. Please try again. If it keeps happening, ask whoever hosts the builder to check the app settings." };
     case 'not_configured':
-      return { title: 'Sign in with HubSpot is not set up', message: serverMessage || "This server isn't configured for HubSpot sign-in yet." };
+      return { title: 'Sign in with HubSpot is not set up', message: "HubSpot sign-in isn't switched on for this builder yet. Ask the person who set it up to finish the setup checklist." };
+    case 'portal_not_allowed':
+      return {
+        title: 'This HubSpot account can’t be used here',
+        message: 'This builder only works with specific HubSpot accounts. Ask the person who set up the builder to add your account, or connect a different one.',
+      };
+    case 'rate_limited':
+      return { title: 'Too many sign-in attempts', message: 'Please wait a minute and try again.' };
     default:
       return { title: "Couldn't connect HubSpot", message: serverMessage || 'Something went wrong while connecting. Please try again.' };
   }

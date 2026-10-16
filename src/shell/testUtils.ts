@@ -35,6 +35,7 @@ export function resetEditor(project?: Project): Project {
     saveStatus: 'idle',
     saveError: null,
     paletteFocusNonce: 0,
+    paletteFocusQuery: '',
     conflict: null,
     compact: false,
     leftAutoCollapsed: false,

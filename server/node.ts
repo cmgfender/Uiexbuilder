@@ -22,6 +22,7 @@ import { promisify } from 'node:util';
 import zlib from 'node:zlib';
 import type { ServerConfig } from './core/types';
 import { allowPlainHealthCheck, normalizeHostingEnv } from './hosting';
+import { isLoopbackAddress } from './core/ssrf';
 
 /** Replaced by scripts/build-server.mjs (esbuild `define`). */
 declare const __UIEX_BUNDLED__: boolean | undefined;
@@ -33,8 +34,8 @@ const HEALTH_PATH = '/api/health';
 
 /** The part of the connector the HTTP layer needs (createConnector(config) satisfies it). */
 export interface ApiHandler {
-  /** Resolves to null when the request is not an /api route. */
-  handle(request: Request): Promise<Response | null>;
+  /** Resolves to null when the request is not an /api route. `meta.clientIp`: see clientAddress. */
+  handle(request: Request, meta?: { clientIp?: string }): Promise<Response | null>;
 }
 
 export type Logger = (line: string) => void;
@@ -614,6 +615,43 @@ function firstHeader(value: string | string[] | undefined): string | undefined {
   return v?.split(',')[0]?.trim() || undefined;
 }
 
+/** "::ffff:127.0.0.1" → "127.0.0.1" (Node reports IPv4 clients of dual-stack sockets this way). */
+function plainIp(ip: string | undefined): string | undefined {
+  const v = ip?.trim();
+  if (!v) return undefined;
+  return /^::ffff:\d+\.\d+\.\d+\.\d+$/i.test(v) ? v.slice(7) : v;
+}
+
+/**
+ * The client's IP address for rate limits and the local-development check. Behind a proxy
+ * (trustProxy) it is the LAST X-Forwarded-For entry — the one the proxy in front of this server
+ * appended (Render's load balancer, the Vite dev proxy); earlier entries are whatever the client
+ * sent and can't be trusted. Otherwise the socket address.
+ */
+export function clientAddress(req: IncomingMessage, trustProxy: boolean): string | undefined {
+  return pickClientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress, trustProxy);
+}
+
+/**
+ * clientAddress from its parts. A loopback address in X-Forwarded-For is only believed when the
+ * proxy itself is on this computer (the Vite dev proxy): a remote caller that talks to this server
+ * directly and sends `X-Forwarded-For: 127.0.0.1` is not on this computer.
+ */
+export function pickClientAddress(forwardedFor: string | string[] | undefined, socketAddress: string | undefined, trustProxy: boolean): string | undefined {
+  const socket = plainIp(socketAddress);
+  if (trustProxy) {
+    const joined = Array.isArray(forwardedFor) ? forwardedFor.join(',') : forwardedFor;
+    const last = plainIp(joined?.split(',').map((p) => p.trim()).filter(Boolean).pop());
+    if (last) return isLoopbackAddress(last) && !isLoopbackAddress(socket) ? socket : last;
+  }
+  return socket;
+}
+
+/** Access-log path: deploy job tokens in old-style status URLs are replaced by "…". */
+export function logPath(pathname: string): string {
+  return pathname.replace(/^\/api\/deploy\/(?!key$|status$)[^/]+/, '/api/deploy/…');
+}
+
 /** Where a request came from, for log lines only (never used for URLs or security decisions). */
 export function describeClient(req: IncomingMessage, trustProxy: boolean): string {
   const ip = (trustProxy && firstHeader(req.headers['x-forwarded-for'])) || req.socket.remoteAddress || '-';
@@ -656,9 +694,9 @@ export function createRequestListener(opts: NodeServerOptions): (req: IncomingMe
       }
       if (request) {
         try {
-          response = await opts.connector.handle(request);
+          response = await opts.connector.handle(request, { clientIp: clientAddress(req, !!opts.trustProxy) });
         } catch (err) {
-          log?.(`[api] ${method} ${pathname} failed: ${err instanceof Error ? err.message : String(err)}`);
+          log?.(`[api] ${method} ${logPath(pathname)} failed: ${err instanceof Error ? err.message : String(err)}`);
           response = errorResponse(500, 'internal_error', 'Something went wrong on the connector server. Please try again.');
         }
         if (!response) response = errorResponse(404, 'not_found', 'There is no connector endpoint at this address.');
@@ -666,7 +704,7 @@ export function createRequestListener(opts: NodeServerOptions): (req: IncomingMe
     }
     if (!response) return;
     await writeWebResponse(res, response, { head: method === 'HEAD', defaults: API_DEFAULT_HEADERS });
-    if (opts.accessLog !== false) log?.(`[api] ${method} ${pathname} ${response.status} ${Math.round(performance.now() - started)}ms ${describeClient(req, !!opts.trustProxy)}`);
+    if (opts.accessLog !== false) log?.(`[api] ${method} ${logPath(pathname)} ${response.status} ${Math.round(performance.now() - started)}ms ${describeClient(req, !!opts.trustProxy)}`);
   }
 
   return (req, res) => {
@@ -803,6 +841,8 @@ export function describeStartup(config: ServerConfig, info: StartupInfo): string
   const deploy = !config.enableDeploy ? 'off' : secretUsable ? 'on' : 'off until SESSION_SECRET is set';
   lines.push(`  Features:         live CRM data ${crm} | fetch proxy ${proxy} | deploy to HubSpot (beta) ${deploy}`);
   if (config.allowedOrigins.length > 0) lines.push(`  Extra origins:    ${config.allowedOrigins.join(', ')}`);
+  if (config.allowedPortals?.length) lines.push(`  Allowed accounts: ${config.allowedPortals.join(', ')} (ALLOWED_PORTALS)`);
+  else if (configured) lines.push('  Allowed accounts: any HubSpot account that installs your app (set ALLOWED_PORTALS to limit it)');
   lines.push(`  Health check:     ${config.appUrl || info.listenUrl}${HEALTH_PATH}`);
   return lines;
 }
@@ -872,6 +912,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   const apiOnly = args.apiOnly || truthy(env.API_ONLY);
 
   const { configFromEnv, createConnector } = await import('./core/index');
+  const { createGuardedFetch } = await import('./guardedFetch');
 
   const server = tuneServer(createServer());
   await new Promise<void>((resolve, reject) => {
@@ -888,11 +929,12 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
 
   // No await between here and attaching the request listener: nothing can be served half-configured.
   const detected = detectAppUrl(env, actualPort);
-  const overrides: Partial<ServerConfig> = { ...(opts.overrides ?? {}) };
+  // The preview fetch proxy resolves names itself and refuses private / internal addresses.
+  const overrides: Partial<ServerConfig> = { proxyFetch: createGuardedFetch(), ...(opts.overrides ?? {}) };
   if (!env.APP_URL?.trim() && overrides.appUrl === undefined && detected.url) overrides.appUrl = detected.url;
   const config = configFromEnv(env, overrides);
   const core = createConnector(config);
-  const connector: ApiHandler = { handle: (request) => core.handle(allowPlainHealthCheck(request)) };
+  const connector: ApiHandler = { handle: (request, meta) => core.handle(allowPlainHealthCheck(request), meta) };
 
   const staticRoot = apiOnly ? null : findStaticRoot(args.staticDir ?? env.STATIC_DIR);
   const staticFound = !!staticRoot && existsSync(path.join(staticRoot, 'index.html'));

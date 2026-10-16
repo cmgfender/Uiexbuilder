@@ -4,7 +4,7 @@
  * the connector's stable code (ConnectorErrorBody) — or 'network' / 'connector_unavailable' when
  * there is no connector to talk to (static hosting).
  */
-import { CONNECTOR_ROUTES, CSRF_HEADER, type ConnectorErrorBody, type DeployKeyInfo, type DeployRequest, type DeployStatus } from '../../connect/types';
+import { CONNECTOR_ROUTES, CSRF_HEADER, type ConnectorErrorBody, type DeployRequest, type DeployStatus } from '../../connect/types';
 
 export class DeployClientError extends Error {
   constructor(
@@ -22,9 +22,8 @@ export class DeployClientError extends Error {
 
 export interface DeployClient {
   start(request: DeployRequest): Promise<DeployStatus>;
+  /** Advance / poll the job (POST /api/deploy/status, so the job token stays out of URLs and logs). */
   status(deployId: string): Promise<DeployStatus>;
-  keyInfo(): Promise<DeployKeyInfo>;
-  forgetKey(): Promise<DeployKeyInfo>;
 }
 
 /** Codes worth retrying while polling (the deploy itself keeps running in HubSpot). */
@@ -33,7 +32,7 @@ export function isTransientDeployError(err: unknown): boolean {
   return err.code === 'network' || err.code === 'rate_limited' || err.code === 'timeout' || err.status === 502 || err.status === 503 || err.status === 504;
 }
 
-async function call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown): Promise<T> {
+async function call<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = { [CSRF_HEADER]: '1', Accept: 'application/json' };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   let res: Response;
@@ -44,7 +43,7 @@ async function call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: u
   }
   const type = res.headers.get('content-type') ?? '';
   if (!type.includes('json')) {
-    throw new DeployClientError(res.status, 'connector_unavailable', "The builder's HubSpot connector isn't available here, so it can't deploy for you.");
+    throw new DeployClientError(res.status, 'connector_unavailable', "The builder's HubSpot connector isn't available here, so it can't publish for you.");
   }
   const data = (await res.json().catch(() => null)) as (T & Partial<ConnectorErrorBody>) | null;
   if (!res.ok || !data) {
@@ -62,7 +61,5 @@ async function call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: u
 
 export const deployClient: DeployClient = {
   start: (request) => call<DeployStatus>('POST', CONNECTOR_ROUTES.deployStart, request),
-  status: (deployId) => call<DeployStatus>('GET', CONNECTOR_ROUTES.deployStatus.replace(':deployId', encodeURIComponent(deployId))),
-  keyInfo: () => call<DeployKeyInfo>('GET', CONNECTOR_ROUTES.deployKey),
-  forgetKey: () => call<DeployKeyInfo>('DELETE', CONNECTOR_ROUTES.deployKey),
+  status: (deployId) => call<DeployStatus>('POST', CONNECTOR_ROUTES.deployPoll, { deployId }),
 };

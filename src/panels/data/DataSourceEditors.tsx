@@ -36,10 +36,15 @@ function propertiesHint(catalog: PortalProperties, fallback: string): string {
 }
 
 function FormattedSwitch({ ds }: { ds: CrmPropertiesSource | AssociationsSource | CrmSearchSource }) {
+  const some = Array.isArray(ds.formatted) && ds.formatted.length > 0 ? ds.formatted : null;
   return (
     <div className="ub-pn-stack ub-pn-stack--tight">
       <Switch checked={ds.formatted === true} onChange={(formatted) => update(ds, { formatted })} label="Formatted values" />
-      <span className="ub-field__hint">Dates, currency and option labels as HubSpot displays them.</span>
+      <span className="ub-field__hint">
+        {some
+          ? `Only ${some.join(', ')} ${some.length === 1 ? 'is' : 'are'} formatted (labels as HubSpot displays them). Turn this on to format every property.`
+          : 'Dates, currency and option labels as HubSpot displays them.'}
+      </span>
     </div>
   );
 }

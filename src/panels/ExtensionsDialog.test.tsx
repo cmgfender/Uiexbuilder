@@ -118,13 +118,13 @@ describe('<ExtensionsDialog>', () => {
     expect(exts().map((e) => e.name)).toEqual(['Alpha', 'Beta', 'Beta copy']);
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete Beta copy' }));
-    const table = screen.getByRole('table', { name: 'Extensions' });
+    const table = screen.getByRole('table', { name: 'Cards and pages' });
     expect(within(table).getByText(/are removed/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Delete extension' }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete Beta' }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete extension' }));
     expect(exts().map((e) => e.name)).toEqual(['Alpha']);
-    expect(screen.getByRole('button', { name: 'A project needs at least one extension' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'A project needs at least one card or page' })).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open Alpha in the editor' }));
     expect(useEditor.getState().activeExtensionId).toBe(exts()[0].id);

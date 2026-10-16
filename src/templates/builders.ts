@@ -156,12 +156,26 @@ export const money = (expr: string) =>
 export const shortDate = (expr: string) =>
   `${expr} ? new Date(${expr}).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'`;
 
-/** Human label of a HubSpot default-pipeline deal stage id. */
+/**
+ * Label of a deal stage. The data sources ask HubSpot to format `dealstage` (propertiesToFormat:
+ * ['dealstage']), which gives the stage's label in any pipeline; the default pipeline's ids are
+ * mapped too, so an unformatted id still reads well.
+ */
 export const dealStageLabel = (expr: string) =>
   `new Map([['appointmentscheduled', 'Appointment scheduled'], ['qualifiedtobuy', 'Qualified to buy'], ` +
   `['presentationscheduled', 'Presentation scheduled'], ['decisionmakerboughtin', 'Decision maker bought in'], ` +
   `['contractsent', 'Contract sent'], ['closedwon', 'Closed won'], ['closedlost', 'Closed lost']]).get(${expr}) || ${expr} || '—'`;
 
-/** Tag variant for a deal stage id. */
-export const dealStageVariant = (expr: string) =>
-  `${expr} === 'closedwon' ? 'success' : ${expr} === 'closedlost' ? 'error' : ${expr} === 'contractsent' ? 'warning' : 'info'`;
+/**
+ * Tag variant of a deal from HubSpot's calculated `hs_is_closed_won` / `hs_is_closed` (right for
+ * every pipeline, unlike stage ids). `props` is the deal's properties object expression.
+ */
+export const dealStageVariant = (props: string) =>
+  `${props}.hs_is_closed_won === 'true' ? 'success' : ${props}.hs_is_closed === 'true' ? 'error' : 'info'`;
+
+/** Properties a deals table / won count needs, and the formatting that gives stage labels. */
+export const DEAL_ROW_PROPERTIES = ['dealname', 'amount', 'dealstage', 'hs_is_closed_won', 'hs_is_closed'];
+export const DEAL_STAGE_FORMAT = ['dealstage'];
+
+/** Number of closed-won deals in a list of association / search results. */
+export const wonCount = (list: string) => `${list}.filter((d) => d.properties.hs_is_closed_won === 'true').length`;

@@ -10,6 +10,7 @@ import {
   dismissWelcome,
   isWelcomeDismissed,
   loadStoredVersion,
+  pruneOrphanLiveData,
   readBootGuard,
   reportEditorCrash,
   resumeAutosave,
@@ -18,6 +19,7 @@ import {
   useBootSettled,
 } from './persistence';
 import { PREF_KEYS } from './prefs';
+import { LIVE_DATA_KEY_PREFIX, resetLiveDataForTests, useLiveData } from '../connect/records';
 import { loadLayout, useShell } from './shellStore';
 import { resetEditor, rootChildren } from './testUtils';
 
@@ -64,6 +66,38 @@ describe('persistence', () => {
     act(() => useEditor.getState().setBottomPanel('problems'));
     expect(loadLayout()).toMatchObject({ bottomHeight: 410, bottomTab: 'problems', bottomOpen: true });
     unmount();
+  });
+
+  it('keeps the live-data choice of the untouched starter project across a reload (saves it on the first choice)', () => {
+    resetEditor();
+    resetLiveDataForTests();
+    useShell.getState().setSaveStatus('idle');
+    const { unmount } = renderHook(() => useAutosave());
+    const id = useEditor.getState().project.id;
+    act(() => useLiveData.getState().loadProject(id));
+    expect(window.localStorage.getItem(`uiex-builder:project:${id}`)).toBeNull();
+    act(() => useLiveData.getState().setMode('live'));
+    // Saved right away, so the next start restores this project (and its id's live-data choice).
+    expect(window.localStorage.getItem(`uiex-builder:project:${id}`)).not.toBeNull();
+    expect(window.localStorage.getItem(`${LIVE_DATA_KEY_PREFIX}${id}`)).toContain('"live"');
+    expect(useShell.getState().saveStatus).toBe('saved');
+    unmount();
+    resetLiveDataForTests();
+    bootstrapEditor({ force: true });
+    expect(useEditor.getState().project.id).toBe(id);
+  });
+
+  it('removes live-data choices of projects that no longer exist', () => {
+    resetEditor();
+    const kept = createProject('Kept');
+    saveProject(kept);
+    window.localStorage.setItem(`${LIVE_DATA_KEY_PREFIX}${kept.id}`, '{"v":1,"mode":"live","records":{}}');
+    window.localStorage.setItem(`${LIVE_DATA_KEY_PREFIX}p_gone`, '{"v":1,"mode":"live","records":{}}');
+    window.localStorage.setItem(`${LIVE_DATA_KEY_PREFIX}p_open`, '{"v":1,"mode":"live","records":{}}');
+    expect(pruneOrphanLiveData('p_open')).toBe(1);
+    expect(window.localStorage.getItem(`${LIVE_DATA_KEY_PREFIX}p_gone`)).toBeNull();
+    expect(window.localStorage.getItem(`${LIVE_DATA_KEY_PREFIX}${kept.id}`)).not.toBeNull();
+    expect(window.localStorage.getItem(`${LIVE_DATA_KEY_PREFIX}p_open`)).not.toBeNull();
   });
 
   it('guards startup: a project that never settled or crashed is not restored again', async () => {
