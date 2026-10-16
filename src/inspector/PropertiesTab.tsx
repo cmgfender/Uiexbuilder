@@ -3,10 +3,11 @@
  * children and custom (unmodelled) props.
  */
 import { useMemo, useRef, useState } from 'react';
-import { ArrowDownToLine, Link2, MousePointerClick, Plus, ShieldAlert, Trash2 } from 'lucide-react';
+import { ArrowDownToLine, Link2, ListFilter, MousePointerClick, Plus, ShieldAlert, Trash2 } from 'lucide-react';
 import { newId, toIdentifier } from '../model/ids';
 import { canAccept } from '../model/rules';
 import { useEditor } from '../model/store';
+import { hasTemplate, singleExpression } from '../model/template';
 import { nodeLabel } from '../model/tree';
 import {
   isExpr,
@@ -27,6 +28,8 @@ import { asOneUndoStep } from './history';
 import { confirmModalTemplate } from './overlayPresets';
 import { PropRow } from './PropRow';
 import { isPropVisible } from './propValue';
+import { initialRules, parseRules, rulesToExpr, type RuleSet } from './rules';
+import { RulesEditor } from './RulesEditor';
 import { InspectorSection } from './Section';
 
 export const GROUP_ORDER: PropGroup[] = ['Content', 'Appearance', 'Layout', 'Behavior', 'Validation', 'Data', 'Advanced'];
@@ -107,12 +110,40 @@ function BoundPropRow({ node, def, prop, ext }: { node: UINode; def: ComponentDe
 // Text content
 // ---------------------------------------------------------------------------
 
+/** Text content shown with rules is stored as one `{{ }}` expression (see rules.ts). */
+const TEXT_DEF: PropDef = { name: '__text', label: 'Text', type: { kind: 'string' } };
+
+function textRules(text: string): RuleSet | null {
+  const code = singleExpression(text);
+  return code === null ? null : parseRules(code);
+}
+
 function TextContent({ node, ext }: { node: UINode; ext: Extension }) {
   const setText = useEditor((s) => s.setText);
   const text = node.text ?? '';
   // Decide once per node so the field never swaps element (and loses focus) while typing.
   const [multiline] = useState(() => text.length > 48 || text.includes('\n'));
   const createdText = useMemo(() => createdDefaultText(node.type), [node.type]);
+  const [draft, setDraft] = useState<RuleSet | null>(null);
+  const rules = draft ?? textRules(text);
+
+  const changeRules = (next: RuleSet) => {
+    if (next.subject.trim() && next.cases.length > 0) {
+      setDraft(null);
+      setText(node.id, `{{ ${rulesToExpr(next)} }}`);
+    } else setDraft(next);
+  };
+  const toggleRules = () => {
+    if (rules) {
+      setDraft(null);
+      setText(node.id, rules.otherwise === null ? '' : String(rules.otherwise));
+      return;
+    }
+    const start = initialRules(node, TEXT_DEF);
+    const current = hasTemplate(text) ? '' : text;
+    changeRules({ ...start, cases: start.cases.map((c) => ({ ...c, then: current })), otherwise: current });
+  };
+
   return (
     <div className="ub-insp-prop ub-insp-prop--block" data-prop="__text">
       <div className="ub-insp-prop__label">
@@ -120,18 +151,34 @@ function TextContent({ node, ext }: { node: UINode; ext: Extension }) {
           Text
         </label>
       </div>
+      <span className="ub-insp-prop__tools">
+        <button
+          type="button"
+          className={cx('ub-insp-fx ub-insp-rulesbtn', rules && 'is-on')}
+          aria-pressed={!!rules}
+          aria-label={rules ? 'Stop using rules for Text' : 'Use rules for Text'}
+          title={rules ? 'Stop using rules — keep the “Otherwise” text' : 'Rules — show different text depending on a value'}
+          onClick={toggleRules}
+        >
+          <ListFilter size={12} aria-hidden />
+        </button>
+      </span>
       <div className="ub-insp-prop__editor">
-        <TemplateInput
-          id={`text-${node.id}`}
-          value={text}
-          onChange={(t) => setText(node.id, t)}
-          ext={ext}
-          nodeId={node.id}
-          multiline={multiline}
-          placeholder="Type text, or {{ variable }}"
-          aria-label="Text content"
-          replaceableText={createdText}
-        />
+        {rules ? (
+          <RulesEditor node={node} def={TEXT_DEF} ext={ext} value={rules} onChange={changeRules} />
+        ) : (
+          <TemplateInput
+            id={`text-${node.id}`}
+            value={text}
+            onChange={(t) => setText(node.id, t)}
+            ext={ext}
+            nodeId={node.id}
+            multiline={multiline}
+            placeholder="Type text, or {{ variable }}"
+            aria-label="Text content"
+            replaceableText={createdText}
+          />
+        )}
       </div>
     </div>
   );

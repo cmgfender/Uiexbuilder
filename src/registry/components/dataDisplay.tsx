@@ -1598,18 +1598,19 @@ export const dataDisplayComponents: ComponentDef[] = [
       },
       {
         name: 'variant',
-        label: 'Variant',
+        label: 'Color',
         type: {
           kind: 'enum',
           options: [
-            { value: 'success', label: 'Success (green)' },
-            { value: 'warning', label: 'Warning (yellow)' },
-            { value: 'danger', label: 'Danger (red)' },
+            { value: 'success', label: 'Green (success)' },
+            { value: 'warning', label: 'Yellow (warning)' },
+            { value: 'danger', label: 'Red (danger)' },
           ],
         },
         defaultValue: 'success',
         group: 'Appearance',
-        description: 'The color that indicates progress sentiment.',
+        description:
+          'The bar’s color (HubSpot prop: variant). To change it by percentage — e.g. green at 80% or more, red below 40% — click the Rules button next to it.',
       },
       {
         name: 'aria-label',

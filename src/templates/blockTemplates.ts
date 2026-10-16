@@ -306,12 +306,22 @@ export const BLOCK_TEMPLATES: BlockTemplate[] = [
   {
     id: 'progress',
     name: 'Progress tracker',
-    description: 'A progress bar with a short status line.',
+    description: 'A progress bar that turns green, yellow or red by percentage, with a short status line.',
     icon: Gauge,
-    keywords: ['progress', 'bar', 'percent', 'status', 'completion'],
+    keywords: ['progress', 'bar', 'percent', 'status', 'completion', 'threshold', 'color'],
     template: t.column(
       [
-        { type: 'ProgressBar', props: { title: 'Implementation progress', value: 3, maxValue: 5, showPercentage: true } },
+        {
+          type: 'ProgressBar',
+          props: {
+            title: 'Implementation progress',
+            value: 3,
+            maxValue: 5,
+            showPercentage: true,
+            // Color rules (Inspector › Color › Rules): green from 80%, yellow from 40%, else red.
+            variant: { $expr: '(3 / 5 * 100) >= 80 ? "success" : (3 / 5 * 100) >= 40 ? "warning" : "danger"' },
+          },
+        },
         t.micro('3 of 5 milestones complete'),
       ],
       'extra-small',

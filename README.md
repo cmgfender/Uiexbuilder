@@ -20,6 +20,12 @@ data, then export a **ready-to-deploy HubSpot developer project**.
   editing, context menus, layers tree, undo/redo, copy/paste and keyboard shortcuts.
 - **Inspector** generated from the component registry: typed editors for every prop, defaults,
   docs links, `{{ expression }}` templates and full expression mode.
+- **Rules** on any simple setting or text (the filter icon next to **fx**): pick the value by
+  comparing something, e.g. a progress bar green at 80% or more, yellow from 40%, red below; a tag
+  color by deal stage; a status line by a CRM property. "Based on" lists the component's own values
+  plus everything in scope (state, computed values, record properties, data, repeat item, context)
+  and shows the result right now. Rules are saved as plain expressions, so the exported code is
+  ordinary TSX.
 - **Logic without code**: state variables, two-way input binding, conditional rendering, repeat over
   arrays, and event actions (set state, alerts, refresh properties, iframe modal, close overlay,
   copy, refetch data, `hubspot.fetch`, app functions, logging, if/else, custom code).

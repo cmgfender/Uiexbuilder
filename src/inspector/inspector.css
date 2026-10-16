@@ -1557,3 +1557,82 @@ textarea.ub-insp-expr__input {
 .ub-insp-codefield textarea {
   padding-right: 30px;
 }
+
+/* Rules (pick a value by thresholds) */
+.ub-insp-rulesbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-style: normal;
+}
+.ub-insp-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--ub-border);
+  border-radius: var(--ub-radius);
+  background: var(--ub-surface-2);
+}
+.ub-insp-rules__subject {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ub-insp-rules__subject > label,
+.ub-insp-rules__if {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ub-text-2);
+}
+.ub-insp-rules__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ub-insp-rules__case,
+.ub-insp-rules__otherwise {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--ub-border);
+}
+.ub-insp-rules__cond {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) 64px auto;
+  align-items: center;
+  gap: 6px;
+}
+.ub-insp-rules__select {
+  min-width: 0;
+}
+.ub-insp-rules__when {
+  min-width: 0;
+  width: 100%;
+}
+.ub-insp-rules__then {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  color: var(--ub-text-3);
+}
+.ub-insp-rules__add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+}
+.ub-insp-rules__now {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--ub-text-3);
+}
+.ub-insp-rules__now strong {
+  color: var(--ub-text-2);
+  font-weight: 600;
+}
