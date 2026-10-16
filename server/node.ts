@@ -704,7 +704,12 @@ export function createRequestListener(opts: NodeServerOptions): (req: IncomingMe
     }
     if (!response) return;
     await writeWebResponse(res, response, { head: method === 'HEAD', defaults: API_DEFAULT_HEADERS });
-    if (opts.accessLog !== false) log?.(`[api] ${method} ${logPath(pathname)} ${response.status} ${Math.round(performance.now() - started)}ms ${describeClient(req, !!opts.trustProxy)}`);
+    if (opts.accessLog !== false) {
+      // Machine error code only (e.g. missing_scope) — never the message, which can echo user input.
+      const code = response.status >= 400 ? response.headers.get('X-UIEX-Error-Code') : null;
+      const why = code && /^[a-z0-9_]{1,40}$/.test(code) ? ` ${code}` : '';
+      log?.(`[api] ${method} ${logPath(pathname)} ${response.status}${why} ${Math.round(performance.now() - started)}ms ${describeClient(req, !!opts.trustProxy)}`);
+    }
   }
 
   return (req, res) => {

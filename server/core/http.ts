@@ -51,8 +51,11 @@ export function errorBody(status: number, code: string, message: string, extra: 
   return { error };
 }
 
+/** Response header carrying the machine error code (also in the body) so access logs can show it. */
+export const ERROR_CODE_HEADER = 'X-UIEX-Error-Code';
+
 export function errorJson(status: number, code: string, message: string, extra: { correlationId?: string; requiredScopes?: string[]; headers?: Record<string, string> } = {}): Response {
-  return json(errorBody(status, code, message, extra), status, extra.headers ?? {});
+  return json(errorBody(status, code, message, extra), status, { ...(extra.headers ?? {}), [ERROR_CODE_HEADER]: code });
 }
 
 /** Convert anything thrown by a route into a ConnectorErrorBody response (never leaks internals). */

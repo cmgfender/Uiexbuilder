@@ -399,6 +399,35 @@ describe('client address and access log', () => {
   });
 });
 
+describe('access log', () => {
+  it('adds the machine error code to failed requests, never the message', async () => {
+    const lines: string[] = [];
+    const server = createServer(
+      createRequestListener({
+        connector: {
+          handle: async () =>
+            new Response(JSON.stringify({ error: { code: 'missing_scope', message: 'secret-ish text', status: 403 } }), {
+              status: 403,
+              headers: { 'content-type': 'application/json', 'X-UIEX-Error-Code': 'missing_scope' },
+            }),
+        },
+        staticRoot: null,
+        origin: 'http://localhost:5173',
+        log: (l) => lines.push(l),
+      }),
+    );
+    const base = await listen(server);
+    try {
+      await raw(base, { path: '/api/deploy', method: 'POST' });
+      const log = lines.join('\n');
+      expect(log).toContain('POST /api/deploy 403 missing_scope ');
+      expect(log).not.toContain('secret-ish');
+    } finally {
+      await close(server);
+    }
+  });
+});
+
 describe('pickClientAddress', () => {
   it('believes a loopback X-Forwarded-For only from a proxy on this computer', () => {
     // The Vite dev proxy (on loopback) forwards a browser on this computer.
