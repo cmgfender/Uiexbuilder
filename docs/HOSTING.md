@@ -16,11 +16,12 @@ never open a terminal.
 4. [Step 3 - Add the HubSpot settings to your host](#step-3---add-the-hubspot-settings-to-your-host)
 5. [Step 4 - Check it works](#step-4---check-it-works)
 6. [Step 5 - Share the address with admins](#step-5---share-the-address-with-admins) (and what they see)
-7. [Troubleshooting](#troubleshooting)
-8. [Security and privacy](#security-and-privacy)
-9. [Other ways to host](#other-ways-to-host) (Cloudflare, Docker, any Node.js host)
-10. [All settings](#all-settings)
-11. [For developers: run it on your computer](#for-developers-run-it-on-your-computer)
+7. [Optional: turn on the status page](#optional-turn-on-the-status-page) (see sign-ins, publishes and errors)
+8. [Troubleshooting](#troubleshooting)
+9. [Security and privacy](#security-and-privacy)
+10. [Other ways to host](#other-ways-to-host) (Cloudflare, Docker, any Node.js host)
+11. [All settings](#all-settings)
+12. [For developers: run it on your computer](#for-developers-run-it-on-your-computer)
 
 > **Shortcut:** once the builder is online, open **`https://<your address>/setup.html`**. That page
 > checks whether sign-in is ready, shows your exact redirect URL, gives you the HubSpot app file
@@ -95,7 +96,7 @@ Pick **one** host. Render is the simplest. Vercel is just as good if your compan
 3. Vercel asks for four values: **APP_URL**, **HUBSPOT_CLIENT_ID**, **HUBSPOT_CLIENT_SECRET** and
    **SESSION_SECRET**.
    - **SESSION_SECRET**: type **48 random letters and numbers** now (your password manager's
-     "generate password" button is fine; no spaces). **Deploy to HubSpot** in step 2 needs it.
+     "generate password" button is fine; no spaces). **Publish to HubSpot** in step 2 needs it.
    - The other three: you do not have them yet - **type `later`**. The builder treats `later` as
      "not set yet": it works, and only **Connect HubSpot** waits for the real values.
 4. Click **Deploy** and wait about 2 minutes.
@@ -202,7 +203,7 @@ else sees a HubSpot message that they don't have permission; the builder tells t
 Admin to connect once (and gives them a note to send). After that, everyone in that account can
 connect.
 
-**Recommended:** limit sign-in (and Deploy to HubSpot) to your own accounts with the server setting
+**Recommended:** limit sign-in (and Publish to HubSpot) to your own accounts with the server setting
 `ALLOWED_PORTALS` - a comma-separated list of HubSpot account ids, for example `12345678,87654321`
 (the account id is shown in the builder's account menu, and in HubSpot under your profile).
 Anyone else who tries to connect sees *"This HubSpot account can't be used here"*, and the builder
@@ -324,7 +325,39 @@ Send admins the address, for example:
 
 ---
 
+## Optional: turn on the status page
+
+The builder has a private **status page** at `https://<your address>/status`. It lists, in plain
+words, what happened recently: sign-ins (including the ones that started but **never came back**
+from HubSpot, and what the person said HubSpot showed), publishes (for example a key without the
+**Developer projects** permission, refused again and again), failed builds and errors in people's
+browsers. Each problem says what it means, who can fix it and how, with the right links.
+
+1. Open `https://<your address>/status` and click **Sign in with HubSpot** (the status page uses the
+   same sign-in as the builder).
+2. It shows **One setting to go: make yourself an admin**, with your HubSpot email ready to copy.
+3. Add the setting `ADMIN_EMAILS` with that email (several: separate them with commas) on your
+   host - the page shows the exact clicks for your host. On **Render**: your service →
+   **Environment** → **Add Environment Variable** → `ADMIN_EMAILS` → **Save, rebuild, and
+   deploy**. On **Vercel**: **Settings → Environment Variables**, then **Redeploy**.
+4. Click **Check again** on the status page. Admins also find a **Status page** link in the account
+   menu of the builder (click the HubSpot account at the top right).
+
+Instead of emails you can list HubSpot account ids in `ADMIN_PORTALS` (everyone signed in to those
+accounts is an admin). Nobody else can see the page, and it never shows tokens, keys, CRM data or
+email addresses of visitors (visitors are an anonymous id that changes every day).
+
+The history is kept **in the server's memory**: it starts again when the server restarts or a free
+Render plan goes to sleep. Every event is also written to the server log as one `[event] {…}` line
+(search Render's **Logs** for `[event]`), which lasts longer. Details:
+[STATUS-PAGE.md](STATUS-PAGE.md).
+
+---
+
 ## Troubleshooting
+
+**Not sure what is wrong?** Open `/status` first (see [the status page](#optional-turn-on-the-status-page)):
+it lists sign-ins that never came back and refused publishes, with the fix for each.
 
 | What you see | What it means | How to fix it |
 | --- | --- | --- |
@@ -381,7 +414,7 @@ Send admins the address, for example:
 - **Signing out** revokes the sign-in at HubSpot. The builder re-checks it with HubSpot every few
   minutes and before every deploy, so even a copied cookie stops working within about five
   minutes. To sign *everyone* out at once, change `SESSION_SECRET`.
-- **Personal access keys** (Deploy to HubSpot) are used for that one deploy and **never stored** -
+- **Personal access keys** (Publish to HubSpot) are used for that one deploy and **never stored** -
   not in a cookie, not on the server. Once sign-in is set up, deploying needs a HubSpot sign-in and
   the key must belong to that same account. A running deploy can only be followed from the browser
   that started it (its status token is tied to that browser and never appears in server logs).
@@ -479,12 +512,15 @@ On Railway and Fly.io, `APP_URL` is detected automatically like on Render and Ve
 | `HUBSPOT_APP_BASE` | no | `https://app.hubspot.com` | HubSpot sign-in host. EU accounts with trouble: `https://app-eu1.hubspot.com` |
 | `HUBSPOT_API_BASE` | no | `https://api.hubapi.com` | HubSpot API host |
 | `ENABLE_FETCH_PROXY` | no | `true` | Preview `hubspot.fetch` calls through the connector |
-| `ENABLE_DEPLOY` | no | `true` | Allow **Deploy to HubSpot** (beta) |
+| `ENABLE_DEPLOY` | no | `true` | Allow **Publish to HubSpot** (beta) |
 | `ALLOWED_ORIGINS` | no | - | Other addresses allowed to use the connector, comma separated |
 | `ALLOWED_PORTALS` | recommended | - (any account) | HubSpot account ids that may sign in and deploy, comma separated |
 | `TRUST_PROXY` | no | `true` | Node server: read the client address from `X-Forwarded-For` (behind Render's or your own proxy). Set `false` when the server is reached directly |
 | `PORT` | no | `3000` | Port for `npm start` / Docker |
 | `LOG_REQUESTS` | no | `true` | Log one line per API request (paths only - deploy status tokens are replaced by `…` - never data or secrets) |
+| `ADMIN_EMAILS` | for the status page | - | HubSpot sign-in emails (any case) that may open `/status`, comma separated |
+| `ADMIN_PORTALS` | no | - | HubSpot account ids whose signed-in users may open `/status`, comma separated |
+| `LOG_EVENTS` | no | `true` | Node server: write one `[event] {json}` line per sign-in, publish, refused request or browser error (what the status page shows; no tokens, keys, CRM data or emails) |
 
 Placeholder values such as `later`, `todo` or `-` count as "not set".
 
@@ -495,12 +531,12 @@ Placeholder values such as `later`, `todo` or `-` count as "not set".
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | Builder on http://localhost:5173 (this computer only; `npm run dev -- --host` opens it to your network) plus the connector. Without settings, Connect HubSpot shows as not set up - everything else works. To sign in to a real account, create a **separate development app** with the redirect URL `http://localhost:5173/api/auth/callback` (never add localhost to the app people use) and put its settings in `.env.local` (see `.env.example`). |
-| `npm run dev:full` | Same, plus a **fake HubSpot** with demo data on port 4010: try the whole Connect flow, sample records and Deploy to HubSpot without a HubSpot account. The demo personal access key is on the fake's personal access key page (Publish → Publish to HubSpot → **Open HubSpot’s key page**) and printed in the terminal. The fake can also play HubSpot saying no: its consent page links to the install refusals (Acceptable Use Policy, no permission, install limit), and its key page removes / adds back the key's **Developer projects** permission. |
+| `npm run dev:full` | Same, plus a **fake HubSpot** with demo data on port 4010: try the whole Connect flow, sample records and Publish to HubSpot without a HubSpot account. The demo personal access key is on the fake's personal access key page (Publish → Publish to HubSpot → **Open HubSpot’s key page**) and printed in the terminal. The fake can also play HubSpot saying no: its consent page links to the install refusals (Acceptable Use Policy, no permission, install limit), and its key page removes / adds back the key's **Developer projects** permission. Signed in to the fake account (12345678, an admin by default through `ADMIN_PORTALS`) you can open the status page at `/status`. |
 | `npm run build` then `npm start` | Production server on http://localhost:3000 |
 | `npm run start:demo` | Production build + fake HubSpot on http://localhost:4174 (used for demos and end-to-end tests; run `npm run build` first) |
 | `npm run secret` | Print a new `SESSION_SECRET` |
 | `npm run build:static` | The builder alone for plain static hosting (Connect HubSpot shows "available on the hosted version"; nothing calls `/api`) |
-| `npm run e2e:connect` | End-to-end tests of the whole Connect flow, live data and Deploy to HubSpot against the fake HubSpot (`CONNECT_SCREENSHOTS=<dir>` also saves screenshots) |
+| `npm run e2e:connect` | End-to-end tests of the whole Connect flow, live data, Publish to HubSpot and the status page against the fake HubSpot (`CONNECT_SCREENSHOTS=<dir>` also saves screenshots) |
 
 Code: the connector core is in `server/core` (standard Web `Request`/`Response`, no framework). The
 hosting adapters are thin: `server/node.ts` (Node, Render, Docker), `api/[...path].ts` (Vercel),

@@ -52,12 +52,12 @@ const EVENTS: DiagnosticEvent[] = [
   { id: 1, kind: 'server.started', outcome: 'info', at: NOW - 7_200_000, lastAt: NOW - 7_200_000, count: 1, version: '1.0.0 (abc1234)' },
 ];
 
-function serve(opts: { connected: boolean; access: AdminAccess; health?: ReturnType<typeof healthFixture> }) {
+function serve(opts: { connected: boolean; access: AdminAccess; health?: ReturnType<typeof healthFixture>; events?: DiagnosticEvent[] }) {
   const routes: Record<string, MockHandler> = {
     'GET /api/health': () => json(opts.health ?? healthFixture()),
     'GET /api/me': () => json(opts.connected ? connectedInfo() : { connected: false, reason: 'signed-out' }),
     'GET /api/admin/access': () => json(opts.access),
-    'GET /api/admin/diagnostics': () => json(snapshot(EVENTS)),
+    'GET /api/admin/diagnostics': () => json(snapshot(opts.events ?? EVENTS)),
   };
   const mock = routedFetch(routes);
   vi.stubGlobal('fetch', mock.fetch);
@@ -145,8 +145,35 @@ describe('StatusPage', () => {
     // Filter: only sign-ins.
     fireEvent.click(within(timeline).getByRole('button', { name: 'Sign-ins' }));
     await waitFor(() => expect(within(timeline).queryByText(/Publish refused/)).toBeNull());
-    expect(within(timeline).getByText(/2 of 4 events/)).toBeTruthy();
+    // Shown, and said once to screen readers (the filters changed).
+    expect(within(timeline).getAllByText(/2 of 4 events/).map((el) => el.getAttribute('aria-live'))).toEqual([null, 'polite']);
     expect(screen.getByText('Visitor aaaaaa (you)')).toBeTruthy();
+  });
+
+  it('marks what browsers report as not verified, never ranks it above what the server saw, and never announces the clock', async () => {
+    const fake: DiagnosticEvent = {
+      id: 9,
+      kind: 'client.error',
+      outcome: 'failed',
+      at: NOW - 30_000,
+      lastAt: NOW - 30_000,
+      count: 1,
+      visitor: 'eeeeee',
+      client: { source: 'react', name: 'SecurityNotice', message: 'URGENT: rotate your secret at [link]' },
+    };
+    const abandoned: DiagnosticEvent = { id: 8, kind: 'signin.abandoned', outcome: 'warning', at: NOW - 900_000, lastAt: NOW - 300_000, count: 1, visitor: 'bbbbbb' };
+    serve({ connected: true, events: [fake, abandoned], access: { signInConfigured: true, signedIn: true, admin: true, adminConfigured: true, account: { portalId: 12345678 } } });
+    render(<StatusPage />);
+    const attention = await screen.findByRole('region', { name: 'Needs your attention' });
+    const cards = within(attention).getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
+    expect(cards).toEqual(['A sign-in never came back', 'Browser error reported: URGENT: rotate your secret at [link]Reported by a browser · not verified']);
+    expect(within(attention).getByText(/aren’t verified — anyone can send one/)).toBeTruthy();
+    expect(attention.textContent).not.toMatch(/crashed/);
+    // The clock line changes every 30 seconds: it is not a live region.
+    const updated = screen.getByText(/^Updated /);
+    expect(updated.closest('[aria-live]')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect((await screen.findByText('Updated. Nothing new.')).getAttribute('aria-live')).toBe('polite');
   });
 });
 

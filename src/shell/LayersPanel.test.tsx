@@ -177,6 +177,27 @@ describe('<LayersPanel>', () => {
     expect(row(intro)).toHaveAttribute('aria-selected', 'false');
   });
 
+  it('Shift / Cmd-click adds layers to the selection and takes them out again', () => {
+    const { intro, open, rule } = setup();
+    renderLayers();
+    expect(screen.getByRole('tree', { name: 'Layers' })).toHaveAttribute('aria-multiselectable', 'true');
+    fireEvent.click(row(intro));
+    fireEvent.click(row(rule), { shiftKey: true });
+    fireEvent.click(row(open), { metaKey: true });
+    expect(useEditor.getState().selectedNodeIds).toEqual([intro, rule, open]);
+    for (const id of [intro, rule, open]) expect(row(id)).toHaveAttribute('aria-selected', 'true');
+    // One tab stop for the tree, on the primary (last clicked) row.
+    expect(row(open)).toHaveAttribute('tabindex', '0');
+    expect(row(intro)).toHaveAttribute('tabindex', '-1');
+    fireEvent.click(row(rule), { ctrlKey: true });
+    expect(useEditor.getState().selectedNodeIds).toEqual([intro, open]);
+    expect(row(rule)).toHaveAttribute('aria-selected', 'false');
+    // A plain click selects only that layer.
+    fireEvent.click(row(rule));
+    expect(useEditor.getState().selectedNodeIds).toEqual([]);
+    expect(useEditor.getState().selectedNodeId).toBe(rule);
+  });
+
   it('reveals a selected node inside a collapsed parent', () => {
     const { stack, intro } = setup();
     renderLayers();

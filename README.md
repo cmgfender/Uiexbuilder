@@ -19,13 +19,27 @@ data, then export a **ready-to-deploy HubSpot developer project**.
   selection outlines, insertion indicators, an overlay storyboard for modals/panels, inline text
   editing, context menus, layers tree, undo/redo, copy/paste and keyboard shortcuts.
 - **Inspector** generated from the component registry: typed editors for every prop, defaults,
-  docs links, `{{ expression }}` templates and full expression mode.
+  docs links, `{{ expression }}` templates and full expression mode. Settings use plain words with
+  the exact HubSpot prop name beside them (**Color** · `variant`) and a short line of help under
+  each one (hide it from the ⋯ menu); colors are swatches, spacing and direction show a small
+  preview; **Filter settings** (press `/`) finds a setting by name, prop or choice; **You can also**
+  tips open Rules, CRM data, actions, show when and repeat in one click; containers list what is
+  **Inside this …**, one click away, and the canvas outlines their children. Inserting a block
+  selects its main component (e.g. the progress bar of *Progress tracker*).
 - **Rules** on any simple setting or text (the filter icon next to **fx**): pick the value by
   comparing something, e.g. a progress bar green at 80% or more, yellow from 40%, red below; a tag
   color by deal stage; a status line by a CRM property. "Based on" lists the component's own values
   plus everything in scope (state, computed values, record properties, data, repeat item, context)
   and shows the result right now. Rules are saved as plain expressions, so the exported code is
   ordinary TSX.
+- **Conditions, lists and bulk edits without code**: show a component (or run an If step) when
+  checks are true — is / is not, more / less than, contains, is empty — grouped with *and* / *or*;
+  filter, sort, limit and format (currency, number, percent, date, relative date) any list with a
+  live preview of the rows (Advanced › Repeat › **Filter, sort & limit…**, or **Filter & sort** on a
+  data source); Rules on an alert's type, title and message, a variable's new value and the text to
+  copy; **Copy / Paste settings** between components of the same kind (⌥⌘C / ⌥⌘V, the ⋯ menu or
+  right-click), and **Shift-click** several components to change a setting on all of them at once.
+  Everything is saved as plain expressions, so the exported code is ordinary TSX.
 - **Logic without code**: state variables, two-way input binding, conditional rendering, repeat over
   arrays, and event actions (set state, alerts, refresh properties, iframe modal, close overlay,
   copy, refetch data, `hubspot.fetch`, app functions, logging, if/else, custom code).
@@ -41,6 +55,10 @@ data, then export a **ready-to-deploy HubSpot developer project**.
   one-click fixes (missing scopes and permitted URLs, misspelt names, CRM property typos, …),
   including checks for things that only break once deployed (reading data before it has loaded,
   `context.crm` outside cards, app functions the app type can't upload).
+- **Private status page** (`/status`) for whoever hosts the builder: sign-ins that never came
+  back, refused publishes (for example a key without *Developer projects*), failed builds and
+  errors in visitors' browsers, each explained in plain words with who can fix it and how. Only the
+  admins you list in `ADMIN_EMAILS` can open it; see [docs/STATUS-PAGE.md](docs/STATUS-PAGE.md).
 - **Safe by default**: a `.uiex.json` someone else made opens with its code paused (helpers,
   calls, custom code) until you choose **Trust and run code**; runaway loops are stopped; a
   document that crashes the editor opens a recovery screen instead of a blank page. Projects
@@ -98,7 +116,11 @@ short tour (replay it, or the welcome, from **Help**). The same, step by step:
 1. Click **Connect HubSpot** (top right). The builder first explains what it can and cannot do;
    click **Continue to HubSpot**, approve in the HubSpot window, and the top bar shows your
    account (for example `acmedemo.com · 12345678`). Click it for the account menu
-   (permissions, **Switch account**, **Disconnect**).
+   (permissions, **Switch account**, **Disconnect**, and **Status page** for admins of the
+   builder). If the HubSpot window closes without connecting, the builder asks **What did HubSpot
+   show?** and gives the fix (for example the Acceptable Use Policy the host must sign, or a Super
+   Admin who must connect first) with a note to send to whoever can fix it. A blocked pop-up is one
+   click from **Continue in this tab**.
 2. In the canvas toolbar choose **Live data** and **Pick a sample record**: the preview shows its
    real properties, associations, CRM search results and record context. **Mock data** switches
    back any time.
@@ -108,8 +130,10 @@ short tour (replay it, or the welcome, from **Help**). The same, step by step:
    personal access key you create in HubSpot (the wizard links straight to HubSpot's key page for
    your account; tick **Developer projects**) - instead of the CLI steps above - then lists what
    to do in HubSpot (install the app, add the card to the record page, open a record) with direct
-   links. Publishing needs you to be connected to the same HubSpot account, and asks for the key
-   each time (it is never stored).
+   links. The key is **checked before anything is uploaded**: which account it belongs to and
+   whether it has the *Developer projects* permission, with the exact fix (open that account's key
+   page, Check again) when it doesn't. Publishing needs you to be connected to the same HubSpot
+   account, and asks for the key each time (it is never stored).
 
 Access is **read-only**. HubSpot's tokens never reach the browser: the connector keeps them in an
 encrypted, `HttpOnly` cookie (there is no database) and refreshes them automatically. Set
@@ -143,6 +167,8 @@ In short:
    Docker or with your own domain, and optionally `ALLOWED_PORTALS`) - see
    [`.env.example`](.env.example).
 4. Open `/setup.html` on your builder to check that sign-in is ready, then share the address.
+5. Optional: set `ADMIN_EMAILS` to the email you sign in to HubSpot with, then open `/status` to
+   see sign-ins, publishes and errors with their fixes ([docs/STATUS-PAGE.md](docs/STATUS-PAGE.md)).
 
 | Platform | Files |
 | --- | --- |
@@ -160,12 +186,13 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for module contracts.
 
 ```
 server/
-  core/       HubSpot connector: OAuth sign-in, encrypted cookie sessions, read-only CRM API
+  core/       HubSpot connector: OAuth sign-in, encrypted cookie sessions, read-only CRM API,
+              Publish to HubSpot, diagnostics/ (the status page's in-memory event log)
   node.ts     production Node server (static files + /api); cloudflare.ts: Workers adapter
   fake-hubspot/  in-memory HubSpot for tests and `npm run dev:full`
 api/          Vercel adapter
 hubspot-app/  the HubSpot app behind "Connect HubSpot" (developer project)
-docs/         HOSTING.md: put the builder online with sign-in (for non-developers)
+docs/         HOSTING.md: put the builder online with sign-in (for non-developers); STATUS-PAGE.md
 e2e/          end-to-end tests of the static builder; e2e-connect/: Connect HubSpot against the fake HubSpot
 src/
   model/      document model, tree ops, placement rules, store (undo/redo), persistence, validation
@@ -176,8 +203,11 @@ src/
   connect/    HubSpot connection client: sign-in, live preview data, portal schema for pickers
   canvas/     design surface, selection, drag & drop
   inspector/  property / events / advanced editors
-  panels/     data, app settings, functions, export, projects
+  panels/     data, app settings, functions, export, projects, Publish to HubSpot (deploy/)
+  power/      computed values, helpers, command palette, shaped lists (filter / sort / format)
   templates/  starter extensions and blocks
   shell/      app layout, palette, layers, code/problems/console
+  onboarding/ first-run welcome, guided setup and tour
+  status/     the private status page (/status) and the browser error reporter
   ui/         builder UI kit
 ```

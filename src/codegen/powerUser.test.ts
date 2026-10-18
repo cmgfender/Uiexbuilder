@@ -11,8 +11,21 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { createExtension, createProject } from '../model/factory';
 import type { ActionStep, Extension, NodeTemplate, Project, StateVar } from '../model/types';
 import { validateProject } from '../model/validate';
-import { conditionToExpr, declaredSubjectType, type ConditionSet } from '../inspector/power-conditions';
-import { rulesToExpr } from '../inspector/rules';
+import {
+  carryValue,
+  clauseProblem,
+  clauseToExpr,
+  conditionToExpr,
+  declaredSubjectType,
+  parseValueText,
+  savableCondition,
+  strictSubjectType,
+  type ConditionLiteral,
+  type ConditionOp,
+  type ConditionSet,
+  type ConditionValue,
+} from '../inspector/power-conditions';
+import { rulesToExpr, type RuleOp } from '../inspector/rules';
 import { shapeToExpr, type ListShape } from '../power/shape';
 import { formatDiagnostics, scratchDir, typecheck, writeFiles } from '../test/typecheck';
 import { generateExtensionSource, generateProjectFiles } from './index';
@@ -103,6 +116,8 @@ function buildProject(): Project {
     { id: 'c_tags', name: 'sortedTags', expr: shapeToExpr({ source: 'tags', sort: { field: ['length'], dir: 'asc', as: 'number' } }) },
     { id: 'c_api', name: 'apiItems', expr: shapeToExpr({ source: 'api.items', sort: { field: ['first name'], dir: 'desc', as: 'text' }, limit: 0 }) },
     { id: 'c_top', name: 'topOfBig', expr: shapeToExpr({ source: 'bigDeals', limit: 1 }) },
+    // HubSpot's formatted values ("$48,000.00") sorted as numbers.
+    { id: 'c_fmt', name: 'byFormattedAmount', expr: shapeToExpr({ source: 'deals', sort: { field: ['properties', 'amount'], dir: 'desc', as: 'formatted' } }) },
   ];
 
   const alertTypeRules = rulesToExpr({
@@ -221,5 +236,149 @@ describe('power-user features export type-correct TSX', () => {
   it('validates without errors', () => {
     const errors = validateProject(project).filter((i) => i.severity === 'error');
     expect(errors.map((e) => `${e.rule}: ${e.message}`)).toEqual([]);
+  });
+});
+
+describe('a check whose value doesn’t fit never breaks the exported card', () => {
+  const ext0: Pick<Extension, 'state' | 'dataSources'> = {
+    state: STATE,
+    dataSources: [
+      { id: 'd_deals', kind: 'associations', name: 'deals', toObjectType: '0-3', properties: ['dealname', 'amount'], pageLength: 25 },
+      { id: 'd_contact', kind: 'crmProperties', name: 'contact', properties: ['email', 'firstname'] },
+    ],
+  };
+  const typeOf = (s: string) => declaredSubjectType(ext0, s);
+  const strictOf = (s: string) => strictSubjectType(ext0, s);
+  const lit = (value: ConditionLiteral): ConditionValue => ({ kind: 'literal', value });
+
+  function cardWith(conditions: string[]): Project {
+    const ext = createExtension({ kind: 'card', name: 'Checks Card', content: conditions.map((condition, i) => ({ type: 'Text', text: `C${i}`, condition })) });
+    Object.assign(ext, { state: ext0.state, dataSources: ext0.dataSources });
+    return createProject('Checks App', [ext]);
+  }
+
+  it('the builder saves a half-finished check only once its value fits', () => {
+    // What the value boxes hold after clearing “count is 3” and typing “yes” for “open is …”.
+    const cleared = parseValueText('', 'eq', typeOf('count'), 3);
+    const yes = parseValueText('yes', 'eq', typeOf('open'), false);
+    const typedForMaybe = parseValueText('', 'eq', typeOf('maybe'), null);
+    expect([cleared, yes, typedForMaybe]).toEqual(['', 'yes', '']);
+    const set: ConditionSet = {
+      groups: [
+        [
+          { subject: 'count', op: 'eq', value: lit(cleared) },
+          { subject: 'search', op: 'contains', value: lit('acme') },
+        ],
+        [{ subject: 'open', op: 'eq', value: lit(yes) }],
+        [{ subject: 'maybe', op: 'eq', value: lit(typedForMaybe) }],
+      ],
+    };
+    expect(clauseProblem(set.groups[0][0], strictOf('count'))).toBe('Enter a number.');
+    expect(clauseProblem(set.groups[1][0], strictOf('open'))).toBe('Enter true or false.');
+    expect(clauseProblem(set.groups[2][0], strictOf('maybe'))).toBe('Enter a number.');
+    expect(conditionToExpr(savableCondition(set, strictOf), { typeOf })).toBe('String(search ?? "").toLowerCase().includes("acme")');
+    // Fixed: saved as typed.
+    const fixed: ConditionSet = { groups: [[{ subject: 'count', op: 'eq', value: lit(parseValueText('4', 'eq', typeOf('count'), 3)) }]] };
+    expect(conditionToExpr(savableCondition(fixed, strictOf), { typeOf })).toBe('count === 4');
+  });
+
+  it('switching to “is” on a true / false value starts at true, and a new subject reads the typed value again', () => {
+    expect(carryValue(undefined, 'eq', 'boolean', false)).toEqual(lit(true));
+    expect(carryValue(lit('yes'), 'eq', 'boolean', false)).toEqual(lit(true));
+    expect(carryValue(lit('false'), 'neq', 'boolean', false)).toEqual(lit(false));
+    expect(carryValue(lit(5), 'eq', 'string', '')).toEqual(lit('5'));
+    expect(carryValue(lit('7'), 'eq', 'number', 3)).toEqual(lit(7));
+    expect(carryValue({ kind: 'ref', expr: 'count' }, 'eq', 'boolean', false)).toEqual({ kind: 'ref', expr: 'count' });
+  });
+
+  it('validation flags exactly the fixed values the strict type-check refuses', () => {
+    const subjects = [
+      'count',
+      'maybe',
+      'search',
+      'label',
+      'open',
+      'tags',
+      'anything',
+      'deals',
+      'deals.length',
+      'dealsLoading',
+      'dealsError',
+      'contact',
+      'contact.email',
+      'context.user.email',
+      'context.user.id',
+      'context.portal.id',
+      'context.crm.objectId',
+    ];
+    const ops: ConditionOp[] = ['eq', 'neq', 'gt', 'lt'];
+    const literals: ConditionLiteral[] = ['', 'yes', 5, true, null];
+    const cases: Array<{ label: string; expr: string }> = [];
+    for (const subject of subjects) {
+      for (const op of ops) {
+        for (const value of literals) {
+          const expr = clauseToExpr({ subject, op, value: lit(value) }, { typeOf });
+          if (expr) cases.push({ label: `${subject} ${op} ${JSON.stringify(value)}`, expr });
+        }
+      }
+    }
+    const p = cardWith(cases.map((c) => c.expr));
+    const ext = p.extensions[0];
+    const nodeIndex = new Map(ext.nodes[ext.rootId].children.map((id, i) => [id, i]));
+    const flagged = new Set(validateProject(p).filter((i) => i.rule === 'condition-type').map((i) => nodeIndex.get(i.nodeId!)!));
+
+    const out = scratchDir('codegen-condition-types');
+    const files = generateProjectFiles(p);
+    writeFiles(out, files);
+    const card = files.find((f) => f.path.endsWith('.tsx'))!;
+    const lines = card.contents.split('\n');
+    const failing = new Set<number>();
+    for (const d of typecheck([path.join(out, card.path)])) {
+      if (!d.file || d.start === undefined) continue;
+      const line = lines[d.file.getLineAndCharacterOfPosition(d.start).line];
+      const i = cases.findIndex((_, k) => line.includes(`<Text>C${k}</Text>`));
+      failing.add(i);
+    }
+    const name = (set: Set<number>) => [...set].sort((a, b) => a - b).map((i) => (i < 0 ? '(unmatched diagnostic)' : cases[i].label));
+    expect(failing.size).toBeGreaterThan(10);
+    expect(name(flagged)).toEqual(name(failing));
+  });
+
+  it('validation flags exactly the Rules thresholds the strict type-check refuses', () => {
+    const subjects = ['count', 'maybe', 'search', 'label', 'open', 'tags', 'anything', 'deals', 'deals.length', 'dealsError', 'contact.email', 'dealsLoading', 'context.user.email', 'context.user.id'];
+    const ops: RuleOp[] = ['===', '!==', '>=', '<'];
+    const literals: ConditionLiteral[] = ['', 'yes', 5, true, null];
+    const cases: Array<{ label: string; expr: string }> = [];
+    for (const subject of subjects) {
+      for (const op of ops) {
+        for (const when of literals) {
+          cases.push({ label: `${subject} ${op} ${JSON.stringify(when)}`, expr: rulesToExpr({ subject, cases: [{ op, when, then: 'success' }], otherwise: 'default' }) });
+        }
+      }
+    }
+    const ext = createExtension({
+      kind: 'card',
+      name: 'Rules Card',
+      content: cases.map((c, i) => ({ type: 'Tag', props: { variant: { $expr: c.expr } }, text: `R${i}` })),
+    });
+    Object.assign(ext, { state: ext0.state, dataSources: ext0.dataSources });
+    const p = createProject('Rules App', [ext]);
+    const nodeIndex = new Map(ext.nodes[ext.rootId].children.map((id, i) => [id, i]));
+    const flagged = new Set(validateProject(p).filter((i) => i.rule === 'condition-type').map((i) => nodeIndex.get(i.nodeId!)!));
+
+    const out = scratchDir('codegen-rule-types');
+    const files = generateProjectFiles(p);
+    writeFiles(out, files);
+    const card = files.find((f) => f.path.endsWith('.tsx'))!;
+    const failing = new Set<number>();
+    for (const d of typecheck([path.join(out, card.path)])) {
+      if (!d.file || d.start === undefined) continue;
+      // The text of the Tag the problem is in comes next.
+      const m = /R(\d+)\s*<\/Tag>/.exec(d.file.text.slice(d.start));
+      failing.add(m ? Number(m[1]) : -1);
+    }
+    const name = (set: Set<number>) => [...set].sort((a, b) => a - b).map((i) => (i < 0 ? '(unmatched diagnostic)' : cases[i].label));
+    expect(failing.size).toBeGreaterThan(10);
+    expect(name(flagged)).toEqual(name(failing));
   });
 });

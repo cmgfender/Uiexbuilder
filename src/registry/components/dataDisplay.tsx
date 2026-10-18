@@ -1472,6 +1472,7 @@ export const dataDisplayComponents: ComponentDef[] = [
     parents: ['Statistics'],
     children: { mode: 'nodes', accepts: ['StatisticsTrend', 'Text'], placeholder: 'Drop a trend or text here' },
     create: () => statisticsItem('Open deals', 12, statisticsTrend('increase', '8.5%')),
+    identityProps: ['id'],
     props: [
       {
         name: 'label',

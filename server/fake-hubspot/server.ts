@@ -134,7 +134,7 @@ export function runFakeHubSpotCli(env: Record<string, string | undefined> = proc
       console.log(`Fake HubSpot is running at ${running.url} (demo portal ${env.FAKE_HUBSPOT_PORTAL_ID || DEMO_PORTAL_ID}).`);
       console.log(`  Use HUBSPOT_API_BASE=${running.url} HUBSPOT_APP_BASE=${running.url}`);
       console.log(`  HUBSPOT_CLIENT_ID=${running.clientId} HUBSPOT_CLIENT_SECRET=<demo secret>`);
-      console.log(`  Demo personal access key for "Deploy to HubSpot": ${FAKE_PERSONAL_ACCESS_KEY}`);
+      console.log(`  Demo personal access key for "Publish to HubSpot": ${FAKE_PERSONAL_ACCESS_KEY}`);
       const stop = () => {
         void running.close().then(() => process.exit(0));
       };

@@ -1989,3 +1989,7 @@ textarea.ub-insp-expr__input {
   color: var(--ub-text-2);
   font-weight: 600;
 }
+.ub-insp-rules__problem {
+  font-size: 11.5px;
+  color: var(--ub-danger);
+}

@@ -252,6 +252,7 @@ function settingsCommands(ext: Extension, selected: NodeId | null): Command[] {
       icon: SlidersHorizontal,
       subtitle: node ? `${nodeTitle(ext, node.id)} — look, text and rules (not its id)` : undefined,
       keywords: ['copy style', 'copy properties', 'format painter', 'props', 'reuse'],
+      shortcut: shortcutHint('copySettings'),
       disabledReason: node ? undefined : 'Select a component on the canvas first',
       run: ({ notify }) => {
         const c = useEditor.getState().copySettings(selected!);
@@ -265,6 +266,7 @@ function settingsCommands(ext: Extension, selected: NodeId | null): Command[] {
       icon: ClipboardPaste,
       subtitle: clip ? `From ${clip.label}` : undefined,
       keywords: ['paste style', 'paste properties', 'format painter', 'apply', 'props'],
+      shortcut: shortcutHint('pasteSettings'),
       disabledReason: !clip
         ? 'Copy the settings of a component first'
         : !targets.length

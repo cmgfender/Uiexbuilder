@@ -607,6 +607,15 @@ const ALERT_TYPES: Array<{ value: AlertType; label: string }> = [
   { value: 'tip', label: 'Tip' },
 ];
 
+/** Alert type rules start like the progress bar's color: success from 80, warning from 40, else error. */
+const ALERT_TYPE_RULES_START = {
+  cases: [
+    { op: '>=' as const, when: 80, then: 'success' },
+    { op: '>=' as const, when: 40, then: 'warning' },
+  ],
+  otherwise: 'danger',
+};
+
 const ALERT_TYPE_DEF: PropDef = {
   name: 'type',
   label: 'Type',
@@ -652,6 +661,7 @@ function AlertForm({ step, onChange, ctx }: { step: AddAlertAction; onChange: (s
           write={(r) => onChange({ ...step, alertTypeExpr: rulesToExpr(r) })}
           off={(v) => onChange(withoutExpr({ alertType: ALERT_TYPES.some((t) => t.value === v) ? (v as AlertType) : step.alertType }))}
           current={step.alertType}
+          start={ALERT_TYPE_RULES_START}
         >
           <Segmented<AlertType>
             aria-label="Alert type"

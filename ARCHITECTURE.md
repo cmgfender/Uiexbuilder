@@ -312,6 +312,50 @@ of the full file); the root id yields the `<>…</>` fragment, unknown ids `''`.
   editor and the large modal editor used by Helpers, computed values and custom code actions.
   `usePowerUi.focusHelpers()` is a one-shot request (`helpersFocusPending`) consumed by
   HelpersSection.
+* **Visual conditions** (`src/inspector/power-conditions.ts`, `power-ConditionBuilder.tsx`): an OR
+  of AND groups (like HubSpot's filter groups) stored as a plain expression (`conditionToExpr` /
+  `parseCondition`). Operators: is, is not, >, >=, <, <=, contains / doesn't contain
+  (`String(S ?? "").toLowerCase().includes(…)`), is empty / is not empty
+  (`String(S ?? "").length === 0`), is true / is false. Numeric comparisons wrap `Number()` unless
+  the subject is a non-null typed number; typed values become literals of the subject's type (CRM
+  values stay text). Code that is not of this shape stays in the code editor ("Start over with the
+  builder"). Used by Advanced › Visibility (**Show when**), the If step and list filters.
+* **Shaped lists** (`src/power/shape.ts`, `ShapeEditor.tsx`): a computed value
+  `[...(src ?? [])].filter((row) => …).sort((a, b) => …).slice(0, N).map((row) => ({ ...row, name: format }))`
+  recognised again by `parseShape`. The copy keeps hook data from being mutated by `sort` and types
+  the rows `any[]`, so callbacks on untyped fetch results pass strict TS. Formats: currency,
+  number, percent, date (UTC), relative date. Sorts compare as text, numbers, or `formatted`
+  numbers — HubSpot's formatted values such as "$48,000.00" or "45%" (`guessSortAs` picks it;
+  symbols and separators are stripped with `.replace(/[^0-9.-]/g, "")` before comparing; US-style
+  separators only). Text sorts start A → Z, numbers highest first. Fields show HubSpot property
+  labels (`fieldDisplayLabel`: **Deal name**, **Amount**, **Record ID**), the exact path as tooltip. Offered in Data › Computed, a data source's
+  **Filter & sort**, Advanced › Repeat (**Filter, sort & limit…**: creates the list and repeats
+  over it in one undo step) and the palette (`addShapedList`, `src/power/actions.ts`).
+* **SubjectPicker** (`src/inspector/power-SubjectPicker.tsx`): the shared "Based on" picker of
+  Rules, conditions and list filters; it also lists event values and the fields of repeat items
+  and event values with their current preview value.
+* **Settings and multi-selection** (`src/model/settings.ts`): store `settingsClipboard`,
+  `copySettings(id)`, `pasteSettings(ids)` (one undo step, same component type only; props incl.
+  rules and expressions, and text; never identity props — overlay `id`, input `name`, `testId` —
+  nor events, conditions, repeats or bindings). `selectedNodeIds` (empty unless 2+ are selected;
+  `selectedNodeId` stays the primary), `toggleSelection`, `selectMany`, `setPropsMany`,
+  `setTextMany`, `removeNodes(ids)` (one undo step). `select()`, inserting, switching cards and
+  delete / undo clear or prune the multi-selection. Gestures: Shift / Cmd / Ctrl-click on the
+  canvas (`Canvas.tsx`) and in Layers (`aria-multiselectable` tree, one tab stop); the overlay
+  outlines the other selected nodes (`data-testid="canvas-multi-outline"`, class `is-multi`; the
+  chip and quick toolbar stay on the primary). `Inspector` mounts `MultiInspector`
+  (`power-MultiInspector.tsx`) for 2+ selected: shared props by name / kind / options, "Different
+  on each", Reset on all, Paste settings. Shortcuts: ⌥⌘C / ⌥⌘V (matched by `e.code`, since Alt
+  changes `e.key` on macOS), Delete removes every selected component, Escape keeps only the
+  primary. The node ⋯ menu and the canvas context menu have Copy settings / Paste settings (and
+  "Paste settings onto N selected" / "Delete N selected" when right-clicking a multi-selection).
+* **Rules in actions** (`src/inspector/power-actionRules.tsx`, the same `RulesEditor`, which now
+  takes optional `node`, `nodeId` and `eventParams`): alert type (`AddAlertAction.alertTypeExpr?`,
+  additive; runtime evaluates it, codegen emits a rules ternary of alert types plainly and any other
+  expression `as any`; validation, rename and usages know it), alert title / message and the text
+  to copy (a single `{{ rules }}` segment), and a set-state value (an expression). Alert type
+  rules start ready-made like the progress bar's color (`RulesRow.start`: success from 80, warning
+  from 40, otherwise error).
 
 ## 6d. Editor integration notes
 * **Problems**: `Issue.subject` (optional) carries the value an issue is about (scope, origin,
@@ -614,8 +658,12 @@ popup /api/auth/start ──────────────▶  302 → Hub
   * `init()` sets the status: `checking`, then `unavailable` (no connector), `not-configured`
     (OAuth settings missing), `disconnected` or `connected`.
   * `connect()` opens the centred popup and accepts only the connector origin's message. A
-    BroadcastChannel and polling cover a cut-off opener. A blocked popup falls back to a
-    full-page redirect.
+    BroadcastChannel and polling cover a cut-off opener. A blocked popup no longer navigates on
+    its own: it settles as `popup_blocked`, and the UI offers **Continue in this tab**
+    (`connectInThisTab()`: the full-page sign-in, `?mode=redirect`; after a blocked **Switch
+    account** it signs out first, and it quietly drops an open window).
+  * `CONNECT_TIMINGS.stillWaitingMs` (30 s): the waiting panel then says "Still waiting for
+    HubSpot…" and opens "What does the HubSpot window show?".
   * There are also `disconnect()`, `switchPortal()` and a re-check on window focus. A
     `not_connected` answer marks the sign-in as expired.
   * Nothing sensitive is stored in the browser.
@@ -640,7 +688,20 @@ popup /api/auth/start ──────────────▶  302 → Hub
   * `ConnectDialog` (its consent body is `ConsentDetails`, reused by the guided setup), and
     `connect.css` (`ub-cn-` classes).
   * `host.ts` (`useConnectUiHost`, `setConnectResultsInline`): while the first-run screen runs
-    the sign-in itself, the top-bar button shows no result dialog / "Connected" toast.
+    the sign-in itself, the top-bar button shows no result dialog / "Connected" toast (nor its
+    waiting panel).
+  * **What did HubSpot show?** (`../signInHelp.ts` content, `ui/SignInHelp.tsx`, `ui/CopyNote.tsx`):
+    when the window closed or timed out without a result (HubSpot shows install refusals inside its
+    window and never redirects back), five choices — Acceptable Use Policy, not allowed to install
+    apps, I closed it, it closed by itself, something else — each with the fix, links, **Continue in
+    this tab** and a note to copy for whoever set up the builder or a Super Admin. Used by the
+    result dialog (`ConnectDialog`'s `TroubleDialog` / `BlockedDialog`), the waiting panel
+    (`WaitingPanel`, `useWaitingLong`) and the guided setup's Connect step (`FirstRun.tsx`, which
+    also offers **Continue in this tab** for a blocked window and "Still waiting…" help).
+    Choosing reports the kind (never the free text) to the status page (`reportSignInFeedback`);
+    `ConnectButton` reports `popup_closed` / `timeout` / `popup_blocked`, also for the inline
+    sign-in.
+  * `AccountMenu` shows **Status page** for admins of the builder (`useStatusAdmin()`).
   * Fix-it buttons: `FriendlyError.actionLabel` / `LiveDataError.actionLabel` name the fix
     (**Reconnect to grant access** for a missing permission, **Reconnect** for an expired
     sign-in); the expired toast offers **Reconnect**; property pickers offer **Reconnect to grant
@@ -692,6 +753,58 @@ popup /api/auth/start ──────────────▶  302 → Hub
 * Mock data has "Use a real record as mock data".
 * Offline, everything falls back to the built-in suggestions.
 
+### Key check before publishing (`server/core/deploy/keyCheck.ts`)
+* `POST /api/deploy/check-key` (`CONNECTOR_ROUTES.deployCheckKey`, `DeployKeyCheckRequest` →
+  `DeployKeyCheck`) exchanges the personal access key and returns, without uploading anything:
+  the key's account (`DeployKeyAccount`: id, hubName, accountType, `developerProjects` 'yes' | 'no'
+  | 'unknown' read from the exchange's scope groups, and a deep link to that account's key page,
+  respecting `HUBSPOT_APP_BASE` and EU hosts), the target account (connected, or requested in setup
+  mode) and the first `DeployKeyProblem`: `portal_mismatch`, then `portal_not_allowed`, then
+  `missing_permission`. Needs a sign-in when sign-in is set up (`not_connected` otherwise); off
+  with `ENABLE_DEPLOY=false`; rate limited (`RATE_RULES.keyCheck` per user, `keyCheckSetup` per IP
+  before sign-in is set up). Nothing is stored or echoed.
+* `startDeploy` shares `exchangeDeployKey` / `keyAccountOf`; every 403 during upload goes through
+  `keyRefusal` and becomes a `DeployKeyError` carrying `ConnectorErrorBody.error.key`:
+  `missing_scope` (named account, `requiredScopes`), `not_available` (GATED) or `forbidden`
+  (HubSpot's own message, Super Admin fix); `portal_mismatch` / `portal_not_allowed` carry the key
+  account too.
+* Browser: `src/panels/deploy/useKeyCheck.ts` checks a complete-looking key ~700 ms after pasting
+  and before Publish when that hasn't happened; each problem gets a callout with the accounts
+  involved, **Check again**, and for a missing permission **Publish anyway**. An older server
+  without the endpoint (404 / 405) just publishes. `keyAccountFrom` / `keyCheckFrom` sanitise
+  server data (http(s) links only); `failureAdvice` covers every publish refusal.
+* Fake HubSpot: key modes `gated`, `no-dev-tools`, `other-account`; a second account (87654321
+  "Other Co", `FAKE_OTHER_ACCOUNT_KEY`); a key-page form that removes / adds back Developer
+  projects (`POST /personal-access-key/<portal>/permissions`, `fakeProjects().setDeveloperProjects`);
+  stand-ins of HubSpot's in-window install refusals at `/oauth/authorize/demo-error`.
+
+### Diagnostics / status page (`server/core/diagnostics`, `src/status`)
+* Contract: `src/status/types.ts` (types and constants only: `DIAGNOSTICS_ROUTES`,
+  `STATUS_PAGE_PATH`, events, snapshot, reports). Routes: `GET /api/admin/access` (who is asking,
+  never events), `GET /api/admin/diagnostics` (admins: signed in with HubSpot, grant re-checked,
+  email in `ADMIN_EMAILS` or account in `ADMIN_PORTALS`), `POST /api/diagnostics/report`
+  (browser errors and `signin_feedback`; CSRF header, ≤ 8 KB, per-visitor and global caps).
+* Server: `log.ts` (in-memory ring of 600 events plus per-minute counters for 24 h; one row per
+  sign-in / publish updated in place; identical problems from one visitor within 10 minutes merge
+  with a count; every event also logged as `[event] {json}`), `observe.ts` (called once per `/api`
+  request by `server/core/index.ts` before finalize; never throws; sign-in start / callback matched
+  by a hash of the OAuth state; reads failure codes from `X-UIEX-Error-Code`, which failed auth
+  pages now send too), `routes.ts`, `access.ts`, `sanitize.ts`, `visitor.ts` (HMAC of the IP with a
+  daily in-memory salt, 6 hex characters). Additive: `ServerConfig.adminEmails` / `adminPortals` /
+  `buildCommit` (RENDER_GIT_COMMIT, VERCEL_GIT_COMMIT_SHA, CF_PAGES_COMMIT_SHA,
+  WORKERS_CI_COMMIT_SHA, GIT_COMMIT), `ConnectorOptions.diagnostics` / `eventLog`,
+  `Connector.diagnostics`. Node: one log per process, `LOG_EVENTS`, a 60 s sweeper that concludes
+  abandoned sign-ins. Vercel's `vercelEnv()` passes `ADMIN_EMAILS`, `ADMIN_PORTALS` and
+  `VERCEL_GIT_COMMIT_SHA`; `scripts/dev.mjs` copies them (and `LOG_EVENTS`) from `.env.local` and
+  defaults the fake / demo to `ADMIN_PORTALS=12345678`.
+* Browser: `src/main.tsx` lazy-loads `StatusPage` on `/status` (SPA fallback on every host) and
+  installs the reporter (`reporter.ts`: window `error` / `unhandledrejection`, `reportReactError`
+  — called by `EditorErrorBoundary` — and `reportSignInFeedback`; cleaned, deduplicated,
+  throttled, skipped without a connector and for the person's own card code). `explain.ts` turns
+  events into host-facing explanations reusing `connect/describe.ts`, `connect/signInHelp.ts` and
+  `panels/deploy/model.ts`; `model.ts` groups and ranks "Needs your attention". Dark tokens apply
+  only while `/status` is shown.
+
 ### Builds and tests
 * The build scripts:
   * `npm run build`: app (`dist/`) plus server bundles (`dist-server/node.mjs`,
@@ -707,8 +820,10 @@ popup /api/auth/start ──────────────▶  302 → Hub
   * `e2e-connect/` (`playwright.connect.config.ts`) runs `npm run build:app &&
     node scripts/dev.mjs --fake --prod` on :4175, with the fake on :4011. It covers sign-in,
     the sample record with live properties and associations, the custom-property picker,
-    disconnect, deploy (success, failed build, wrong key) and the unavailable / not-configured
-    states. `CONNECT_SCREENSHOTS=<dir>` saves screenshots of the main screens.
+    disconnect, deploy (success, failed build, wrong key), the unavailable / not-configured
+    states, HubSpot saying no (`trouble.spec.ts`: install refusals, blocked window, key without
+    Developer projects, other account, 403) and the status page (`status.spec.ts`).
+    `CONNECT_SCREENSHOTS=<dir>` saves screenshots of the main screens.
 
 ## 9. First-run experience (`src/onboarding`)
 
@@ -798,3 +913,77 @@ For a brand-new, non-technical HubSpot admin opening the hosted builder.
 * `server/fake-hubspot/handler.ts`: demo stand-in pages (see Fake HubSpot).
 * Copy: the design-mode flag reads **Hidden right now** (was “Hidden by condition”); the
   inspector's “Advanced: project files” section starts collapsed.
+
+### Contract changes (editor ease of use, all additive unless noted)
+* `src/registry/types.ts`: `EnumOption.swatch` (`OptionSwatch { fill, border?, text? }`), an enum
+  `PropType` `display?: 'spacing' | 'direction'`, `ComponentDef.groupOrder?: PropGroup[]`,
+  `ComponentDef.tips?: ComponentTip[]` and `TipAction` (`rules` | `data` | `event` | `condition` |
+  `repeat` | `binding` | `overlay`). `src/registry/constants.ts`: `HS_SWATCH` and plain labels on
+  the shared size / justify / align option lists. HubSpot prop names, enum values and the order of
+  props (codegen emits them in definition order) are unchanged; only labels, descriptions, groups
+  and inspector-only metadata changed. Flex is labelled **Layout box** and Inline **Inline row**
+  (types unchanged).
+* `src/dnd/dragState.ts`: `BlockAnchor`, `setBlockAnchor()`, `getBlockAnchor()`;
+  `smartInsertTarget` puts the next click-to-add after a just-inserted block while its main
+  component is still selected (the anchor clears when the selection changes).
+* `src/templates/actions.ts`: `insertBlock` selects `mainComponentOf(ext, rootId)` (the progress
+  bar of *Progress tracker*, the table of *Associated records* …; a wrapper of only layout and text
+  stays selected). Its return value is still the block root id; the toast names the selected part.
+* Inspector: `InspectorSection.forceOpen`; new modules `nodeHints.ts` (what each child does, for
+  the **Inside this …** list), `tips.ts` (**You can also**), `settingsFilter.ts` (**Filter
+  settings**, 8+ settings; `/` focuses it from anywhere in the inspector except text fields),
+  `requests.ts` (`usePropRequests`, `revealInInspector`: tips open Rules / fx / Events /
+  Advanced at the right place) and `prefs.ts` (localStorage `uiex-builder:inspector-help`, the
+  "Hide help text under settings" choice). `PropertiesTab` exports `focusSettingsFilter`,
+  `hasSettingsFilter`, `componentGroupOrder`, `insideTitle`, `runTip`; `PropRow` exports
+  `propNameHint`. Setting rows show the exact prop name when it differs from the label, help text
+  linked with `aria-describedby`, and the fx / Rules / reset icons at 60% until hovered or focused.
+  Visual enum choices are native radio groups (swatches, spacing samples, direction arrows).
+* Canvas: a selected container draws `data-testid="canvas-child-outline"` around each direct child
+  and its chip reads "· N inside". The children section is **Inside this …** with **Add inside**.
+
+### Contract changes (integration of the four areas, 2026-10-18)
+* `src/model/store.ts`: `removeNodes(ids)`; `src/shell/actions.ts`: `removeNodesSafe(ids, notify)`.
+* `src/shell/shortcuts.ts`: `SHORTCUTS` gains `copySettings` (Alt+Cmd+C), `pasteSettings`
+  (Alt+Cmd+V) and `multiSelect` (Shift+Click, documentation only); `delete` and `selectParent`
+  descriptions mention multi-selection.
+* `src/shell/LayersPanel.tsx`: `RowProps.onClick(row, event)`; only the focusable (primary) row is
+  a tab stop.
+* `server/core/rateLimit.ts`: `RATE_RULES.keyCheck` / `keyCheckSetup`; `RateRule.bucket` — sign-in
+  start and callback now count in their own buckets (they shared one, so every sign-in used up two
+  of the 20 attempts per address; the connector e2e suite ran into it). `server/core/authPage.ts`:
+  failure pages send `X-UIEX-Error-Code`.
+* `src/power/shape.ts`: `SortAs` gains `'formatted'`; `src/power/ShapeEditor.tsx`:
+  `fieldDisplayLabel()`. `src/inspector/power-actionRules.tsx`: `RulesRowProps.start`.
+* Not done (optional, noted in STATUS.md): Rules on a status text based on a sibling progress
+  bar's percentage (`ruleSubjectsFor` stays per node: a copied bar expression would not follow
+  later changes of the bar); the empty-container placeholder still says "Drop components here".
+
+### Contract changes (review fixes, 2026-10-18, all additive unless noted)
+* `src/registry/types.ts`: `ComponentDef.identityProps` — props that identify a component among its
+  siblings (Tab `tabId`, StatisticsItem `id`). `src/model/settings.ts` `identityProps()` includes
+  them, so Copy / Paste settings and multi-edit never copy or change them.
+* `src/inspector/power-conditions.ts`: `strictSubjectType` (a subject's type as the exported card's
+  TypeScript sees it), `subjectMayBeNull`, `literalTypeMismatch` / `rawComparisonMismatch` /
+  `expectedLiteralText` (what a fixed value must be to compile), `literalComparisons(code)` (every
+  whole `ref op literal` comparison in an expression), `carryValue`, `savableCondition`. Changed:
+  `clauseProblem` also reports what the type-check refuses; text thresholds are written
+  `String(S ?? "") > "x"` (recognised again), so a value that may be null still compiles.
+  `ConditionBuilder` saves a check only once its value fits (like a check still being chosen).
+* `src/model/validate.ts`: rule `condition-type` (error) — any expression (Show when, If, Rules,
+  props, templates, action values) that compares a typed value with a fixed value of another type,
+  or a value that starts empty with more / less than. `CodeChecker.types`. Its accuracy is pinned by
+  two type-check matrices in `src/codegen/powerUser.test.ts`.
+* Status page: `POST /api/diagnostics/report` needs a trusted `Origin` header;
+  `cleanClientError(raw, keepOrigins)` replaces links outside the builder with `[link]` and keeps
+  only plain page paths. `DiagnosticsLog`: browser reports live in their own buffer
+  (`clientCapacity`, 100); after 5 distinct rows per visitor / 30 overall per hour the rest are
+  counted in one `client.overflow` row (`MORE_CLIENT_REPORTS`); at most 500 sign-ins are followed
+  (`maxPendingSignIns`); an unanswered sign-in whose row is gone is only counted, and one visitor's
+  close together are one row with a count; a visitor's changed answer replaces the last one within
+  5 minutes (the browser's own `popup_closed` / `timeout` never do). `ClientErrorDetails.overflow`,
+  `Explanation.unverified` ("Reported by a browser · not verified"; ranked with weight 1).
+  `SignInHelp` reports the settled answer (`SIGN_IN_FEEDBACK_SETTLE_MS`, or at once when the person
+  acts on the fix or the help closes). The "Updated …" line is no longer a live region.
+* Canvas: the floating toolbar's trash button deletes every selected component
+  (`removeNodesSafe`) and says **Delete N selected**.

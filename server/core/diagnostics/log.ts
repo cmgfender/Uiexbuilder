@@ -7,6 +7,12 @@
  *   updated when it ends (signed in / failed / never came back; published / failed).
  * - Identical problems from the same visitor within 10 minutes are merged into one row with a
  *   count ("refused 4 times"), so one busy visitor can't push everything else out.
+ * - Errors reported by browsers are untrusted (anyone can send one): they live in their own,
+ *   smaller buffer so they can't push sign-ins and publishes out, and after a few distinct reports
+ *   per visitor (or from everyone) within an hour the rest are only counted, in one "more reports"
+ *   row.
+ * - Sign-ins in progress are capped too; one that is dropped, or that never comes back after its
+ *   row is gone, is only counted (a burst of fake sign-in starts can't flood the page later).
  * - Every event (and every update) is also written as one JSON log line starting with `[event]`,
  *   so the host's own logs stay searchable after a restart.
  *
@@ -26,7 +32,18 @@ export const DIAGNOSTICS_DEFAULTS = {
   publishIdleMs: 30 * 60_000,
   /** Counters are kept this long. */
   countersMs: 24 * 60 * 60_000,
+  /** Browser error reports kept (their own buffer, on top of `capacity`). */
+  clientCapacity: 100,
+  /** Distinct browser error rows per visitor per hour; later reports go into one "more" row. */
+  clientRowsPerVisitor: 5,
+  /** Distinct browser error rows from everyone per hour. */
+  clientRowsPerHour: 30,
+  /** Sign-ins followed at once (the oldest is no longer followed beyond this). */
+  maxPendingSignIns: 500,
 } as const;
+
+/** The message of the row that counts a visitor's further browser error reports. */
+export const MORE_CLIENT_REPORTS = 'More error reports (counted, not kept one by one)';
 
 /** What a caller records (id, count and timestamps are filled in). */
 export type EventInput = Omit<DiagnosticEvent, 'id' | 'at' | 'lastAt' | 'count'> & { at?: number };
@@ -36,6 +53,10 @@ const MERGEABLE = new Set<DiagnosticKind>(['api.error', 'client.error', 'publish
 
 /** Feedback that only says how the window ended (a later, more specific answer replaces it). */
 const VAGUE_FEEDBACK = new Set<SignInFeedbackKind>(['popup_closed', 'timeout', 'nothing']);
+/** What the browser itself says (not the visitor's answer): never replaces their answer. */
+const AUTOMATIC_FEEDBACK = new Set<SignInFeedbackKind>(['popup_closed', 'timeout', 'popup_blocked']);
+/** A visitor who changes their answer within this long changes it on the same row. */
+const FEEDBACK_CHANGE_MS = 5 * 60_000;
 
 export function emptyCounters(): DiagnosticCounters {
   return {
@@ -56,7 +77,7 @@ export function emptyCounters(): DiagnosticCounters {
 function addCount(c: DiagnosticCounters, e: Pick<DiagnosticEvent, 'kind' | 'outcome' | 'status'>, n: number): void {
   switch (e.kind) {
     case 'signin.started':
-      c.signInStarted += n;
+      if (e.outcome === 'pending') c.signInStarted += n;
       break;
     case 'signin.completed':
       c.signInCompleted += n;
@@ -132,6 +153,8 @@ export interface PublishJob {
 export interface DiagnosticsLogOptions {
   now: () => number;
   capacity?: number;
+  /** Browser error reports kept (see DIAGNOSTICS_DEFAULTS.clientCapacity). */
+  clientCapacity?: number;
   abandonAfterMs?: number;
   /** Where `[event]` lines go (null: nowhere). */
   emit?: ((line: string) => void) | null;
@@ -140,6 +163,7 @@ export interface DiagnosticsLogOptions {
 export class DiagnosticsLog {
   readonly startedAt: number;
   readonly capacity: number;
+  readonly clientCapacity: number;
   readonly abandonAfterMs: number;
   /** Events dropped because the buffer was full. */
   dropped = 0;
@@ -147,6 +171,10 @@ export class DiagnosticsLog {
   private readonly emit: ((line: string) => void) | null;
   /** Oldest first; an updated event moves to the end. */
   private events: DiagnosticEvent[] = [];
+  /** Browser error reports, kept apart (same order). */
+  private clientEvents: DiagnosticEvent[] = [];
+  /** When each browser error row of the last hour was made, and for whom. */
+  private clientRows: Array<{ at: number; visitor?: string }> = [];
   private byId = new Map<number, DiagnosticEvent>();
   private seq = 0;
   private minutes = new Map<number, DiagnosticCounters>();
@@ -158,6 +186,7 @@ export class DiagnosticsLog {
   constructor(opts: DiagnosticsLogOptions) {
     this.now = opts.now;
     this.capacity = Math.max(10, opts.capacity ?? DIAGNOSTICS_DEFAULTS.capacity);
+    this.clientCapacity = Math.max(10, opts.clientCapacity ?? DIAGNOSTICS_DEFAULTS.clientCapacity);
     this.abandonAfterMs = opts.abandonAfterMs ?? DIAGNOSTICS_DEFAULTS.abandonAfterMs;
     this.emit = opts.emit ?? null;
     this.startedAt = this.now();
@@ -190,25 +219,57 @@ export class DiagnosticsLog {
     for (const minute of this.minutes.keys()) if (minute < oldest) this.minutes.delete(minute);
   }
 
+  /** The buffer an event of this kind lives in. */
+  private listOf(kind: DiagnosticKind): DiagnosticEvent[] {
+    return kind === 'client.error' ? this.clientEvents : this.events;
+  }
+
   private touch(e: DiagnosticEvent): void {
-    const i = this.events.indexOf(e);
-    if (i >= 0 && i !== this.events.length - 1) {
-      this.events.splice(i, 1);
-      this.events.push(e);
+    const list = this.listOf(e.kind);
+    const i = list.indexOf(e);
+    if (i >= 0 && i !== list.length - 1) {
+      list.splice(i, 1);
+      list.push(e);
     }
+  }
+
+  /**
+   * A browser error report that would be a new row: once a visitor (or everyone) has several
+   * distinct reports within the hour, the rest are counted in one "more reports" row instead.
+   */
+  private limitClientRows(fields: EventInput, at: number): EventInput {
+    if (fields.kind !== 'client.error' || fields.client?.overflow) return fields;
+    const hourAgo = at - 60 * 60_000;
+    // Rows made in the last hour (whether or not still kept: at most clientRowsPerHour).
+    while (this.clientRows.length && this.clientRows[0].at <= hourAgo) this.clientRows.shift();
+    const mine = this.clientRows.filter((r) => r.visitor === fields.visitor).length;
+    const visitorFull = mine >= DIAGNOSTICS_DEFAULTS.clientRowsPerVisitor;
+    if (!visitorFull && this.clientRows.length < DIAGNOSTICS_DEFAULTS.clientRowsPerHour) {
+      this.clientRows.push({ at, visitor: fields.visitor });
+      return fields;
+    }
+    return {
+      kind: 'client.error',
+      outcome: fields.outcome,
+      visitor: visitorFull ? fields.visitor : undefined,
+      client: { source: 'error', message: MORE_CLIENT_REPORTS, overflow: true },
+    };
   }
 
   /** Records an event (merged into an identical recent one when it is a repeat). */
   record(input: EventInput): DiagnosticEvent {
     const at = input.at ?? this.now();
-    const fields: EventInput = { ...input };
+    let fields: EventInput = { ...input };
     delete fields.at;
+    const list = this.listOf(fields.kind);
     if (MERGEABLE.has(fields.kind)) {
-      const key = mergeKey(fields);
-      for (let i = this.events.length - 1, seen = 0; i >= 0 && seen < 50; i--, seen++) {
-        const e = this.events[i];
-        if (at - e.lastAt > DIAGNOSTICS_DEFAULTS.mergeWindowMs) break;
-        if (mergeKey(e) !== key) continue;
+      let key = mergeKey(fields);
+      if (!this.findMergeable(list, key, at)) {
+        fields = this.limitClientRows(fields, at);
+        key = mergeKey(fields);
+      }
+      const e = this.findMergeable(list, key, at);
+      if (e) {
         e.count += 1;
         e.lastAt = Math.max(e.lastAt, at);
         if (fields.durationMs !== undefined) e.durationMs = fields.durationMs;
@@ -220,16 +281,27 @@ export class DiagnosticsLog {
       }
     }
     const event: DiagnosticEvent = { id: ++this.seq, ...fields, at, lastAt: at, count: 1 };
-    this.events.push(event);
+    list.push(event);
     this.byId.set(event.id, event);
-    while (this.events.length > this.capacity) {
-      const old = this.events.shift()!;
+    const max = list === this.clientEvents ? this.clientCapacity : this.capacity;
+    while (list.length > max) {
+      const old = list.shift()!;
       this.byId.delete(old.id);
       this.dropped += 1;
     }
     this.count(event, at);
     this.log(event, false);
     return event;
+  }
+
+  /** A recent row identical to `key` (newest first, within the merge window). */
+  private findMergeable(list: DiagnosticEvent[], key: string, at: number): DiagnosticEvent | null {
+    for (let i = list.length - 1, seen = 0; i >= 0 && seen < 50; i--, seen++) {
+      const e = list[i];
+      if (at - e.lastAt > DIAGNOSTICS_DEFAULTS.mergeWindowMs) break;
+      if (mergeKey(e) === key) return e;
+    }
+    return null;
   }
 
   /**
@@ -256,11 +328,11 @@ export class DiagnosticsLog {
 
   /** Newest first (by last update). */
   list(): DiagnosticEvent[] {
-    return [...this.events].sort((a, b) => b.lastAt - a.lastAt || b.id - a.id).map((e) => ({ ...e, client: e.client ? { ...e.client } : undefined }));
+    return [...this.events, ...this.clientEvents].sort((a, b) => b.lastAt - a.lastAt || b.id - a.id).map((e) => ({ ...e, client: e.client ? { ...e.client } : undefined }));
   }
 
   get size(): number {
-    return this.events.length;
+    return this.events.length + this.clientEvents.length;
   }
 
   /** Counters for events in the last `ms` milliseconds (minute resolution). */
@@ -280,6 +352,17 @@ export class DiagnosticsLog {
   signInStarted(key: string, input: { visitor?: string; mode?: 'popup' | 'redirect' }): DiagnosticEvent {
     const event = this.record({ kind: 'signin.started', outcome: 'pending', visitor: input.visitor, mode: input.mode });
     this.signIns.set(key, { eventId: event.id, at: event.lastAt, visitor: input.visitor, mode: input.mode });
+    // Too many at once (a flood of sign-in starts): the oldest is no longer followed, quietly — it
+    // will never show up as "never came back".
+    while (this.signIns.size > DIAGNOSTICS_DEFAULTS.maxPendingSignIns) {
+      const [oldKey, old] = this.signIns.entries().next().value!;
+      this.signIns.delete(oldKey);
+      const row = this.byId.get(old.eventId);
+      if (old.concludedAt === undefined && row?.kind === 'signin.started' && row.outcome === 'pending') {
+        row.outcome = 'info';
+        row.code = 'not_followed';
+      }
+    }
     return event;
   }
 
@@ -314,7 +397,7 @@ export class DiagnosticsLog {
       }
       if (now - p.at < this.abandonAfterMs) continue;
       this.signIns.delete(key);
-      this.abandon(p, p.at + this.abandonAfterMs, this.abandonAfterMs);
+      this.abandonUnanswered(p, p.at + this.abandonAfterMs);
     }
     for (const [key, job] of this.jobs) {
       if (now - job.updatedAt < DIAGNOSTICS_DEFAULTS.publishIdleMs || !this.jobs.has(key)) continue;
@@ -327,6 +410,46 @@ export class DiagnosticsLog {
   private abandon(p: PendingSignIn, at: number, durationMs: number | undefined): void {
     const patch = { kind: 'signin.abandoned' as const, outcome: 'warning' as const, durationMs, feedback: p.feedback };
     if (!this.update(p.eventId, patch, at)) this.record({ ...patch, at, visitor: p.visitor, mode: p.mode });
+  }
+
+  /**
+   * A sign-in that never came back and that nobody said anything about. Several from one visitor
+   * close together are one row with a count; one whose row is already gone is only counted (a
+   * burst of sign-in starts can't push the real events out ten minutes later).
+   */
+  private abandonUnanswered(p: PendingSignIn, at: number): void {
+    const patch = { kind: 'signin.abandoned' as const, outcome: 'warning' as const };
+    const own = this.byId.get(p.eventId);
+    const twin = p.visitor ? this.recentAbandoned(p.visitor, at, p.eventId) : null;
+    if (!own || twin) {
+      if (own) this.remove(own);
+      if (twin) {
+        twin.count += 1;
+        twin.lastAt = Math.max(twin.lastAt, at);
+        this.touch(twin);
+        this.log(twin, true);
+      }
+      this.count(patch, at);
+      return;
+    }
+    this.update(p.eventId, { ...patch, durationMs: this.abandonAfterMs, feedback: p.feedback }, at);
+  }
+
+  /** The visitor's latest "never came back" row without an answer, from the last few minutes. */
+  private recentAbandoned(visitor: string, at: number, except: number): DiagnosticEvent | null {
+    for (let i = this.events.length - 1; i >= 0; i--) {
+      const e = this.events[i];
+      if (at - e.lastAt > DIAGNOSTICS_DEFAULTS.mergeWindowMs) break;
+      if (e.id !== except && e.kind === 'signin.abandoned' && e.visitor === visitor && (!e.feedback || AUTOMATIC_FEEDBACK.has(e.feedback))) return e;
+    }
+    return null;
+  }
+
+  private remove(e: DiagnosticEvent): void {
+    const list = this.listOf(e.kind);
+    const i = list.indexOf(e);
+    if (i >= 0) list.splice(i, 1);
+    this.byId.delete(e.id);
   }
 
   /**
@@ -350,12 +473,17 @@ export class DiagnosticsLog {
         this.abandon(p, now, now - p.at);
         return this.byId.get(p.eventId) ?? this.events[this.events.length - 1];
       }
-      // Refine the visitor's latest sign-in that ended without coming back.
+      // Refine the visitor's latest sign-in that ended without coming back: a vague answer gets
+      // their specific one; a specific one changes when they change their mind soon after (the
+      // latest answer counts, not every choice they looked at).
       for (let i = this.events.length - 1; i >= 0; i--) {
         const e = this.events[i];
         if (now - e.lastAt > 30 * 60_000) break;
         if (e.kind !== 'signin.abandoned' || e.visitor !== visitor) continue;
-        if (e.feedback && !VAGUE_FEEDBACK.has(e.feedback)) break;
+        if (e.feedback && !VAGUE_FEEDBACK.has(e.feedback)) {
+          if (now - e.lastAt > FEEDBACK_CHANGE_MS) break;
+          if (AUTOMATIC_FEEDBACK.has(kind) || e.feedback === kind) return e;
+        }
         const updated = this.update(e.id, { kind: e.kind, outcome: e.outcome, feedback: kind }, now);
         if (updated) return updated;
       }

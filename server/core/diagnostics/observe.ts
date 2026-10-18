@@ -139,7 +139,7 @@ export class Diagnostics {
 
   constructor(opts: DiagnosticsOptions = {}) {
     this.now = opts.now ?? (() => Date.now());
-    this.log = new DiagnosticsLog({ now: this.now, capacity: opts.capacity, abandonAfterMs: opts.abandonAfterMs, emit: opts.emit });
+    this.log = new DiagnosticsLog({ now: this.now, capacity: opts.capacity, clientCapacity: opts.clientCapacity, abandonAfterMs: opts.abandonAfterMs, emit: opts.emit });
     this.visitors = new VisitorIds(this.now);
     this.singleProcess = opts.singleProcess ?? false;
   }
@@ -394,7 +394,7 @@ export class Diagnostics {
         adminEmailCount: config.adminEmails?.length ?? 0,
         adminPortals: [...(config.adminPortals ?? [])],
       },
-      capacity: { max: this.log.capacity, kept: this.log.size, dropped: this.log.dropped },
+      capacity: { max: this.log.capacity + this.log.clientCapacity, kept: this.log.size, dropped: this.log.dropped },
       abandonAfterMs: this.log.abandonAfterMs,
       summary: { lastHour: this.log.counters(60 * 60_000), lastDay: this.log.counters(24 * 60 * 60_000) },
       inProgress: { signIns: this.log.pendingSignIns, publishes: this.log.pendingPublishes },

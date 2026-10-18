@@ -18,10 +18,13 @@ import {
   PencilLine,
   Scissors,
   Shapes,
+  SlidersHorizontal,
   Trash2,
 } from 'lucide-react';
+import { canPasteSettings } from '../model/settings';
 import { selectActiveExtension, useEditor } from '../model/store';
-import { pasteAt } from '../shell/actions';
+import { pasteAt, removeNodesSafe } from '../shell/actions';
+import { shortcutLabel } from '../shell/shortcuts';
 import { toTemplate } from '../model/tree';
 import { getComponent } from '../registry';
 import { saveUserBlock } from '../templates';
@@ -63,6 +66,10 @@ export function nodeMenuItems(nodeId: string, surface: HTMLElement | null, notif
   const caps = nodeCapabilities(ext, nodeId);
   if (!caps) return [];
   const { locked } = caps;
+  // Right-clicking one of several selected components acts on all of them where that makes sense.
+  const multi = st.selectedNodeIds.length > 1 && st.selectedNodeIds.includes(nodeId) ? st.selectedNodeIds : null;
+  const clip = st.settingsClipboard;
+  const pasteTargets = (multi ?? [nodeId]).filter((id) => canPasteSettings(clip, ext.nodes[id]));
   const items: MenuItem[] = [];
   if (caps.isText) {
     items.push({
@@ -97,13 +104,41 @@ export function nodeMenuItems(nodeId: string, surface: HTMLElement | null, notif
       // Explains a refused paste (wrong place, component not available in this location).
       onSelect: () => pasteAt(nodeId, notify),
     },
+    multi
+      ? {
+          label: `Delete ${multi.length} selected`,
+          icon: icon(<Trash2 size={ICON} aria-hidden />),
+          shortcut: 'Del',
+          danger: true,
+          onSelect: () => removeNodesSafe(multi, notify),
+        }
+      : {
+          label: locked ? 'Delete (locked)' : 'Delete',
+          icon: icon(<Trash2 size={ICON} aria-hidden />),
+          shortcut: 'Del',
+          danger: true,
+          disabled: locked,
+          onSelect: () => deleteNode(nodeId),
+        },
+    { label: '', separator: true },
     {
-      label: locked ? 'Delete (locked)' : 'Delete',
-      icon: icon(<Trash2 size={ICON} aria-hidden />),
-      shortcut: 'Del',
-      danger: true,
-      disabled: locked,
-      onSelect: () => deleteNode(nodeId),
+      label: 'Copy settings',
+      icon: icon(<SlidersHorizontal size={ICON} aria-hidden />),
+      shortcut: shortcutLabel('copySettings'),
+      onSelect: () => {
+        const c = useEditor.getState().copySettings(nodeId);
+        if (c) notify?.(`Copied the settings of ${c.label}`);
+      },
+    },
+    {
+      label: multi ? `Paste settings onto ${multi.length} selected` : 'Paste settings',
+      icon: icon(<ClipboardPaste size={ICON} aria-hidden />),
+      shortcut: shortcutLabel('pasteSettings'),
+      disabled: !pasteTargets.length,
+      onSelect: () => {
+        const n = useEditor.getState().pasteSettings(pasteTargets);
+        notify?.(n ? `Pasted the settings of ${clip!.label} onto ${n} component${n === 1 ? '' : 's'}` : 'They already have these settings');
+      },
     },
     { label: '', separator: true },
   );

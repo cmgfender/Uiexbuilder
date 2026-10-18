@@ -13,6 +13,7 @@ import { ConditionBuilder } from '../inspector/power-ConditionBuilder';
 import { SubjectPicker, type SubjectChoice } from '../inspector/power-SubjectPicker';
 import { safeEvaluate } from '../inspector/scope';
 import { cx, IconButton } from '../ui';
+import { humanizeProperty, propertyLabel } from '../panels/crmProperties';
 import {
   accessor,
   CURRENCIES,
@@ -30,6 +31,7 @@ import {
   type FormatKind,
   type ListShape,
   type ShapeFormat,
+  type SortAs,
 } from './shape';
 import './power.css';
 
@@ -99,10 +101,13 @@ export function ShapeEditor({ ext, shape, onChange, computedId, nodeId, name, it
 
   const declared = useMemo(() => sourceProperties(ext, shape.source), [ext, shape.source]);
   const fields = useMemo(() => rowFields(sourceRows ?? [], declared), [sourceRows, declared]);
+  // Plain names for the fields ("Deal name", "Amount"); the exact path is the option's tooltip.
+  const objectType = useMemo(() => sourceObjectType(ext, shape.source), [ext, shape.source]);
+  const label = (f: string[]) => fieldDisplayLabel(f, objectType);
   const fieldChoices: SubjectChoice[] = fields.map((f) => {
     const sample = sourceRows?.length ? fieldValue(sourceRows[0], f) : undefined;
     return {
-      label: fieldLabel(f),
+      label: label(f),
       expr: `${ROW}${accessor(f)}`,
       detail: sample === undefined ? undefined : sample === null || sample === '' ? 'empty in row 1' : `“${clip(cell(sample), 22)}” in row 1`,
     };
@@ -122,14 +127,14 @@ export function ShapeEditor({ ext, shape, onChange, computedId, nodeId, name, it
   const columns = useMemo(() => {
     const cols: Array<{ label: string; get: (row: unknown) => unknown }> = [];
     const labelField = fields.find((f) => LABEL_KEY_RE.test(f[f.length - 1] ?? '')) ?? fields.find((f) => f[0] === 'properties') ?? fields[0];
-    if (labelField) cols.push({ label: fieldLabel(labelField), get: (r) => fieldValue(r, labelField) });
+    if (labelField) cols.push({ label: fieldDisplayLabel(labelField, objectType), get: (r) => fieldValue(r, labelField) });
     if (shape.sort && (!labelField || fieldKey(shape.sort.field) !== fieldKey(labelField))) {
       const f = shape.sort.field;
-      cols.push({ label: fieldLabel(f), get: (r) => fieldValue(r, f) });
+      cols.push({ label: fieldDisplayLabel(f, objectType), get: (r) => fieldValue(r, f) });
     }
     for (const fm of shape.formats ?? []) cols.push({ label: fm.name, get: (r) => fieldValue(r, [fm.name]) });
     return cols.slice(0, 3);
-  }, [fields, shape.sort, shape.formats]);
+  }, [fields, shape.sort, shape.formats, objectType]);
 
   const formats = shape.formats ?? [];
   const setFormat = (i: number, patch: Partial<ShapeFormat>) =>
@@ -196,16 +201,18 @@ export function ShapeEditor({ ext, shape, onChange, computedId, nodeId, name, it
             onChange={(e) => {
               if (!e.target.value) return update({ sort: undefined });
               const field = fieldByKey(e.target.value);
-              update({ sort: { field, dir: shape.sort?.dir ?? 'desc', as: guessSortAs(sourceRows ?? [], field) } });
+              const as = guessSortAs(sourceRows ?? [], field);
+              // Numbers start highest first; text starts A → Z.
+              update({ sort: { field, dir: shape.sort && (shape.sort.as === 'text') === (as === 'text') ? shape.sort.dir : as === 'text' ? 'asc' : 'desc', as } });
             }}
           >
             <option value="">As they come</option>
             {fields.map((f) => (
-              <option key={fieldKey(f)} value={fieldKey(f)}>
-                {fieldLabel(f)}
+              <option key={fieldKey(f)} value={fieldKey(f)} title={fieldLabel(f)}>
+                {label(f)}
               </option>
             ))}
-            {shape.sort && !fields.some((f) => fieldKey(f) === sortValue) && <option value={sortValue}>{fieldLabel(shape.sort.field)}</option>}
+            {shape.sort && !fields.some((f) => fieldKey(f) === sortValue) && <option value={sortValue}>{label(shape.sort.field)}</option>}
           </select>
           {shape.sort && (
             <select
@@ -213,12 +220,13 @@ export function ShapeEditor({ ext, shape, onChange, computedId, nodeId, name, it
               aria-label="Sort order"
               value={`${shape.sort.as}:${shape.sort.dir}`}
               onChange={(e) => {
-                const [as, dir] = e.target.value.split(':') as ['text' | 'number', 'asc' | 'desc'];
+                const [as, dir] = e.target.value.split(':') as [SortAs, 'asc' | 'desc'];
                 update({ sort: { ...shape.sort!, as, dir } });
               }}
             >
-              <option value="number:desc">High → low</option>
-              <option value="number:asc">Low → high</option>
+              {/* Formatted numbers ("$48,000.00") keep comparing as numbers. */}
+              <option value={`${shape.sort.as === 'formatted' ? 'formatted' : 'number'}:desc`}>High → low</option>
+              <option value={`${shape.sort.as === 'formatted' ? 'formatted' : 'number'}:asc`}>Low → high</option>
               <option value="text:asc">A → Z</option>
               <option value="text:desc">Z → A</option>
             </select>
@@ -278,11 +286,11 @@ export function ShapeEditor({ ext, shape, onChange, computedId, nodeId, name, it
                 }}
               >
                 {fields.map((fl) => (
-                  <option key={fieldKey(fl)} value={fieldKey(fl)}>
-                    {fieldLabel(fl)}
+                  <option key={fieldKey(fl)} value={fieldKey(fl)} title={fieldLabel(fl)}>
+                    {label(fl)}
                   </option>
                 ))}
-                {!fields.some((fl) => fieldKey(fl) === fieldKey(f.field)) && <option value={fieldKey(f.field)}>{fieldLabel(f.field)}</option>}
+                {!fields.some((fl) => fieldKey(fl) === fieldKey(f.field)) && <option value={fieldKey(f.field)}>{label(f.field)}</option>}
               </select>
               <select
                 className="ub-select"
@@ -402,4 +410,20 @@ export function ShapeEditor({ ext, shape, onChange, computedId, nodeId, name, it
       )}
     </div>
   );
+}
+
+/** The CRM object type of a list data source (for property labels), if it is one. */
+function sourceObjectType(ext: Extension, source: string): string | null {
+  const ds = ext.dataSources.find((d) => d.name === source.trim());
+  if (ds?.kind === 'associations') return ds.toObjectType;
+  if (ds?.kind === 'crmSearch') return ds.objectType;
+  return null;
+}
+
+/** "Amount" for properties.amount, "Record ID" for toObjectId / id, else a humanised name. */
+export function fieldDisplayLabel(path: string[], objectType: string | null = null): string {
+  const last = path[path.length - 1] ?? '';
+  if (path.length === 2 && path[0] === 'properties') return propertyLabel(last, [objectType]);
+  if (path.length === 1 && (last === 'toObjectId' || last === 'id' || last === 'objectId')) return 'Record ID';
+  return humanizeProperty(last) || fieldLabel(path);
 }

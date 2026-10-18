@@ -81,6 +81,7 @@ export function LayersPanel() {
   const toast = useToast();
   const ext = useActiveExtension();
   const selectedId = useEditor((s) => s.selectedNodeId);
+  const multiIds = useEditor((s) => s.selectedNodeIds);
   const hoveredId = useEditor((s) => s.hoveredNodeId);
   const hasClipboard = useEditor((s) => s.clipboard !== null);
   const [overrides, setOverrides] = useState<ExpandOverrides>({});
@@ -451,18 +452,24 @@ export function LayersPanel() {
   const onRowContextMenu = useCallback((row: LayerRow, e: MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
     if (row.kind !== 'node') return;
-    useEditor.getState().select(row.nodeId);
+    // Right-clicking one of several selected layers keeps them all selected.
+    if (!useEditor.getState().selectedNodeIds.includes(row.nodeId)) useEditor.getState().select(row.nodeId);
     setMenu({ x: e.clientX, y: e.clientY, id: row.nodeId });
   }, []);
 
   const onRowClick = useCallback(
-    (row: LayerRow) => {
+    (row: LayerRow, e?: MouseEvent<HTMLDivElement>) => {
       if (row.kind === 'slot') {
         setExpanded(row.key, !row.expanded);
         return;
       }
       const state = useEditor.getState();
       if (state.mode !== 'design') state.setMode('design');
+      // Shift / Cmd / Ctrl-click adds the layer to the selection (or takes it out again).
+      if (e && (e.shiftKey || e.metaKey || e.ctrlKey)) {
+        state.toggleSelection(row.nodeId);
+        return;
+      }
       state.select(row.nodeId);
     },
     [setExpanded],
@@ -490,6 +497,7 @@ export function LayersPanel() {
         className="ub-sh-lyr-tree ub-scroll"
         role="tree"
         aria-label="Layers"
+        aria-multiselectable="true"
         data-shortcuts-scope=""
         ref={treeRef}
         onKeyDown={onTreeKeyDown}
@@ -505,7 +513,7 @@ export function LayersPanel() {
               row={row}
               node={node}
               label={row.kind === 'slot' ? slotLabel(ext, row.nodeId, row.slot!) : nodeLabel(node, typeLabel(node.type))}
-              selected={row.kind === 'node' && row.nodeId === selectedId}
+              selected={row.kind === 'node' && (row.nodeId === selectedId || multiIds.includes(row.nodeId))}
               hovered={row.kind === 'node' && row.nodeId === hoveredId}
               focusable={row.key === focusableKey}
               renaming={row.kind === 'node' && renamingId === row.nodeId}
@@ -598,7 +606,7 @@ interface RowProps {
   focusable: boolean;
   renaming: boolean;
   drop: LayerDrop | null;
-  onClick: (row: LayerRow) => void;
+  onClick: (row: LayerRow, e: MouseEvent<HTMLDivElement>) => void;
   onToggle: (key: string, value: boolean) => void;
   onRename: (id: NodeId) => void;
   onCommitRename: (id: NodeId, value: string) => void;
@@ -629,7 +637,7 @@ const LayerRowView = memo(function LayerRowView(p: RowProps) {
       aria-expanded={row.hasChildren ? row.expanded : undefined}
       aria-selected={isSlot ? undefined : p.selected}
       aria-label={isSlot ? `${p.label} of ${node.name ?? def?.label ?? node.type}` : undefined}
-      tabIndex={!isSlot && (p.selected || p.focusable) ? 0 : -1}
+      tabIndex={!isSlot && p.focusable ? 0 : -1}
       data-layer-key={row.key}
       className={cx(
         'ub-sh-lyr-row',
@@ -641,7 +649,7 @@ const LayerRowView = memo(function LayerRowView(p: RowProps) {
       )}
       style={{ paddingLeft: pad }}
       draggable={!isSlot && !node.locked && !p.renaming}
-      onClick={() => p.onClick(row)}
+      onClick={(e) => p.onClick(row, e)}
       onDoubleClick={(e) => {
         if (isSlot) return;
         e.preventDefault();

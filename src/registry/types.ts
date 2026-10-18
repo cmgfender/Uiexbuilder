@@ -312,6 +312,12 @@ export interface ComponentDef {
   valueBinding?: ValueBindingDef;
   /** Modal / Panel: opened by a trigger, closed with actions.closeOverlay(id). Implies slotOnly. */
   overlay?: OverlayDef;
+  /**
+   * Props that identify this component among its siblings (e.g. Tab `tabId`), so they must stay
+   * unique: Copy / Paste settings and multi-edit never copy or change them. `testId`, an overlay's
+   * `idProp` and an input's `name` are identity props already.
+   */
+  identityProps?: string[];
   /** Can only be placed in a slot (e.g. Tooltip in a trigger's `overlay` slot). */
   slotOnly?: boolean;
   /** Default subtree created when dropped from the palette. Omit = `{ type }` with no props. */

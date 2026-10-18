@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  literalComparisons,
+  rawComparisonMismatch,
   clauseProblem,
   conditionToExpr,
   declaredSubjectType,
@@ -179,5 +181,35 @@ describe('condition builder expressions', () => {
     expect(describeCondition(set)).toBe(
       'deal.properties.amount is more than 1000 and deal.properties.dealstage is “closedwon”, or contact.email contains “ACME”',
     );
+  });
+});
+
+describe('comparisons with fixed values, as written', () => {
+  it('finds whole `reference op literal` comparisons only', () => {
+    expect(literalComparisons('count === "" && (open) >= 80 ? "a" : deal.properties.amount !== -5')).toEqual([
+      { subject: 'count', op: 'eq', value: '' },
+      { subject: 'open', op: 'gte', value: 80 },
+      { subject: 'deal.properties.amount', op: 'neq', value: -5 },
+    ]);
+    expect(literalComparisons('items[0]?.name === null || x["a b"] < 2')).toEqual([
+      { subject: 'items[0]?.name', op: 'eq', value: null },
+      { subject: 'x["a b"]', op: 'lt', value: 2 },
+    ]);
+    // Converted, calculated, typeof, negated or followed by more: not a plain comparison.
+    for (const code of ['Number(count) > 5', 'String(label ?? "") > "a"', 'a + count === 5', 'count === 5 + 1', 'typeof x === "string"', '!open === true', 'f(count) === 1', 'String(x ?? "").length === 0']) {
+      expect(literalComparisons(code)).toEqual([]);
+    }
+  });
+
+  it('knows what the strict type-check refuses', () => {
+    expect(rawComparisonMismatch('eq', '', 'number', false)).toBe('number');
+    expect(rawComparisonMismatch('eq', null, 'number', true)).toBeNull();
+    expect(rawComparisonMismatch('gte', 80, 'number', false)).toBeNull();
+    expect(rawComparisonMismatch('gte', 80, 'number', true)).toBe('start value');
+    expect(rawComparisonMismatch('lt', 'b', 'string', false)).toBeNull();
+    expect(rawComparisonMismatch('lt', 5, 'string', false)).toBe('text');
+    expect(rawComparisonMismatch('gt', null, 'any', false)).toBe('number or text');
+    expect(rawComparisonMismatch('eq', 'x', 'any', false)).toBeNull();
+    expect(rawComparisonMismatch('eq', 'x', 'array', false)).toBe('value');
   });
 });

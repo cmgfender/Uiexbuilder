@@ -6,7 +6,7 @@
  * least one extension).
  *
  * The person hosting the builder can open it in the builder (or download it pre-filled from
- * /setup.html) and use "Deploy to HubSpot" to create the app without a terminal.
+ * /setup.html) and use "Publish to HubSpot" to create the app without a terminal.
  *
  * Run after changing hubspot-app/src/app/app-hsmeta.json: node scripts/make-connector-app.mjs
  * (server/adapters.test.ts checks that both stay in sync and that the document validates).

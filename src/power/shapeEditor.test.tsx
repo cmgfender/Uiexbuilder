@@ -7,6 +7,7 @@ import { ext, loadWith, nodeById, selectTop } from '../inspector/testUtils';
 import { DataPanel } from '../panels/DataPanel';
 import { ToastProvider } from '../ui';
 import { parseShape, shapeToExpr } from './shape';
+import { fieldDisplayLabel } from './ShapeEditor';
 
 const DEALS = [
   { toObjectId: 1, properties: { dealname: 'Renewal', amount: '48000', closedate: '2026-09-21T00:00:00Z' } },
@@ -46,7 +47,7 @@ describe('shaping a repeated list', () => {
     const editor = screen.getByRole('group', { name: 'dealsView: filter and sort' });
     expect(within(editor).getByText('3 of 3 rows right now')).toBeInTheDocument();
 
-    await userEvent.selectOptions(within(editor).getByLabelText('Sort by'), 'amount');
+    await userEvent.selectOptions(within(editor).getByLabelText('Sort by'), 'Amount');
     expect(shapeOf('dealsView').sort).toEqual({ field: ['properties', 'amount'], dir: 'desc', as: 'number' });
 
     await userEvent.selectOptions(within(editor).getByLabelText('How many rows'), 'first');
@@ -59,7 +60,7 @@ describe('shaping a repeated list', () => {
     // The filter offers the rows' fields; CRM numbers compare as numbers.
     await userEvent.click(within(editor).getByRole('button', { name: 'Add a filter' }));
     const subject = within(editor).getByLabelText('Check 1: what to check');
-    await userEvent.selectOptions(subject, within(subject).getByRole('option', { name: /^amount — “48000” in row 1/ }));
+    await userEvent.selectOptions(subject, within(subject).getByRole('option', { name: /^Amount — “48000” in row 1/ }));
     expect(within(editor).getByLabelText('Check 1: comparison')).toHaveDisplayValue('is more than');
     await userEvent.clear(within(editor).getByLabelText('Check 1: value'));
     await userEvent.type(within(editor).getByLabelText('Check 1: value'), '10000');
@@ -71,7 +72,7 @@ describe('shaping a repeated list', () => {
     ]);
     const table = within(editor).getByRole('table');
     expect(within(table).getAllByRole('row').map((r) => r.textContent)).toEqual([
-      'dealnameamountamountFormatted',
+      'Deal nameAmountamountFormatted',
       'Renewal48000$48,000',
       'Upgrade12500$12,500',
     ]);
@@ -98,8 +99,9 @@ describe('shaped lists in the Data panel', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Filter & sort' }));
     expect(ext().computed?.map((c) => c.name)).toEqual(['dealsView']);
     const editor = await screen.findByRole('group', { name: 'dealsView: filter and sort' });
-    await userEvent.selectOptions(within(editor).getByLabelText('Sort by'), 'dealname');
-    expect(shapeOf('dealsView').sort).toEqual({ field: ['properties', 'dealname'], dir: 'desc', as: 'text' });
+    await userEvent.selectOptions(within(editor).getByLabelText('Sort by'), 'Deal name');
+    // Text starts A → Z (numbers start highest first).
+    expect(shapeOf('dealsView').sort).toEqual({ field: ['properties', 'dealname'], dir: 'asc', as: 'text' });
     // Again: opens the same list instead of adding another.
     await userEvent.click(screen.getByRole('button', { name: 'Filter & sort' }));
     expect(ext().computed).toHaveLength(1);
@@ -119,5 +121,14 @@ describe('shaped lists in the Data panel', () => {
     );
     await userEvent.click(screen.getAllByRole('button', { name: 'Filter or sort a list' })[0]);
     expect(ext().computed?.[0]).toMatchObject({ name: 'dealsView', expr: '[...(deals ?? [])]' });
+  });
+});
+
+describe('field names in plain words', () => {
+  it('uses HubSpot labels for CRM properties and names record ids', () => {
+    expect(fieldDisplayLabel(['properties', 'dealname'], '0-3')).toBe('Deal name');
+    expect(fieldDisplayLabel(['properties', 'closedate'], 'deals')).toBe('Close date');
+    expect(fieldDisplayLabel(['toObjectId'])).toBe('Record ID');
+    expect(fieldDisplayLabel(['properties', 'my_custom_score'])).toBe('My custom score');
   });
 });

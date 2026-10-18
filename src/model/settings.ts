@@ -3,7 +3,8 @@
  * selected components share (multi-edit). Pure helpers used by the store and the inspector.
  *
  * Settings are a component's props (including rules and expressions, which are stored as props)
- * and its text — never what identifies it: an overlay's `id`, an input's form `name`, `testId`.
+ * and its text — never what identifies it: an overlay's `id`, an input's form `name`, `testId`, a
+ * Tab's `tabId`, a statistics item's `id` (ComponentDef.identityProps).
  * Events, conditions, repeats and bindings belong to the component's logic and are not copied.
  */
 import { getComponent } from '../registry';
@@ -26,6 +27,8 @@ export function identityProps(def: ComponentDef | undefined): Set<string> {
   if (def?.overlay) out.add(def.overlay.idProp);
   // Form inputs submit their value under `name`: two inputs with one name would clash.
   if (def?.valueBinding) out.add('name');
+  // Declared by the component, e.g. a Tab's `tabId` or a statistics item's `id`.
+  for (const name of def?.identityProps ?? []) out.add(name);
   return out;
 }
 

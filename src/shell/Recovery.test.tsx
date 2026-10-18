@@ -6,6 +6,7 @@ import { useEditor } from '../model/store';
 import { ToastProvider } from '../ui';
 import { readBootGuard, resumeAutosave, useAutosave } from './persistence';
 import { EditorErrorBoundary, StartupRecovery } from './Recovery';
+import * as reporter from '../status/reporter';
 import { resetEditor, rootChildren } from './testUtils';
 
 /** Renders like the editor until the document has no top-level content, then throws. */
@@ -27,6 +28,7 @@ afterEach(() => {
 describe('<EditorErrorBoundary>', () => {
   it('shows the recovery screen instead of a white page, without saving the broken document', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
+    const reportCrash = vi.spyOn(reporter, 'reportReactError').mockImplementation(() => {});
     resetEditor();
     const project = useEditor.getState().project;
     saveProject(project);
@@ -43,6 +45,8 @@ describe('<EditorErrorBoundary>', () => {
     act(() => useEditor.getState().removeNode(rootChildren()[0]));
     expect(screen.getByRole('heading', { name: 'The editor ran into a problem' })).toBeInTheDocument();
     expect(screen.getByText(/reading icon/)).toBeInTheDocument();
+    // The crash goes to the host's status page (React keeps caught render errors from window 'error').
+    expect(reportCrash).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/reading icon/) }), expect.any(String));
     expect(window.localStorage.getItem(`uiex-builder:project:${project.id}`)).toBe(savedBefore);
     expect(readBootGuard()).toMatchObject({ projectId: project.id, reason: 'crash' });
     expect(screen.getByRole('button', { name: /Download “My UI Extensions App”/ })).toBeInTheDocument();

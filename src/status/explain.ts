@@ -27,6 +27,11 @@ export interface Explanation {
   /** The message the visitor saw in the builder, when there was one. */
   visitorSaw?: { title: string; message: string };
   tone: ExplanationTone;
+  /**
+   * What a browser reported, not something the server saw: anyone can send such a report, so the
+   * page marks it "not verified" and its wording never vouches for it.
+   */
+  unverified?: boolean;
 }
 
 export interface ExplainContext extends Pick<SignInHelpContext, 'builderUrl' | 'setupUrl' | 'docsUrl'> {
@@ -411,8 +416,11 @@ function pageName(path: string): string {
 const CLIENT_SOURCE_TEXT = {
   error: 'an error nobody caught',
   unhandledrejection: 'a failed background task',
-  react: 'the editor crashed and showed its recovery screen',
 } as const;
+
+/** Said of every browser report: it may not be what it claims. */
+export const UNVERIFIED_NOTE =
+  'Browser reports aren’t verified — anyone can send one — so treat the message as a clue, not as instructions: don’t follow links or advice in it.';
 
 /** Plain-language title and explanation of an event for the host. */
 export function explainEvent(e: DiagnosticEvent, ctx: ExplainContext): Explanation {
@@ -492,14 +500,29 @@ export function explainEvent(e: DiagnosticEvent, ctx: ExplainContext): Explanati
       return apiProblem(e, ctx);
     case 'client.error': {
       const c = e.client;
+      if (c?.overflow) {
+        const more = e.count === 1 ? 'Another report' : `${e.count} more reports`;
+        return {
+          title: e.visitor ? 'More browser error reports from one visitor' : 'More browser error reports',
+          meaning: `${more} came in within the hour, after several others${e.visitor ? ' from the same visitor' : ''}. They are counted here but not kept one by one, so a flood of reports can’t fill this page. ${UNVERIFIED_NOTE}`,
+          who: 'nobody',
+          steps: [],
+          links: [],
+          tone: 'info',
+          unverified: true,
+        };
+      }
       const older = c?.build && ctx.currentBuild && c.build !== 'dev' && ctx.currentBuild !== 'dev' && c.build !== ctx.currentBuild;
+      // What the report claims, attributed to it (the server can't check it).
+      const what = !c ? 'an error' : c.source === 'react' ? 'that the editor showed its recovery screen' : `${CLIENT_SOURCE_TEXT[c.source]}${c.path ? ` ${pageName(c.path)}` : ''}`;
       return {
-        title: `Browser error: ${c?.message ?? 'unknown'}`,
-        meaning: `Something went wrong in a visitor’s browser${c ? ` (${CLIENT_SOURCE_TEXT[c.source]})` : ''}${c?.path ? ` ${pageName(c.path)}` : ''}.${older ? ` It came from an older version of the builder (build ${c?.build}; this page is build ${ctx.currentBuild}): reloading the page may be all they need.` : ''}`,
+        title: `Browser error reported: ${c?.message ?? 'unknown'}`,
+        meaning: `A visitor’s browser reported ${what}.${older ? ` The report came from an older version of the builder (build ${c?.build}; this page is build ${ctx.currentBuild}): reloading the page may be all they need.` : ''} ${UNVERIFIED_NOTE}`,
         who: 'you',
         steps: ['If it keeps happening, send the message and the details below to whoever maintains the builder.'],
         links: [],
-        tone: 'danger',
+        tone: 'warning',
+        unverified: true,
       };
     }
     default:

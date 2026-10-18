@@ -2,7 +2,8 @@
  * Inspector header for the selected component: icon, label, editable layer name, type, docs link,
  * status badges and the overflow menu (duplicate, copy JSX, copy, delete).
  */
-import { ArrowUpLeft, BookOpen, CircleHelp, Code2, Copy, CopyPlus, Ellipsis, ExternalLink, Trash2 } from 'lucide-react';
+import { ArrowUpLeft, BookOpen, CircleHelp, ClipboardPaste, Code2, Copy, CopyPlus, Ellipsis, ExternalLink, SlidersHorizontal, Trash2 } from 'lucide-react';
+import { canPasteSettings } from '../model/settings';
 import { useEditor } from '../model/store';
 import { findParent, nodeLabel } from '../model/tree';
 import type { Extension, Project, UINode } from '../model/types';
@@ -25,6 +26,7 @@ export function NodeHeader({ node, def, ext, project }: NodeHeaderProps) {
   const menu = useMenu();
   const showHelp = useInspectorPrefs((s) => s.showHelp);
   const updateNode = useEditor((s) => s.updateNode);
+  const settingsClip = useEditor((s) => s.settingsClipboard);
   const ref = findParent(ext, node.id);
   const parentId = ref && ref.parentId !== ext.rootId ? ref.parentId : null;
   const parent = parentId ? ext.nodes[parentId] : undefined;
@@ -55,6 +57,25 @@ export function NodeHeader({ node, def, ext, project }: NodeHeaderProps) {
       onSelect: () => {
         st().copyNode(node.id);
         toast(`Copied — paste with ${formatShortcut('Cmd+V')}`);
+      },
+    },
+    {
+      label: 'Copy settings',
+      icon: <SlidersHorizontal size={14} />,
+      shortcut: shortcutLabel('copySettings'),
+      onSelect: () => {
+        const c = st().copySettings(node.id);
+        if (c) toast(`Copied the settings of ${c.label}`);
+      },
+    },
+    {
+      label: 'Paste settings',
+      icon: <ClipboardPaste size={14} />,
+      shortcut: shortcutLabel('pasteSettings'),
+      disabled: !canPasteSettings(settingsClip, node),
+      onSelect: () => {
+        const n = st().pasteSettings([node.id]);
+        toast(n ? 'Settings pasted' : 'It already has these settings');
       },
     },
     ...(parentId ? [{ label: 'Select parent', icon: <ArrowUpLeft size={14} />, onSelect: () => st().select(parentId) }] : []),

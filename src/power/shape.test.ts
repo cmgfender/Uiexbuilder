@@ -67,6 +67,24 @@ describe('shaped lists', () => {
     expect(run(shapeToExpr({ source: 'missing' }), { missing: null })).toEqual([]);
   });
 
+  it('sorts HubSpot’s formatted numbers ("$48,000.00") as numbers, and reads that back', () => {
+    const formatted = [
+      { properties: { dealname: 'Renewal', amount: '$48,000.00' } },
+      { properties: { dealname: 'Add-on', amount: '$7,800.00' } },
+      { properties: { dealname: 'Upgrade', amount: '$12,500.00' } },
+    ];
+    expect(guessSortAs(formatted, ['properties', 'amount'])).toBe('formatted');
+    expect(guessSortAs([{ p: '45%' }, { p: '5%' }], ['p'])).toBe('formatted');
+    // Dates, ids with letters and words stay text.
+    expect(guessSortAs([{ d: '09/21/2026' }, { d: '2026-09-04' }], ['d'])).toBe('text');
+    expect(guessSortAs([{ s: 'Closed won' }], ['s'])).toBe('text');
+    const shape: ListShape = { source: 'deals', sort: { field: ['properties', 'amount'], dir: 'desc', as: 'formatted' } };
+    const rows = run(shapeToExpr(shape), { deals: formatted }) as typeof formatted;
+    expect(rows.map((r) => r.properties.dealname)).toEqual(['Renewal', 'Upgrade', 'Add-on']);
+    expect(parseShape(shapeToExpr(shape))).toEqual(shape);
+    expect(describeShape(shape)).toContain('highest first');
+  });
+
   it('formats numbers, percents and relative dates', () => {
     const value = (kind: 'number' | 'percent' | 'relative', v: unknown, decimals?: number) =>
       run(formatExpr({ name: 'x', field: ['v'], kind, decimals }), { row: { v } });

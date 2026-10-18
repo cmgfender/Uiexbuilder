@@ -456,7 +456,8 @@ describe('pickers from the keyboard', () => {
     // jsdom is not a Mac: Ctrl-based labels, no ⌘ / ⌫ symbols.
     const menu = screen.getByRole('menu');
     expect(within(menu).getByRole('menuitem', { name: /Duplicate/ })).toHaveTextContent('Ctrl+D');
-    expect(within(menu).getByRole('menuitem', { name: /^Copy(?! JSX)/ })).toHaveTextContent('Ctrl+C');
+    expect(within(menu).getByRole('menuitem', { name: /^Copy(?! JSX| settings)/ })).toHaveTextContent('Ctrl+C');
+    expect(within(menu).getByRole('menuitem', { name: /^Copy settings/ })).toHaveTextContent('Alt+Ctrl+C');
     expect(within(menu).getByRole('menuitem', { name: /Delete/ })).toHaveTextContent('Del');
     expect(menu.textContent).not.toMatch(/[⌘⌫]/);
   });

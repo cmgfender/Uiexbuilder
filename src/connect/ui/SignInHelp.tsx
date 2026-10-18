@@ -8,7 +8,7 @@
  * Used by the result dialog of the top-bar Connect button, the "Still waiting for HubSpot…" panel,
  * and anywhere else a sign-in result is shown (the guided setup).
  */
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ExternalLink, LogIn, RotateCcw } from 'lucide-react';
 import { Button, TextArea, cx } from '../../ui';
 import { signInFix, signInTroubleChoices, type SignInFix, type SignInTrouble } from '../signInHelp';
@@ -16,6 +16,13 @@ import { useConnection } from '../store';
 import { reportSignInFeedback } from '../../status/reporter';
 import { CopyNote } from './CopyNote';
 import { HOSTING_DOCS_URL, setupPageUrl } from './links';
+
+/**
+ * The answer is reported to the host's status page once the person settles on it: after this long
+ * without another change, or at once when they act on the fix or the help closes (moving through
+ * the choices with the arrow keys, or reading each one, isn't several answers).
+ */
+export const SIGN_IN_FEEDBACK_SETTLE_MS = 2000;
 
 export interface SignInHelpProps {
   /** The HubSpot window is still open (the waiting panel): no "I closed it" choice. */
@@ -71,11 +78,24 @@ export function SignInHelp({ waiting = false, initial = null, onChoose, onTryAga
   const choices = signInTroubleChoices(waiting);
   const fix = kind ? signInFix(kind, signInHelpContext(details)) : null;
 
+  // Lets the host's status page name the cause instead of only "never came back".
+  const unsent = useRef<SignInTrouble | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flush = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    const k = unsent.current;
+    unsent.current = null;
+    if (k) reportSignInFeedback(k);
+  }, []);
+  useEffect(() => flush, [flush]);
+
   const choose = (k: SignInTrouble) => {
     setKind(k);
     onChoose?.(k);
-    // Lets the host's status page name the cause instead of only "never came back".
-    reportSignInFeedback(k);
+    unsent.current = k;
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(flush, SIGN_IN_FEEDBACK_SETTLE_MS);
   };
 
   return (
@@ -96,6 +116,7 @@ export function SignInHelp({ waiting = false, initial = null, onChoose, onTryAga
         {fix && kind && (
           <FixPanel
             key={kind}
+            onAct={flush}
             kind={kind}
             fix={fix}
             details={details}
@@ -111,6 +132,7 @@ export function SignInHelp({ waiting = false, initial = null, onChoose, onTryAga
 }
 
 function FixPanel({
+  onAct,
   kind,
   fix,
   details,
@@ -119,6 +141,8 @@ function FixPanel({
   tryAgainLabel,
   showContinue,
 }: {
+  /** The person acts on the fix (a button, a link, the note): their answer is settled. */
+  onAct: () => void;
   kind: SignInTrouble;
   fix: SignInFix;
   details: string;
@@ -137,7 +161,7 @@ function FixPanel({
 
   const inTab = fix.continueInTab && showContinue;
   return (
-    <section ref={panelRef} className={cx('ub-cn-fix', `ub-cn-fix--${fix.who}`)} aria-labelledby={`${ids}-title`}>
+    <section ref={panelRef} className={cx('ub-cn-fix', `ub-cn-fix--${fix.who}`)} aria-labelledby={`${ids}-title`} onClickCapture={onAct} onFocusCapture={onAct}>
       <div className="ub-cn-fix__who">{WHO_BADGE[fix.who]}</div>
       <h3 className="ub-cn-fix__title" id={`${ids}-title`}>
         {fix.title}

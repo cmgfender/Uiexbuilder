@@ -275,6 +275,36 @@ describe('global shortcuts', () => {
     expect(activeNodes()[first]).toBeUndefined();
   });
 
+  it('several selected: Delete removes them all in one undo step, Escape keeps only the primary one', () => {
+    const { first, second, button } = setup();
+    useEditor.getState().selectMany([first, second]);
+    key('Escape');
+    expect(useEditor.getState().selectedNodeIds).toEqual([]);
+    expect(useEditor.getState().selectedNodeId).toBe(second);
+
+    useEditor.getState().selectMany([first, button]);
+    key('Delete');
+    expect(activeNodes()[first]).toBeUndefined();
+    expect(activeNodes()[button]).toBeUndefined();
+    expect(useEditor.getState().selectedNodeId).toBeNull();
+    key('z', { metaKey: true });
+    expect(activeNodes()[first]).toBeDefined();
+    expect(activeNodes()[button]).toBeDefined();
+  });
+
+  it('Alt+Cmd+C / Alt+Cmd+V copy and paste settings (by key code: Alt changes the key on macOS)', () => {
+    const { first, second } = setup();
+    useEditor.getState().setProps(first, { variant: 'microcopy', format: { fontWeight: 'bold' } });
+    useEditor.getState().select(first);
+    key('ç', { code: 'KeyC', metaKey: true, altKey: true });
+    expect(useEditor.getState().settingsClipboard?.type).toBe('Text');
+    expect(screen.getByText(/Copied the settings of/)).toBeInTheDocument();
+    useEditor.getState().select(second);
+    key('√', { code: 'KeyV', metaKey: true, altKey: true });
+    expect(activeNodes()[second].props).toMatchObject({ variant: 'microcopy', format: { fontWeight: 'bold' } });
+    expect(activeNodes()[second].text).toBe('one');
+  });
+
   it('does not edit the structure in preview mode', () => {
     const { first } = setup();
     useEditor.getState().select(first);

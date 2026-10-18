@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useEditor } from '../model/store';
@@ -50,6 +50,48 @@ describe('editing several components at once', () => {
     expect(nodeById(ids[0])).toMatchObject({ props: { variant: 'primary', size: 'sm' }, text: 'Save' });
     expect(nodeById(ids[1]).props).toEqual({ href: 'https://x.test' });
     expect(screen.getByText('Button, Link')).toBeInTheDocument();
+  });
+});
+
+describe('the inspector with several components selected', () => {
+  it('switches to the multi-edit view, and back to one component', async () => {
+    loadWith([
+      { type: 'Tag', props: { variant: 'success' }, text: 'Won' },
+      { type: 'Tag', text: 'Open' },
+    ]);
+    selectTop(0);
+    render(
+      <ToastProvider>
+        <Inspector />
+      </ToastProvider>,
+    );
+    expect(screen.queryByText('2 components selected')).toBeNull();
+    act(() => useEditor.getState().toggleSelection(topNode(1).id));
+    expect(screen.getByText('2 components selected')).toBeInTheDocument();
+    expect(screen.getByText('All Tag')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Clear the selection' }));
+    expect(screen.queryByText('2 components selected')).toBeNull();
+  });
+
+  it('the ⋯ menu copies and pastes settings too', async () => {
+    loadWith([
+      { type: 'Tag', props: { variant: 'success' }, text: 'Won' },
+      { type: 'Tag', text: 'Open' },
+    ]);
+    selectTop(0);
+    render(
+      <ToastProvider>
+        <Inspector />
+      </ToastProvider>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /More actions/ }));
+    expect(screen.getByRole('menuitem', { name: /^Paste settings/ })).toBeDisabled();
+    await userEvent.click(screen.getByRole('menuitem', { name: /^Copy settings/ }));
+    act(() => selectTop(1));
+    await userEvent.click(screen.getByRole('button', { name: /More actions/ }));
+    await userEvent.click(screen.getByRole('menuitem', { name: /^Paste settings/ }));
+    expect(topNode(1)).toMatchObject({ props: { variant: 'success' }, text: 'Won' });
+    useEditor.setState({ settingsClipboard: null });
   });
 });
 

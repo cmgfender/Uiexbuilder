@@ -92,7 +92,7 @@ function attentionKey(e: DiagnosticEvent): string | null {
       if (e.code === 'not_found' && e.route?.includes('(unknown address)')) return null;
       return `api:${e.code ?? e.status}`;
     case 'client.error':
-      return `client:${e.client?.message ?? ''}`;
+      return e.client?.overflow ? `client:more:${e.visitor ?? ''}` : `client:${e.client?.message ?? ''}`;
     case 'publish.started':
       return null;
     default:
@@ -136,8 +136,9 @@ export function attentionItems(events: readonly DiagnosticEvent[], now: number, 
       query: latest.kind === 'signin.abandoned' ? 'signin.abandoned' : key.startsWith('publish:') ? '' : (latest.code ?? latest.client?.message?.slice(0, 40) ?? ''),
     };
     // Impact: how often, weighted by whether the host can act on it. An unsigned Acceptable Use
-    // Policy blocks every sign-in, so it always comes first.
-    const weight = explanation.who === 'you' ? 3 : explanation.who === 'super_admin' || explanation.who === 'visitor' ? 2 : 1;
+    // Policy blocks every sign-in, so it always comes first; what browsers report is unverified,
+    // so it never outranks what the server saw itself.
+    const weight = explanation.unverified ? 1 : explanation.who === 'you' ? 3 : explanation.who === 'super_admin' || explanation.who === 'visitor' ? 2 : 1;
     const bonus = key === 'abandoned:aup' ? 100 : key === 'abandoned:install_permission' ? 6 : 0;
     const rank = -(count * weight + bonus + (explanation.tone === 'danger' ? 1 : 0));
     items.push({ key, count, visitors, lastAt: latest.lastAt, explanation, filter, rank });

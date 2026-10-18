@@ -1,5 +1,190 @@
 # Project status log
 
+## 2026-10-18 (later) — independent review: 7 findings checked, all real, all fixed
+
+An independent reviewer reported seven findings. Each was reproduced first (their scratch tests
+failed as described: `count === ""` exported and failed the type-check with no validation error;
+pasting a Tab's settings gave two tabs `tabId: "overview"`; 3,000 sign-in starts left 3,000
+followed sign-ins). None was refuted. What changed:
+
+- **Fake “browser errors” on the status page (R1, medium).** `POST /api/diagnostics/report` now
+  needs the builder's own `Origin` (browsers always send it; a plain script without one gets 403
+  and leaves no row). Links to anything but the builder's own address become `[link]` in messages
+  and stacks; page paths that aren't plain paths (`/javascript:…`) are dropped. Browser reports
+  live in their own buffer of 100, so they can't push sign-ins and publishes out; after 5 distinct
+  reports per visitor (30 from everyone) in an hour, the rest are only counted in one “More browser
+  error reports” row. On the page they are marked **Reported by a browser · not verified**, say
+  “the report says…”, warn not to follow links or advice in the message, and never rank above what
+  the server saw itself. “What is recorded” says browser reports keep their message.
+- **Half-finished checks broke the export (R2, medium).** The condition builder saves a check only
+  once its value fits (an emptied number box shows “Enter a number.” and is left out until fixed);
+  “is” on a true / false value starts at true; a new subject re-reads the typed value. As a
+  backstop, a new validation **error** `condition-type` flags any expression — Show when, If, Rules,
+  props, templates, action values — that compares a typed value with a fixed value of another type
+  (or a variable that starts empty with more / less than, which TypeScript also refuses). It is
+  pinned by two type-check matrices (17 subjects for conditions and 14 for Rules, each × 4
+  comparisons × 5 fixed values) that require validation and the strict compiler to agree exactly. On the way:
+  text thresholds are now written `String(x ?? "") > "…"`, so they compile for values that may be
+  empty; the Rules editor shows the same problem line under a threshold that doesn't fit.
+- **Copy / paste settings and multi-edit copied a Tab's id (R3, medium).** Components can declare
+  identity props (`ComponentDef.identityProps`: Tab `tabId`, statistics item `id`); they are never
+  copied, pasted or offered in multi-edit.
+- **Moving through “What did HubSpot show?” sent one answer per choice (R4, low).** The help sends
+  the answer the person settles on (after 2 s without a change, or at once when they act on the fix
+  or close the help); a changed answer is always sent (the old 10 s per-answer throttle could drop
+  the final one). The server replaces the answer on the visitor's latest “never came back” row when
+  they change their mind within 5 minutes; the browser's own “window closed” never overrides it.
+- **The canvas trash button deleted only one of several selected components (R5, low).** It now
+  says **Delete N selected** and deletes them all in one undo step, like the Delete key.
+- **Unbounded sign-ins in progress (R6, low).** At most 500 are followed (the oldest quietly stops
+  being followed); a sign-in whose row is gone is only counted when it times out, and one visitor's
+  unanswered sign-ins close together become one row with a count — a burst of starts can no longer
+  flood the page ten minutes later.
+- **Screen readers heard “Updated …” every 30 s (R7, low).** That line is no longer a live region;
+  a hidden one announces a refresh someone asked for and new problems, and the timeline count is
+  announced only when the filters change.
+
+**Gate results** (after the last change)
+
+| Check | Result |
+| --- | --- |
+| `npx tsc -b` | Clean |
+| `npx vitest run` | 137 files, 2,886 tests, all passing (22 new) |
+| `npm run build` | Builds the app and `dist-server/` |
+| `npx playwright test` | 38 passed, twice (new: toolbar trash deletes every selected component) |
+| `npm run e2e:connect` | 20 passed, twice (`status.spec.ts` now also checks that a scripted report is refused and a browser one is shown “not verified” without outside links) |
+
+Screenshots of the status page with a reported error (light and dark):
+`/tmp/claude-0/-home-user-Uiexbuilder/b04d6910-2b0e-5666-9061-79969b6019f7/scratchpad/improve/fix/shots/`.
+`git diff` was checked for whole-file reformatting (none) and token-shaped literals (none).
+
+**Still open (honestly)**
+
+- The `Origin` check only stops the laziest scripts: anyone can send that header. Reports stay
+  untrusted by design; the limits above bound how much a sender can show, not whether it is true.
+  The per-visitor limits key on an anonymous id of the IP address, so many addresses still get
+  more rows (at most 30 an hour, in their own buffer).
+- `condition-type` knows the types the builder declares (variables, record properties, list sizes,
+  context values, data loading / error flags); comparisons on computed values, repeat items or
+  handler values are not checked (they are untyped in the exported card, so they compile).
+- A check whose value doesn't fit is left out of the saved condition while it is being fixed, so the
+  component shows without that check meanwhile (like a check whose subject is still being chosen).
+- Everything listed under “Still open” in the entry below still applies.
+
+## 2026-10-18 — easier editor, HubSpot saying no, a status page, and power features without code
+
+Four areas were improved in parallel and then integrated; the full gate is green (see the table).
+`git diff` was checked for whole-file reformatting (none) and for token-shaped literals (none: the
+`pat-…` test values are built at runtime).
+
+**What changed for a first-time admin**
+
+- **Editing is easier to find.** Inserting a block selects its main part (*Progress tracker* →
+  the progress bar, with Color and its green / yellow / red Rules right there). A layout box lists
+  what is **Inside this layout box**, each child one click away with a hint (“Color changes by
+  rules”, “Repeats for each item in deals”), and the canvas outlines the children. Settings use
+  plain words with the exact HubSpot prop name beside them (**Color** · `variant`), a line of help
+  under each (hide it from the ⋯ menu), color swatches and spacing / direction previews, **Filter
+  settings** (press `/`) on components with many settings, and **You can also** tips that open
+  Rules, CRM data, actions, show when or repeat in one click. The registry got a plain-language
+  pass (Flex is labelled **Layout box**; prop names and values are unchanged).
+- **When HubSpot says no, the builder says what to do.** A sign-in window that closes or times out
+  asks **What did HubSpot show?** (Acceptable Use Policy, not allowed to install apps, closed it,
+  closed by itself, something else) and gives the fix, links and a note to copy for whoever set up
+  the builder or a Super Admin — in the top bar and now also in the guided setup, which also says
+  **Still waiting for HubSpot…** after 30 s. A blocked pop-up is one click from **Continue in this
+  tab** (it no longer redirects on its own).
+- **Publishing checks the key first.** `POST /api/deploy/check-key` reads the key's account and its
+  *Developer projects* permission before anything is uploaded (the real logs showed four 403s in a
+  row). The Publish dialog checks a pasted key by itself and explains each problem with the
+  accounts involved: missing permission (open that account's key page, **Check again**, **Publish
+  anyway**), a key from another account, `ALLOWED_PORTALS`, HubSpot's own 403 (with a note for a
+  Super Admin). Key checks are rate limited like deploys.
+
+**For whoever hosts the builder**
+
+- **Status page at `/status`** (admins in `ADMIN_EMAILS` / `ADMIN_PORTALS` only): sign-ins that
+  never came back (with what the visitor said HubSpot showed), refused publishes grouped with a
+  count, failed builds, refused requests and errors in visitors' browsers — each with what it
+  means, who can fix it and the steps. In memory only (resets on restart or sleep); every event
+  is also an `[event] {json}` log line. Admins get a **Status page** link in the account menu.
+  Editor crashes and sign-in feedback are now reported; failed sign-in pages carry their code in
+  `X-UIEX-Error-Code`; Vercel passes the admin settings; `npm run dev:full` / `start:demo` make the
+  fake portal an admin. Guide: `docs/STATUS-PAGE.md`; HOSTING.md has a short section and
+  Troubleshooting starts with “Open `/status` first”.
+
+**For power users**
+
+- **Show when** and the If step are a visual condition builder (is / is not, more / less than,
+  contains, is empty, true / false, grouped with *and* / *or*, compare with a fixed value or another
+  value), saved as plain expressions and recognised again.
+- **Filter, sort & limit** any list (Advanced › Repeat, a data source's **Filter & sort**, Data ›
+  Computed, the palette) with a live preview of the rows and formats (currency, number, percent,
+  date, relative date); fields show plain names (**Deal name**, **Amount**).
+- **Rules in actions**: alert type, title and message, a variable's new value, the text to copy.
+- **Copy / Paste settings** (⌥⌘C / ⌥⌘V, the ⋯ menu, right-click, Advanced › Reuse settings) and
+  **multi-select** (Shift / Cmd / Ctrl-click on the canvas or in Layers): the inspector edits what
+  they share, Delete removes them all in one undo step, Escape keeps one.
+- Fixed on the way: Rules on CRM booleans never matched (`'true'` vs `true`); shaped lists of
+  untyped fetch results failed the strict type-check of the exported card.
+
+**Found and fixed while integrating** (looking at the production build as an admin and a power
+user)
+
+- Sorting **Associated records** by Amount put $7,800 before $48,000: lists that feed tables use
+  HubSpot's formatted values ("$48,000.00"), which sorted as text. Such values now sort as numbers
+  (a new `formatted` sort), text sorts start A → Z, and the list editor shows plain field names
+  (**Deal name**, **Amount**, **Record ID**) instead of `dealname` / `toObjectId`.
+- Each sign-in counted twice against the per-address limit (start and return shared one bucket),
+  so about 10 sign-ins from one office address within minutes hit “Too many sign-in attempts”; the
+  connector e2e suite failed on it. Start and return now have separate buckets.
+- The guided setup now offers **What did HubSpot show?**, **Continue in this tab** for a blocked
+  window and “Still waiting…” help (only the top bar had them); multi-selection got its gestures
+  (Shift / Cmd / Ctrl-click on canvas and Layers, outlines, ⌥⌘C / ⌥⌘V, ⋯ menu and right-click
+  items, Delete for all selected); the status page got its account-menu link, editor-crash and
+  sign-in-feedback reports, the auth-page error header and Vercel settings; key checks are rate
+  limited.
+- Alert-type Rules start ready-made (success from 80, warning from 40, otherwise error) instead of
+  “Success” everywhere; swatch tooltips no longer repeat the value (“Blue (info) (info)”); Reuse
+  settings says how to select several components.
+
+**Gate results**
+
+| Check | Result |
+| --- | --- |
+| `npx tsc -b` | Clean |
+| `npx vitest run` | 137 files, 2,864 tests, all passing |
+| `npm run build` | Builds the app and `dist-server/` |
+| `npx playwright test` | 37 passed, twice (new: `e2e/ease.spec.ts`, `e2e/power.spec.ts`) |
+| `npm run e2e:connect` | 20 passed, twice (new: `trouble.spec.ts`, `status.spec.ts`) |
+
+New end-to-end specs: `e2e/ease.spec.ts`, `e2e/power.spec.ts` (show when, filter / sort / limit,
+copy settings and multi-edit, alert type rules), `e2e-connect/trouble.spec.ts` (HubSpot's install
+refusals, blocked window, key problems, 403) and `e2e-connect/status.spec.ts` (sign in to `/status`,
+refused key checks explained, the account-menu link). Screenshots (1440×900, light and dark):
+`/tmp/claude-0/-home-user-Uiexbuilder/b04d6910-2b0e-5666-9061-79969b6019f7/scratchpad/improve/final/`.
+
+**Still open (honestly)**
+
+- **No dark theme for the builder itself.** Only `/status`, `setup.html` and the fake HubSpot pages
+  follow the system's dark mode; the editor stays light (its CSS still has ~200 hard-coded colors).
+  Dark screenshots of the editor therefore look like the light ones.
+- **Not verified against real HubSpot**: the scope-group name used to read *Developer projects*
+  from a key (a wrong name only gives the soft “missing permission” verdict, which has **Publish
+  anyway**), and the exact wording and placement of HubSpot's in-window install refusals and of the
+  user-permission paths (written from HubSpot's docs). The status page's history lives in memory
+  (per instance on Vercel / Cloudflare).
+- Tables are still edited level by level (no columns-and-rows editor); inputs still have long
+  inspectors (filter and tips help); a list is sorted by one field only; formatting a single value
+  outside a list still needs an expression or Rules; contradictory checks in one *and* group (e.g.
+  “is true” and “is false”) aren't blocked and make the exported TSX fail its type-check.
+- Multi-selection acts on all selected components for settings, paste settings and Delete; other
+  actions (duplicate, copy, move, wrap) still act on the primary one.
+- Optional ideas not done: Rules for a status line based on a sibling progress bar's percentage;
+  “Drag components here” for empty containers.
+- A WIP commit (`4f254e4`) appeared in the repository during this integration run; it was not made
+  by the integrator, and nothing was committed afterwards.
+
 ## 2026-10-16 — first-run experience shipped; broad QA paused to save usage
 
 - Done: security and UX fixes, the first-run experience (welcome, guided connect, tour), and a

@@ -13,6 +13,7 @@ import type { Scope } from '../runtime';
 import { cx, IconButton } from '../ui';
 import { ExpressionInput, usePreviewScope } from './controls';
 import {
+  carryValue,
   clauseProblem,
   clauseToExpr,
   conditionToExpr,
@@ -24,6 +25,8 @@ import {
   opsFor,
   parseCondition,
   parseValueText,
+  savableCondition,
+  strictSubjectType,
   subjectType,
   valueText,
   type ConditionClause,
@@ -84,6 +87,8 @@ export function ConditionBuilder({
   const id = useId();
   const parsed = useMemo(() => parseCondition(value), [value]);
   const typeOf = useMemo(() => (s: string) => declaredSubjectType(ext, s), [ext]);
+  // What a fixed value must be for the exported card to compile (problems shown under a check).
+  const strictOf = useMemo(() => (s: string) => strictSubjectType(ext, s), [ext]);
   // Checks being set up that are not complete yet (no subject chosen) live here until they are.
   const [draft, setDraft] = useState<ConditionSet | null>(() =>
     startWithCheck && parsed !== null && parsed.groups.length === 0 ? { groups: [[{ ...EMPTY_CLAUSE }]] } : null,
@@ -103,7 +108,8 @@ export function ConditionBuilder({
   const set = draft ?? parsed;
   const change = (next: ConditionSet) => {
     setDraft(next);
-    const expr = conditionToExpr(next, { typeOf });
+    // A check whose value doesn't fit yet (it shows its problem) is saved once it is fixed.
+    const expr = conditionToExpr(savableCondition(next, strictOf), { typeOf });
     lastWritten.current = expr;
     if (expr !== value) onChange(expr);
   };
@@ -208,6 +214,7 @@ export function ConditionBuilder({
                     exclude={exclude}
                     scope={scope}
                     typeOf={typeOf}
+                    strictOf={strictOf}
                     label={groupsNow.length > 1 ? `Group ${g + 1}, check ${i + 1}` : `Check ${i + 1}`}
                     onChange={(next) => updateClause(g, i, next)}
                     onRemove={() => removeClause(g, i)}
@@ -240,19 +247,20 @@ interface ClauseRowProps {
   exclude?: string[];
   scope: Scope;
   typeOf: (s: string) => SubjectType;
+  strictOf: (s: string) => SubjectType;
   label: string;
   onChange: (next: ConditionClause) => void;
   onRemove: () => void;
 }
 
-function ClauseRow({ id, index, clause, ext, nodeId, eventParams, groups, scopeless, exclude, scope, typeOf, label, onChange, onRemove }: ClauseRowProps) {
+function ClauseRow({ id, index, clause, ext, nodeId, eventParams, groups, scopeless, exclude, scope, typeOf, strictOf, label, onChange, onRemove }: ClauseRowProps) {
   const subject = clause.subject.trim();
   const sampleRes = useMemo(() => (subject ? safeEvaluate(subject, scope) : null), [subject, scope]);
   const sample = sampleRes?.ok ? sampleRes.value : undefined;
   const declared = typeOf(subject);
   const type = subjectType(declared, sample);
   const ops = opsFor(type, clause.op);
-  const problem = subject ? clauseProblem(clause, declared) : null;
+  const problem = subject ? clauseProblem(clause, strictOf(subject)) : null;
   const result = useMemo(() => {
     const expr = clauseToExpr(clause, { typeOf });
     if (!expr) return null;
@@ -265,19 +273,17 @@ function ClauseRow({ id, index, clause, ext, nodeId, eventParams, groups, scopel
     const r = next.trim() ? safeEvaluate(next, scope) : null;
     const nextSample = r?.ok ? r.value : undefined;
     const nextType = subjectType(nextDeclared, nextSample);
-    // Keep the check when it still fits the new value; otherwise start with the natural one.
-    if (clause.subject.trim() && opsFor(nextType).includes(clause.op)) return onChange({ ...clause, subject: next });
+    // Keep the check when it still fits the new value (its typed value read for the new type);
+    // otherwise start with the natural one.
+    if (clause.subject.trim() && opsFor(nextType).includes(clause.op)) {
+      return onChange({ subject: next, op: clause.op, ...(opNeedsValue(clause.op) ? { value: carryValue(clause.value, clause.op, nextDeclared, nextSample) } : {}) });
+    }
     const op = defaultOpFor(nextType, nextSample);
     onChange({ subject: next, op, ...(opNeedsValue(op) ? { value: { kind: 'literal', value: op === 'gt' ? 0 : '' } } : {}) });
   };
   const pickOp = (op: ConditionOp) => {
     if (!opNeedsValue(op)) return onChange({ subject: clause.subject, op });
-    const v = clause.value;
-    const value: ConditionValue =
-      v?.kind === 'ref'
-        ? v
-        : { kind: 'literal', value: parseValueText(valueText(v?.kind === 'literal' ? v.value : ''), op, declared, sample) };
-    onChange({ subject: clause.subject, op, value });
+    onChange({ subject: clause.subject, op, value: carryValue(clause.value, op, declared, sample) });
   };
 
   return (

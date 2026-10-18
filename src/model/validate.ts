@@ -21,7 +21,10 @@
  *                     set-state-value, set-state-type, context-location (error: context.crm on a
  *                     settings / app home page), unguarded-async-data (warning: fetch / function
  *                     data read before it has loaded), dynamic-url-origin (warning: a request /
- *                     image URL whose host is an expression; subject: the likely origin)
+ *                     image URL whose host is an expression; subject: the likely origin),
+ *                     condition-type (error: code compares a typed value with a fixed value of
+ *                     another type, e.g. a number with "", or a value that starts empty with
+ *                     more / less than; subject: what it compares)
  *  - state & data:    invalid-identifier, duplicate-name, state-initial, data-source-properties,
  *                     data-source-config, data-source-location, data-source-computed, fetch-url,
  *                     iframe-url, computed-order, helpers-syntax, function-syntax, function-main,
@@ -42,6 +45,7 @@ import { ENDPOINT_PATH_RE } from '../panels/utils';
 import { isPropertyName, nextSignificant, prevSignificant, tokenize as tokenizeJs } from './jsTokens';
 import { checkExpressionSyntax, checkStatementsSyntax } from '../runtime/expr';
 import { checkHelpersSyntax, helperNames } from '../power/helpers';
+import { expectedLiteralText, literalComparisons, rawComparisonMismatch, strictSubjectType, subjectMayBeNull, type SubjectType } from '../inspector/power-conditions';
 import { isValidIdentifier, uidProblem } from './ids';
 import { canAccept, isAvailableIn } from './rules';
 import { parseTemplate } from './template';
@@ -590,6 +594,8 @@ interface CodeChecker {
    * conditions of the node and its ancestors that may guard reading them.
    */
   asyncData?: { names: Set<string>; guards: string[] };
+  /** The extension's variables and data (to check comparisons with fixed values). */
+  types?: Pick<Extension, 'state' | 'dataSources'>;
 }
 
 function reportUnknownNames(chk: CodeChecker, code: string, scope: NameScope, loc: Loc, what: string): void {
@@ -647,6 +653,40 @@ function checkExpression(chk: CodeChecker, code: unknown, scope: NameScope, loc:
   reportUnknownNames(chk, code, scope, loc, what);
   checkCodeContext(chk, code, scope, loc, what);
   checkAsyncDataReads(chk, code, scope, loc, what);
+  checkComparisonTypes(chk, code, scope, loc, what);
+}
+
+const SUBJECT_TYPE_WORDS: Partial<Record<SubjectType, string>> = { number: 'a number', boolean: 'a true / false value', string: 'text', array: 'a list', object: 'a record' };
+
+/**
+ * A comparison with a fixed value of another type, e.g. a number variable with "" or a true / false
+ * one with "yes" (an emptied value box of Show when, the If step or Rules): the exported card would
+ * fail its strict type-check, so it is an error.
+ */
+function checkComparisonTypes(chk: CodeChecker, code: string, scope: NameScope, loc: Loc, what: string): void {
+  const types = chk.types;
+  if (!types || !/[=<>]/.test(code)) return;
+  for (const cmp of literalComparisons(code)) {
+    const head = /^[A-Za-z_$][\w$]*/.exec(cmp.subject)?.[0];
+    // A repeat item or handler parameter may hide a variable of the same name.
+    if (!head || scope.isLocal(head)) continue;
+    const type = strictSubjectType(types, cmp.subject);
+    const expected = rawComparisonMismatch(cmp.op, cmp.value, type, subjectMayBeNull(types, cmp.subject));
+    if (!expected) continue;
+    const shown = cmp.value === '' ? 'an empty value' : JSON.stringify(cmp.value);
+    const fix =
+      expected === 'start value'
+        ? `${cmp.subject} starts empty, so it can’t be compared with “more / less than” yet. Give it a start value, or compare with “is” / “is not”.`
+        : `${cmp.subject} is ${SUBJECT_TYPE_WORDS[type] ?? 'another kind of value'}. ${expectedLiteralText(expected)}`;
+    chk.c.add(
+      'condition-type',
+      'error',
+      `${capitalize(what)} compares ${cmp.subject} with ${shown}, but ${fix} Otherwise the exported card won’t pass its type-check.`,
+      loc,
+      `cmp:${code}:${cmp.subject}:${cmp.op}`,
+      cmp.subject,
+    );
+  }
 }
 
 /** Checks a block of statements (custom code). */
@@ -1224,6 +1264,7 @@ function validateExtension(project: Project, ext: Extension, c: Collector): void
   const chk: CodeChecker = {
     c,
     noCrmContext: ext.kind === 'settings' ? 'settings page' : ext.kind === 'home' ? 'app home page' : undefined,
+    types: { state: state.filter(isRecord), dataSources: dataSources.filter(isRecord) } as Pick<Extension, 'state' | 'dataSources'>,
   };
   const asyncNames = new Set(dataSources.filter((ds) => (ds.kind === 'fetch' || ds.kind === 'function') && ds.name).map((ds) => ds.name));
   const shadowable = new Set<string>(baseNames);

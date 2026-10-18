@@ -4,7 +4,7 @@ import { CONNECT_TIMINGS, resetConnectionForTests, useConnection, type Connectio
 import { signInFix, signInTroubleChoices } from '../signInHelp';
 import { healthFixture } from '../testUtils';
 import { ConnectButton } from './ConnectButton';
-import { SignInHelp } from './SignInHelp';
+import { SIGN_IN_FEEDBACK_SETTLE_MS, SignInHelp } from './SignInHelp';
 import { HOSTING_DOCS_URL } from './links';
 import { resetErrorReporterForTests } from '../../status/reporter';
 
@@ -226,7 +226,10 @@ describe('Still waiting for HubSpot', () => {
     showResult('popup_closed');
     const dialog = screen.getByRole('dialog', { name: 'HubSpot was not connected' });
     fireEvent.click(within(dialog).getByRole('radio', { name: /Something else/ }));
-    fireEvent.change(within(dialog).getByPlaceholderText('Type or paste HubSpot’s message'), { target: { value: 'secret words' } });
+    const details = within(dialog).getByPlaceholderText('Type or paste HubSpot’s message');
+    // Acting on the fix settles the answer at once.
+    fireEvent.focus(details);
+    fireEvent.change(details, { target: { value: 'secret words' } });
     await waitFor(() => expect(posted).toHaveLength(2));
     expect(posted).toEqual([
       { type: 'signin_feedback', kind: 'popup_closed' },
@@ -235,4 +238,33 @@ describe('Still waiting for HubSpot', () => {
     expect(JSON.stringify(posted)).not.toContain('secret');
     resetErrorReporterForTests();
   });
+
+  it('reports only the answer the person settles on, not every choice they move through', async () => {
+    resetErrorReporterForTests();
+    stubActions();
+    const posted: unknown[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init: RequestInit) => {
+        posted.push(JSON.parse(String(init.body)));
+        return new Response(null, { status: 204 });
+      }),
+    );
+    showResult('popup_closed');
+    const dialog = screen.getByRole('dialog', { name: 'HubSpot was not connected' });
+    // Like arrow keys in a radio group: every option is selected on the way.
+    for (const name of [/acceptable use policy/i, /not allowed to install/i, /Something else/, /acceptable use policy/i]) {
+      fireEvent.click(within(dialog).getByRole('radio', { name }));
+    }
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted).toEqual([{ type: 'signin_feedback', kind: 'popup_closed' }]);
+    await waitFor(() => expect(posted).toHaveLength(2), { timeout: SIGN_IN_FEEDBACK_SETTLE_MS + 1500 });
+    expect(posted[1]).toEqual({ type: 'signin_feedback', kind: 'aup' });
+    // Changing their mind later is sent too (the status page keeps the latest answer).
+    fireEvent.click(within(dialog).getByRole('radio', { name: /not allowed to install/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Copy a note/ }));
+    await waitFor(() => expect(posted).toHaveLength(3));
+    expect(posted[2]).toEqual({ type: 'signin_feedback', kind: 'install_permission' });
+    resetErrorReporterForTests();
+  }, 10_000);
 });

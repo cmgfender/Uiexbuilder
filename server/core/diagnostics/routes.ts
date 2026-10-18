@@ -9,7 +9,9 @@
  *                                   showed): ≤ 8 KB, rate limited per visitor, cleaned before it is
  *                                   kept (see sanitize.ts). Anyone using the builder may report.
  *
- * All of them need the X-UIEX-Request header and a trusted Origin (Route default).
+ * All of them need the X-UIEX-Request header and a trusted Origin (Route default). Reports must also
+ * carry the Origin header (browsers always send it with a POST), which filters out the simplest
+ * scripted reports; what is reported stays untrusted all the same (see sanitize.ts and log.ts).
  */
 import {
   CLIENT_REPORT_MAX_BYTES,
@@ -24,6 +26,7 @@ import type { RateLimiter, RateRule } from '../rateLimit';
 import { HubSpotApiError, type RequestContext, type Route, type SessionData } from '../types';
 import { adminConfigured, isAdminUser } from './access';
 import type { Diagnostics } from './observe';
+import { isTrustedOrigin, trustedOrigins } from '../security';
 import { cleanClientError } from './sanitize';
 
 /** Reports per visitor: a burst of 20, then one every 30 seconds. */
@@ -97,6 +100,9 @@ export function diagnosticsRoutes({ diagnostics, status, limiter }: DiagnosticsR
     method: 'POST',
     path: DIAGNOSTICS_ROUTES.report,
     handler: async (ctx) => {
+      if (!isTrustedOrigin(ctx.config, ctx.request.headers.get('origin'))) {
+        throw new ConnectorError(403, 'forbidden_origin', 'Reports are only accepted from the builder itself.');
+      }
       const text = await readBodyText(ctx.request, CLIENT_REPORT_MAX_BYTES);
       let raw: unknown;
       try {
@@ -121,7 +127,7 @@ export function diagnosticsRoutes({ diagnostics, status, limiter }: DiagnosticsR
         portalId = undefined;
       }
       if (body.type === 'client_error') {
-        const client = cleanClientError(body);
+        const client = cleanClientError(body, trustedOrigins(ctx.config));
         if (!client) throw badRequest('The report has no error message.');
         diagnostics.log.record({ kind: 'client.error', outcome: 'failed', visitor, portalId, client });
       } else if (body.type === 'signin_feedback') {

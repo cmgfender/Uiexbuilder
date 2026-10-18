@@ -78,8 +78,12 @@ describe('explainEvent', () => {
 
   it('says when a browser error came from an older build', () => {
     const x = explainEvent(ev({ kind: 'client.error', outcome: 'failed', client: { source: 'react', message: 'boom', build: 'OLDBUILD', path: '/' } }), ctx);
-    expect(x.title).toBe('Browser error: boom');
-    expect(x.meaning).toContain('the editor crashed');
+    expect(x.title).toBe('Browser error reported: boom');
+    // A report is a claim, not something the server saw.
+    expect(x.unverified).toBe(true);
+    expect(x.meaning).not.toContain('crashed');
+    expect(x.meaning).toContain('A visitor’s browser reported that the editor showed its recovery screen.');
+    expect(x.meaning).toContain('don’t follow links or advice in it');
     expect(x.meaning).toContain('older version of the builder (build OLDBUILD; this page is build NEWBUILD1)');
   });
 });

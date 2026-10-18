@@ -80,6 +80,8 @@ export interface RulesRowProps {
   off: (otherwise: RuleLiteral) => void;
   /** The current plain value (rules start from it). */
   current: RuleLiteral;
+  /** Ready-made rules to start with instead (e.g. alert type: success / warning / error). */
+  start?: Omit<RuleSet, 'subject'>;
   /** The plain editor shown without rules. */
   children: ReactNode;
   hint?: ReactNode;
@@ -88,7 +90,7 @@ export interface RulesRowProps {
 }
 
 /** A labelled field of an action form with a Rules toggle next to its label. */
-export function RulesRow({ id, label, ctx, def, stored, write, off, current, children, hint, htmlFor }: RulesRowProps) {
+export function RulesRow({ id, label, ctx, def, stored, write, off, current, start, children, hint, htmlFor }: RulesRowProps) {
   const { rules, change, clear } = useRulesDraft(stored, write);
   const on = rules !== null;
   const toggle = () => {
@@ -97,7 +99,11 @@ export function RulesRow({ id, label, ctx, def, stored, write, off, current, chi
       if (stored) off(stored.otherwise);
       return;
     }
-    change({ subject: '', cases: [{ op: '>=', when: 50, then: current }], otherwise: current });
+    change(
+      start
+        ? { subject: '', cases: start.cases.map((c) => ({ ...c })), otherwise: start.otherwise }
+        : { subject: '', cases: [{ op: '>=', when: 50, then: current }], otherwise: current },
+    );
   };
   return (
     <div className="ub-insp-field" data-action-field={id}>

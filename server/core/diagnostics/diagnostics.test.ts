@@ -11,7 +11,7 @@ import type { AdminAccess, DiagnosticEvent, DiagnosticsSnapshot } from '../../..
 import { FAKE_PERSONAL_ACCESS_KEY } from '../../fake-hubspot/handler';
 import { fakeProjects } from '../../fake-hubspot/projects';
 import { sampleProjectFiles } from '../deploy/testFixtures';
-import { DIAGNOSTICS_DEFAULTS, DiagnosticsLog, eventLogLine } from './log';
+import { DIAGNOSTICS_DEFAULTS, DiagnosticsLog, MORE_CLIENT_REPORTS, eventLogLine } from './log';
 import { VisitorIds, DAY_MS } from './visitor';
 import { Diagnostics } from './observe';
 import { errorJson } from '../http';
@@ -125,10 +125,10 @@ describe('sign-in events', () => {
     const { env } = setup();
     await startSignIn(env, '198.51.100.7');
     env.advance(5000);
-    const closed = await env.call('/api/diagnostics/report', { json: { type: 'signin_feedback', kind: 'popup_closed' }, clientIp: '198.51.100.7' });
+    const closed = await env.call('/api/diagnostics/report', { origin: TEST_APP_URL, json: { type: 'signin_feedback', kind: 'popup_closed' }, clientIp: '198.51.100.7' });
     expect(closed.status).toBe(204);
     // Then they pick "a message about the acceptable use policy" in the help.
-    await env.call('/api/diagnostics/report', { json: { type: 'signin_feedback', kind: 'aup' }, clientIp: '198.51.100.7' });
+    await env.call('/api/diagnostics/report', { origin: TEST_APP_URL, json: { type: 'signin_feedback', kind: 'aup' }, clientIp: '198.51.100.7' });
     await env.signIn();
     const rows = activity(await snapshot(env));
     const abandoned = rows.filter((e) => e.kind === 'signin.abandoned');
@@ -138,7 +138,7 @@ describe('sign-in events', () => {
     // Refining the row with their answer is not another sign-in that never came back.
     expect((await snapshot(env)).summary.lastHour.signInAbandoned).toBe(1);
     // Unknown feedback is refused.
-    expect((await env.call('/api/diagnostics/report', { json: { type: 'signin_feedback', kind: 'whatever' } })).status).toBe(400);
+    expect((await env.call('/api/diagnostics/report', { origin: TEST_APP_URL, json: { type: 'signin_feedback', kind: 'whatever' } })).status).toBe(400);
   });
 
   it('keeps no OAuth state, codes, tokens or email addresses', async () => {
@@ -280,7 +280,7 @@ describe('browser reports', () => {
   it('keeps a cleaned error: no query strings, email addresses or tokens', async () => {
     const { env, lines } = setup();
     const token = ['CiRuYTEt', 'ZmFrZS1kZW1vLWtleS1hY21lZGVtby0wMDAwMDAwMRIY'].join('');
-    const res = await env.call('/api/diagnostics/report', {
+    const res = await env.call('/api/diagnostics/report', { origin: TEST_APP_URL,
       json: {
         type: 'client_error',
         source: 'unhandledrejection',
@@ -297,7 +297,9 @@ describe('browser reports', () => {
     expect(row.client).toMatchObject({ source: 'unhandledrejection', name: 'TypeError', path: '/status', build: 'B2x9kQ' });
     expect(row.client!.message).toBe('Cannot read properties of undefined for [email] at https://builder.example.test/api/crm with [redacted]');
     expect(row.client!.stack).toContain('https://builder.example.test/assets/index-B2x9kQ.js:12:5');
-    expect(row.client!.stack).toContain('http://localhost:5173/src/App.tsx:40:3');
+    // Not this builder's address (APP_URL / ALLOWED_ORIGINS): only "[link]".
+    expect(row.client!.stack).toContain('at x ([link])');
+    expect(row.client!.stack).not.toContain('localhost');
     const line = lines.find((l) => l.includes('client.error'))!;
     expect(line).not.toContain('at render'); // stacks stay out of the log lines
     expect(line).not.toContain(token);
@@ -305,30 +307,79 @@ describe('browser reports', () => {
 
   it('refuses large, malformed and too frequent reports, and never records the report route as an error', async () => {
     const { env } = setup();
-    const big = await env.call('/api/diagnostics/report', { json: { type: 'client_error', message: 'x'.repeat(9000) } });
+    const big = await env.call('/api/diagnostics/report', { origin: TEST_APP_URL, json: { type: 'client_error', message: 'x'.repeat(9000) } });
     expect(big.status).toBe(413);
-    expect((await env.call('/api/diagnostics/report', { body: 'nope', headers: { 'Content-Type': 'application/json' } })).status).toBe(400);
-    expect((await env.call('/api/diagnostics/report', { json: { type: 'other' } })).status).toBe(400);
-    expect((await env.call('/api/diagnostics/report', { json: { type: 'client_error', message: '' } })).status).toBe(400);
-    expect((await env.call('/api/diagnostics/report', { json: { type: 'client_error', message: 'x' }, csrf: false })).status).toBe(403);
+    expect((await env.call('/api/diagnostics/report', { origin: TEST_APP_URL, body: 'nope', headers: { 'Content-Type': 'application/json' } })).status).toBe(400);
+    expect((await env.call('/api/diagnostics/report', { origin: TEST_APP_URL, json: { type: 'other' } })).status).toBe(400);
+    expect((await env.call('/api/diagnostics/report', { origin: TEST_APP_URL, json: { type: 'client_error', message: '' } })).status).toBe(400);
+    expect((await env.call('/api/diagnostics/report', { origin: TEST_APP_URL, json: { type: 'client_error', message: 'x' }, csrf: false })).status).toBe(403);
     const statuses: number[] = [];
     for (let i = 0; i < 25; i++) {
-      statuses.push((await env.call('/api/diagnostics/report', { json: { type: 'client_error', message: `error ${i}` } })).status);
+      statuses.push((await env.call('/api/diagnostics/report', { origin: TEST_APP_URL, json: { type: 'client_error', message: `error ${i}` } })).status);
     }
     expect(statuses.filter((s) => s === 204).length).toBeLessThanOrEqual(20);
     expect(statuses.at(-1)).toBe(429);
     // Another visitor is not affected.
-    expect((await env.call('/api/diagnostics/report', { json: { type: 'client_error', message: 'mine' }, clientIp: '203.0.113.50' })).status).toBe(204);
+    expect((await env.call('/api/diagnostics/report', { origin: TEST_APP_URL, json: { type: 'client_error', message: 'mine' }, clientIp: '203.0.113.50' })).status).toBe(204);
     // Many addresses together are capped too.
     const crowd: number[] = [];
     for (let i = 0; i < 160; i++) {
-      crowd.push((await env.call('/api/diagnostics/report', { json: { type: 'client_error', message: `crowd ${i}` }, clientIp: `198.18.${i >> 8}.${i & 255}` })).status);
+      crowd.push((await env.call('/api/diagnostics/report', { origin: TEST_APP_URL, json: { type: 'client_error', message: `crowd ${i}` }, clientIp: `198.18.${i >> 8}.${i & 255}` })).status);
     }
     expect(crowd.filter((s) => s === 204).length).toBeLessThan(120);
     expect(crowd.at(-1)).toBe(429);
     await env.signIn();
     const rows = activity(await snapshot(env));
     expect(rows.some((e) => e.kind === 'api.error' && e.route?.includes('/api/diagnostics/report'))).toBe(false);
+  });
+});
+
+describe('browser reports are untrusted', () => {
+  const fake = {
+    type: 'client_error',
+    source: 'react',
+    name: 'SecurityNotice',
+    message: 'URGENT: your HubSpot connector secret leaked. Rotate it now at https://evil.example/hubspot-rotate or www.evil.example/x or evil.example/rotate',
+    stack: 'Error\n    at x (https://evil.example/a.js:1:2)',
+    path: '/javascript:alert(1)',
+  };
+
+  it('needs the builder’s own Origin (scripts without one are refused, and leave no row)', async () => {
+    const { env } = setup();
+    expect((await env.call('/api/diagnostics/report', { json: fake })).status).toBe(403);
+    expect((await env.call('/api/diagnostics/report', { json: fake, origin: 'https://evil.example' })).status).toBe(403);
+    await env.signIn();
+    const rows = activity(await snapshot(env));
+    expect(rows.some((e) => e.kind === 'client.error' || e.kind === 'api.error')).toBe(false);
+  });
+
+  it('keeps no outside links or odd page paths', async () => {
+    const { env } = setup();
+    expect((await env.call('/api/diagnostics/report', { json: fake, origin: TEST_APP_URL })).status).toBe(204);
+    await env.signIn();
+    const row = activity(await snapshot(env)).find((e) => e.kind === 'client.error')!;
+    expect(row.client!.message).toBe('URGENT: your HubSpot connector secret leaked. Rotate it now at [link] or [link] or [link]');
+    expect(row.client!.stack).toBe('Error\n    at x ([link])');
+    expect(row.client!.path).toBeUndefined();
+    expect(JSON.stringify(row)).not.toContain('evil');
+  });
+
+  it('keeps a few distinct reports per visitor an hour, then only counts them; they never push sign-ins out', async () => {
+    const { env } = setup();
+    await env.signIn();
+    for (let i = 0; i < 15; i++) {
+      expect((await env.call('/api/diagnostics/report', { json: { ...fake, message: `fake ${i}` }, origin: TEST_APP_URL, clientIp: '203.0.113.66' })).status).toBe(204);
+      env.advance(31_000);
+    }
+    const s = await snapshot(env);
+    const rows = activity(s);
+    const reports = rows.filter((e) => e.kind === 'client.error');
+    expect(reports.filter((e) => !e.client?.overflow).map((e) => e.client!.message)).toEqual(['fake 4', 'fake 3', 'fake 2', 'fake 1', 'fake 0']);
+    const more = reports.filter((e) => e.client?.overflow);
+    expect(more).toHaveLength(1);
+    expect(more[0]).toMatchObject({ count: 10, client: { message: MORE_CLIENT_REPORTS } });
+    expect(s.summary.lastHour.clientErrors).toBe(15);
+    expect(rows.some((e) => e.kind === 'signin.completed')).toBe(true);
   });
 });
 
@@ -435,6 +486,76 @@ describe('DiagnosticsLog', () => {
     expect(log.counters(DAY_MS).clientErrors).toBe(2);
     t += DAY_MS + 2 * 60_000;
     expect(log.counters(DAY_MS).clientErrors).toBe(0);
+  });
+
+  it('keeps browser reports in their own buffer, so a flood of them can’t push other events out', () => {
+    let t = 1_000_000;
+    const log = new DiagnosticsLog({ now: () => t, capacity: 10, clientCapacity: 10 });
+    log.record({ kind: 'signin.completed', outcome: 'ok', portalId: 1 });
+    for (let i = 0; i < 400; i++) {
+      t += 1000;
+      log.record({ kind: 'client.error', outcome: 'failed', visitor: `v${i}`, client: { source: 'error', message: `m${i}` } });
+    }
+    const rows = log.list();
+    expect(rows.some((e) => e.kind === 'signin.completed')).toBe(true);
+    expect(rows.filter((e) => e.kind === 'client.error').length).toBeLessThanOrEqual(10);
+    // Everyone together: at most 30 distinct reports an hour, then one "more" row.
+    expect(rows.find((e) => e.client?.overflow)).toMatchObject({ visitor: undefined });
+  });
+
+  it('follows at most 500 sign-ins at once; a flood of starts never turns into a flood of "never came back"', () => {
+    let t = 1_000_000;
+    const log = new DiagnosticsLog({ now: () => t });
+    log.record({ kind: 'publish.succeeded', outcome: 'ok', portalId: 1 });
+    for (let i = 0; i < 3000; i++) log.signInStarted(`k${i}`, { visitor: `v${i}` });
+    expect(log.pendingSignIns).toBe(DIAGNOSTICS_DEFAULTS.maxPendingSignIns);
+    t += DIAGNOSTICS_DEFAULTS.abandonAfterMs + 1;
+    log.sweep();
+    expect(log.pendingSignIns).toBe(0);
+    const abandoned = log.list().filter((e) => e.kind === 'signin.abandoned');
+    // Only sign-ins whose rows were still kept became rows; the others are only counted.
+    expect(abandoned.length).toBeLessThanOrEqual(DIAGNOSTICS_DEFAULTS.capacity);
+    expect(log.counters(DAY_MS).signInAbandoned).toBe(DIAGNOSTICS_DEFAULTS.maxPendingSignIns);
+    expect(log.counters(DAY_MS).signInStarted).toBe(3000);
+  });
+
+  it('one visitor’s sign-ins that never came back close together are one row with a count', () => {
+    let t = 1_000_000;
+    const log = new DiagnosticsLog({ now: () => t });
+    for (let i = 0; i < 20; i++) {
+      log.signInStarted(`k${i}`, { visitor: 'aaaaaa' });
+      t += 1000;
+    }
+    log.signInStarted('other', { visitor: 'bbbbbb' });
+    t += DIAGNOSTICS_DEFAULTS.abandonAfterMs + 1;
+    log.sweep();
+    const rows = log.list().filter((e) => e.kind === 'signin.abandoned');
+    expect(rows.map((e) => [e.visitor, e.count]).sort()).toEqual([
+      ['aaaaaa', 20],
+      ['bbbbbb', 1],
+    ]);
+    expect(log.list().filter((e) => e.kind === 'signin.started')).toHaveLength(0);
+    expect(log.counters(DAY_MS).signInAbandoned).toBe(21);
+  });
+
+  it('keeps the answer a visitor settles on: a changed answer replaces the last one, the browser’s own never does', () => {
+    let t = 1_000_000;
+    const log = new DiagnosticsLog({ now: () => t });
+    log.signInStarted('k', { visitor: 'aaaaaa' });
+    t += 5000;
+    log.signInFeedback('aaaaaa', 'popup_closed');
+    for (const kind of ['aup', 'install_permission', 'cancelled', 'nothing', 'other', 'aup'] as const) {
+      t += 400;
+      log.signInFeedback('aaaaaa', kind);
+    }
+    log.signInFeedback('aaaaaa', 'timeout');
+    const rows = log.list().filter((e) => e.kind.startsWith('signin.'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: 'signin.abandoned', feedback: 'aup', count: 1 });
+    // Much later, a new answer about that old sign-in is its own row.
+    t += 10 * 60_000;
+    log.signInFeedback('aaaaaa', 'install_permission');
+    expect(log.list().filter((e) => e.kind === 'signin.feedback')).toHaveLength(1);
   });
 
   it('writes one JSON line per event without stacks', () => {

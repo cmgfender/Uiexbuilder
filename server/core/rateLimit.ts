@@ -8,6 +8,12 @@
  */
 
 export interface RateRule {
+  /**
+   * Which bucket the rule counts in (default: `what`). Rules that share a message but count
+   * different requests need their own bucket, e.g. sign-in start and callback: otherwise every
+   * sign-in would use up two attempts.
+   */
+  bucket?: string;
   /** Shown in the 429 message, e.g. "sign-in attempts". */
   what: string;
   /** Requests allowed in a burst. */
@@ -17,8 +23,8 @@ export interface RateRule {
 }
 
 export const RATE_RULES = {
-  authStart: { what: 'sign-in attempts', capacity: 20, refillMs: 30_000 },
-  authCallback: { what: 'sign-in attempts', capacity: 20, refillMs: 30_000 },
+  authStart: { bucket: 'auth-start', what: 'sign-in attempts', capacity: 20, refillMs: 30_000 },
+  authCallback: { bucket: 'auth-callback', what: 'sign-in attempts', capacity: 20, refillMs: 30_000 },
   deploy: { what: 'deploys', capacity: 10, refillMs: 30_000 },
   /** Deploy while sign-in isn't set up yet (first-time setup): stricter, per client IP. */
   deploySetup: { what: 'deploys', capacity: 4, refillMs: 2 * 60_000 },
@@ -49,7 +55,7 @@ export class RateLimiter {
   ) {}
 
   take(rule: RateRule, key: string): RateDecision {
-    const id = `${rule.what}|${rule.capacity}|${rule.refillMs}|${key}`;
+    const id = `${rule.bucket ?? rule.what}|${rule.capacity}|${rule.refillMs}|${key}`;
     const t = this.now();
     let b = this.buckets.get(id);
     if (!b) {

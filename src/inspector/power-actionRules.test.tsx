@@ -36,8 +36,9 @@ describe('Rules in actions', () => {
     // Nothing to compare yet: the step keeps its fixed type.
     expect(stepOf<AddAlertAction>(node.id).alertTypeExpr).toBeUndefined();
     await pick(within(field).getByLabelText('Based on'), /^score/);
-    await userEvent.clear(within(field).getByLabelText('Rule 1 value to compare with'));
-    await userEvent.type(within(field).getByLabelText('Rule 1 value to compare with'), '80');
+    // Ready-made like the progress bar's color: success from 80, warning from 40, else error.
+    expect(stepOf<AddAlertAction>(node.id).alertTypeExpr).toBe('(score) >= 80 ? "success" : (score) >= 40 ? "warning" : "danger"');
+    await userEvent.click(within(field).getByRole('button', { name: 'Remove rule 2' }));
     await userEvent.selectOptions(within(field).getByLabelText('Otherwise result'), 'Warning');
     const step = stepOf<AddAlertAction>(node.id);
     expect(step.alertTypeExpr).toBe('(score) >= 80 ? "success" : "warning"');

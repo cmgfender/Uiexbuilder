@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createExtension, createProject } from './factory';
 import { allHaveText, commonPropDefs, sharedProp, sharedText } from './settings';
 import { selectActiveExtension, useEditor } from './store';
+import { validateProject } from './validate';
 import type { NodeTemplate, UINode } from './types';
 
 function load(content: NodeTemplate[]) {
@@ -60,6 +61,56 @@ describe('copy / paste settings', () => {
     useEditor.getState().pasteSettings([top(1).id]);
     expect(top(1).props.variant).toEqual({ $expr: 'v' });
     expect(top(1).props.variant).not.toBe(top(0).props.variant);
+  });
+});
+
+describe('ids a component declares (Tab tabId, statistics item id)', () => {
+  beforeEach(() =>
+    load([
+      {
+        type: 'Tabs',
+        props: { defaultSelected: 'overview' },
+        children: [
+          { type: 'Tab', props: { tabId: 'overview', title: 'Overview' } },
+          { type: 'Tab', props: { tabId: 'activity', title: 'Activity', disabled: true } },
+        ],
+      },
+      {
+        type: 'Statistics',
+        children: [
+          { type: 'StatisticsItem', props: { id: 'open', label: 'Open deals', number: '12' } },
+          { type: 'StatisticsItem', props: { id: 'won', label: 'Won', number: '3' } },
+        ],
+      },
+    ]),
+  );
+  const child = (i: number, j: number): UINode => ext().nodes[top(i).children[j]];
+
+  it('pasting a tab’s settings onto another keeps each tab’s own id', () => {
+    const s = useEditor.getState();
+    const clip = s.copySettings(child(0, 0).id)!;
+    expect(clip.props.tabId).toBeUndefined();
+    expect(useEditor.getState().pasteSettings([child(0, 1).id])).toBe(1);
+    expect(child(0, 1).props).toEqual({ tabId: 'activity', title: 'Overview' });
+    expect(child(0, 0).props.tabId).not.toBe(child(0, 1).props.tabId);
+    const issues = validateProject(useEditor.getState().project).filter((i) => i.rule === 'duplicate-tab-id');
+    expect(issues).toEqual([]);
+  });
+
+  it('pasting a statistics item’s settings keeps its id', () => {
+    const s = useEditor.getState();
+    s.copySettings(child(1, 0).id);
+    s.pasteSettings([child(1, 1).id]);
+    expect(child(1, 1).props).toEqual({ id: 'won', label: 'Open deals', number: '12' });
+  });
+
+  it('multi-edit never offers the id', () => {
+    const tabs = commonPropDefs([child(0, 0), child(0, 1)]).map((p) => p.name);
+    expect(tabs).toContain('title');
+    expect(tabs).not.toContain('tabId');
+    const items = commonPropDefs([child(1, 0), child(1, 1)]).map((p) => p.name);
+    expect(items).toContain('label');
+    expect(items).not.toContain('id');
   });
 });
 

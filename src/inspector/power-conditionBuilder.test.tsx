@@ -78,6 +78,33 @@ describe('condition builder: Advanced › Visibility', () => {
     expect(within(showWhen()).getByLabelText('Check 1: what to check')).toBeInTheDocument();
   });
 
+  it('a value that doesn’t fit yet is shown as a problem and not saved until it is fixed', async () => {
+    const node = selectTop();
+    useEditor.getState().updateNode(node.id, { condition: 'count === 3 && String(name ?? "").toLowerCase().includes("a")' });
+    render(<Inspector />);
+    const value = within(showWhen()).getByLabelText('Check 1: value');
+    await userEvent.clear(value);
+    expect(within(showWhen()).getByText('Enter a number.')).toBeInTheDocument();
+    // `count === ""` would fail the exported card's type-check: the check waits until it is fixed.
+    expect(nodeById(node.id).condition).toBe('String(name ?? "").toLowerCase().includes("a")');
+    expect(value).toHaveValue('');
+    await userEvent.type(value, '4');
+    expect(nodeById(node.id).condition).toBe('count === 4 && String(name ?? "").toLowerCase().includes("a")');
+    expect(within(showWhen()).queryByText('Enter a number.')).toBeNull();
+  });
+
+  it('“is” on a true / false value starts at true, never at an empty value', async () => {
+    loadWith([{ type: 'Text', text: 'Hi' }], 'card', { state: [{ id: 's1', name: 'open', type: 'boolean', initial: false }] });
+    useEditor.setState({ rightPanel: 'advanced' });
+    const node = selectTop();
+    useEditor.getState().updateNode(node.id, { condition: 'open' });
+    render(<Inspector />);
+    await userEvent.selectOptions(within(showWhen()).getByLabelText('Check 1: comparison'), 'is');
+    expect(within(showWhen()).getByLabelText('Check 1: value')).toHaveDisplayValue('true');
+    expect(nodeById(node.id).condition).toBe('open === true');
+    expect(within(showWhen()).queryByText('Choose true or false.')).toBeNull();
+  });
+
   it('compares with another value in scope', async () => {
     const node = selectTop();
     render(<Inspector />);

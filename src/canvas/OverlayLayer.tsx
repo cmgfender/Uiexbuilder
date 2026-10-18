@@ -24,7 +24,8 @@ import {
 import { selectActiveExtension, useEditor, type EditorState } from '../model/store';
 import { getComponent } from '../registry';
 import { endDrag, startDrag, useDragStore } from '../dnd/dragState';
-import { IconButton, cx } from '../ui';
+import { IconButton, cx, useToast } from '../ui';
+import { removeNodesSafe } from '../shell/actions';
 import { NODE_SELECTOR, OBSTACLE_ATTR, childNodeElements, findNodeElement, findNodeElements, nodeIdOf } from './domHit';
 import { TOOLBAR_H, boxesIntersect, placeSelectionChrome, type ChromePlacement } from './chromePlacement';
 import { componentLabel, deleteNode, displayLabel, duplicateNode, moveSibling, nodeCapabilities, selectParent } from './nodeActions';
@@ -458,6 +459,10 @@ function SelectionChrome({ box, info, viewport, obstacles, peek, dragging, focus
   }, [covering, leftToolbar]);
   const faded = (peeking && covering) || dragging;
   const nodeId = info.id;
+  // With several components selected, the trash button deletes all of them (like the Delete key
+  // and the right-click menu), and says so.
+  const multi = useEditor((s) => (s.selectedNodeIds.length > 1 && s.selectedNodeIds.includes(nodeId) ? s.selectedNodeIds : null));
+  const toast = useToast();
   /**
    * After a toolbar action, focus must not drop to <body>: a move button that became disabled
    * (the end of the list) hands focus to the other one; a deleted / replaced selection, to the stage.
@@ -575,11 +580,12 @@ function SelectionChrome({ box, info, viewport, obstacles, peek, dragging, focus
         </IconButton>
         <IconButton
           size="sm"
-          label={info.locked ? 'Delete (locked)' : 'Delete'}
-          disabled={info.locked}
+          label={multi ? `Delete ${multi.length} selected` : info.locked ? 'Delete (locked)' : 'Delete'}
+          disabled={!multi && info.locked}
           className="ub-cv-quick__danger"
           onClick={() => {
-            deleteNode(nodeId);
+            if (multi) removeNodesSafe(multi, toast);
+            else deleteNode(nodeId);
             keepFocus('other');
           }}
         >

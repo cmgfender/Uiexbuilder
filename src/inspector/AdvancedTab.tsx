@@ -13,6 +13,7 @@ import type { Scope } from '../runtime';
 import { Button, cx, IconButton, Select, Switch, TextInput, useToast } from '../ui';
 import { ExpressionInput, usePreviewScope, useScopeVariables } from './controls';
 import { copyText } from './clipboard';
+import { isMacPlatform } from '../shell/shortcuts';
 import { formatPreviewValue } from './propValue';
 import { ConditionBuilder } from './power-ConditionBuilder';
 import { asOneUndoStep } from './history';
@@ -356,7 +357,7 @@ function ReuseSection({ node, def }: { node: UINode; def: ComponentDef }) {
     <InspectorSection id="adv:reuse" title="Reuse settings">
       <div className="ub-insp-help">
         Copy this {def.label.toLowerCase()}’s settings — look, text and rules, not its id — and paste them onto another {def.label.toLowerCase()}.
-        Select several components to change a setting on all of them.
+        Shift-click (or {isMacPlatform() ? 'Cmd' : 'Ctrl'}-click) several components on the canvas or in Layers to change a setting on all of them.
       </div>
       <div className="ub-pw-reuse">
         <Button

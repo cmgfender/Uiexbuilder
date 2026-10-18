@@ -262,7 +262,7 @@ export function reportReactError(error: unknown, componentStack?: string | null)
   if (reporter?.report(error, 'react', { componentStack }) && connectorReady() === 'unknown') probeConnector(() => reporter.flush());
 }
 
-const lastFeedback = new Map<SignInFeedbackKind, number>();
+const lastFeedback: { kind: SignInFeedbackKind | null; at: number; sent: number } = { kind: null, at: 0, sent: 0 };
 
 /**
  * Tells the host what the HubSpot sign-in window showed (or how it ended) when it never came back
@@ -272,8 +272,13 @@ const lastFeedback = new Map<SignInFeedbackKind, number>();
 export function reportSignInFeedback(kind: SignInFeedbackKind): void {
   if (getConnectorClient().disabled || connectorReady() !== 'yes') return;
   const t = Date.now();
-  if (t - (lastFeedback.get(kind) ?? 0) < 10_000) return;
-  lastFeedback.set(kind, t);
+  // The same answer again within 10 seconds is a repeat; a changed answer is always sent (the
+  // server keeps the latest one), up to a few per page load.
+  if (lastFeedback.kind === kind && t - lastFeedback.at < 10_000) return;
+  if (lastFeedback.sent >= 12) return;
+  lastFeedback.kind = kind;
+  lastFeedback.at = t;
+  lastFeedback.sent += 1;
   void postReport({ type: 'signin_feedback', kind });
 }
 
@@ -282,5 +287,7 @@ export function resetErrorReporterForTests(): void {
   installed = null;
   probed = 'unknown';
   probing = false;
-  lastFeedback.clear();
+  lastFeedback.kind = null;
+  lastFeedback.at = 0;
+  lastFeedback.sent = 0;
 }

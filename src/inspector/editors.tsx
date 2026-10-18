@@ -297,7 +297,7 @@ function EnumEditor({ id, def, value, onChange, required }: LiteralEditorProps) 
             <label
               key={i}
               className={cx('ub-insp-choice', checked && 'is-on')}
-              title={`${label}${String(o.value) !== label ? ` (${String(o.value)})` : ''}${i === defIndex ? ' — HubSpot default' : ''}`}
+              title={`${label}${label.toLowerCase().includes(String(o.value).toLowerCase()) ? '' : ` (${String(o.value)})`}${i === defIndex ? ' — HubSpot default' : ''}`}
             >
               <input
                 type="radio"

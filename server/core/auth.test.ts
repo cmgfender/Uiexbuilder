@@ -423,4 +423,14 @@ describe('sign-in rate limits', () => {
     // Someone else is not affected.
     expect((await env.call('/api/auth/start', { csrf: false, headers: html, clientIp: '198.51.100.8' })).status).toBe(302);
   });
+
+  it('counts each sign-in attempt once (the return from HubSpot has its own limit)', async () => {
+    const env = createTestEnv();
+    for (let i = 0; i < 20; i++) {
+      expect((await env.call('/api/auth/start', { csrf: false, headers: html, clientIp: '198.51.100.9' })).status).toBe(302);
+      // A callback (here with a state that doesn't match) is refused, but not as "too many".
+      expect((await env.call('/api/auth/callback?state=nope&code=x', { csrf: false, headers: html, clientIp: '198.51.100.9' })).status).not.toBe(429);
+    }
+    expect((await env.call('/api/auth/start', { csrf: false, headers: html, clientIp: '198.51.100.9' })).status).toBe(429);
+  });
 });

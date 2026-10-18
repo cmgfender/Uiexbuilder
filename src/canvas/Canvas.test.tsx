@@ -209,6 +209,48 @@ describe('selection and hover', () => {
     expect(useEditor.getState().selectedNodeId).toBeNull();
   });
 
+  it('Shift / Cmd / Ctrl-click adds to the selection and outlines every selected component', () => {
+    setup(content);
+    const title = byName('title');
+    const body = byName('body');
+    fakeRect(el(title.id), 10, 10, 200, 24);
+    fakeRect(el(body.id), 10, 40, 200, 20);
+    fireEvent.click(el(title.id));
+    fireEvent.click(el(body.id), { shiftKey: true });
+    expect(useEditor.getState().selectedNodeIds).toEqual([title.id, body.id]);
+    expect(useEditor.getState().selectedNodeId).toBe(body.id);
+    expect(screen.getAllByTestId('canvas-multi-outline')).toHaveLength(1);
+    // Right-clicking one of them keeps both selected.
+    fireEvent.contextMenu(el(title.id));
+    expect(useEditor.getState().selectedNodeIds).toEqual([title.id, body.id]);
+    act(() => useCanvasUi.getState().closeMenu());
+    fireEvent.click(el(title.id), { metaKey: true });
+    expect(useEditor.getState().selectedNodeIds).toEqual([]);
+    expect(useEditor.getState().selectedNodeId).toBe(body.id);
+    expect(screen.queryAllByTestId('canvas-multi-outline')).toHaveLength(0);
+  });
+
+  it('with several selected, the toolbar’s trash button deletes all of them in one undo step', async () => {
+    setup([
+      { type: 'Tag', name: 't1', text: 'One' },
+      { type: 'Tag', name: 't2', text: 'Two' },
+      { type: 'Tag', name: 't3', text: 'Three' },
+    ]);
+    const [t1, t2, t3] = [byName('t1'), byName('t2'), byName('t3')];
+    for (const [i, t] of [t1, t2, t3].entries()) fakeRect(el(t.id), 10, 10 + i * 30, 120, 24);
+    fireEvent.click(el(t1.id));
+    fireEvent.click(el(t2.id), { shiftKey: true });
+    fireEvent.click(el(t3.id), { shiftKey: true });
+    expect(useEditor.getState().selectedNodeIds).toEqual([t1.id, t2.id, t3.id]);
+    const toolbar = await screen.findByRole('toolbar', { name: 'Tag actions' });
+    const before = useEditor.getState().past.length;
+    fireEvent.click(within(toolbar).getByRole('button', { name: 'Delete 3 selected' }));
+    expect(root().children).toEqual([]);
+    expect(useEditor.getState().past.length).toBe(before + 1);
+    act(() => useEditor.getState().undo());
+    expect(root().children).toHaveLength(3);
+  });
+
   it('pointer move hovers the node under the pointer; leaving clears it', () => {
     setup(content);
     const title = byName('title');
@@ -410,14 +452,30 @@ describe('context menu', () => {
     expect(within(screen.getByRole('menu')).getByRole('menuitem', { name: /Cut/ })).toBeDisabled();
   });
 
+  it('copies settings from one component and pastes them onto the selected ones', () => {
+    setup(content);
+    const first = byName('first');
+    const last = byName('last');
+    act(() => useEditor.getState().setProps(first.id, { variant: 'microcopy' }));
+    openMenuOn(el(first.id));
+    expect(within(screen.getByRole('menu')).getByRole('menuitem', { name: /^Paste settings/ })).toBeDisabled();
+    chooseMenuItem(/^Copy settings/);
+    expect(useEditor.getState().settingsClipboard?.type).toBe('Text');
+    act(() => useEditor.getState().selectMany([first.id, last.id]));
+    openMenuOn(el(last.id));
+    expect(within(screen.getByRole('menu')).getByRole('menuitem', { name: /^Delete 2 selected/ })).toBeInTheDocument();
+    chooseMenuItem(/^Paste settings onto 2 selected/);
+    expect(selectActiveExtension(useEditor.getState()).nodes[last.id].props.variant).toBe('microcopy');
+  });
+
   it('copies and pastes after the node', () => {
     setup(content);
     const first = byName('first');
     openMenuOn(el(first.id));
-    chooseMenuItem(/Copy/);
+    chooseMenuItem(/^Copy(?! settings)/);
     expect(useEditor.getState().clipboard?.type).toBe('Text');
     openMenuOn(el(byName('last').id));
-    chooseMenuItem(/Paste/);
+    chooseMenuItem(/^Paste(?! settings)/);
     expect(root().children).toHaveLength(4);
     expect(ext().nodes[root().children[3]].text).toBe('First');
   });

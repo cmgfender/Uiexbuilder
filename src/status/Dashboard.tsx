@@ -3,7 +3,7 @@
  * with what it means and how to fix it), a filterable timeline and what the server is set up with.
  * Refreshes every 30 seconds while the tab is visible.
  */
-import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
   Bug,
@@ -26,7 +26,7 @@ import { describeError } from '../connect/describe';
 import { isAbortError } from '../connect/client';
 import { fetchDiagnostics } from './api';
 import { FIX_OWNER_LABEL, explainEvent, feedbackLabel, formatDuration, type ExplainContext, type Explanation, type ExplanationTone } from './explain';
-import { DEFAULT_FILTER, attentionItems, clockTime, filterEvents, groupOf, relativeTime, type AttentionItem, type EventFilter, type EventGroup } from './model';
+import { DEFAULT_FILTER, attentionItems, clockTime, filterEvents, groupOf, isProblem, relativeTime, type AttentionItem, type EventFilter, type EventGroup } from './model';
 import { currentBuild } from './reporter';
 import { statusContext } from './context';
 import type { DiagnosticCounters, DiagnosticEvent, DiagnosticsSnapshot } from './types';
@@ -71,15 +71,23 @@ export function Dashboard() {
   const [auto, setAuto] = useState(readAuto);
   const [range, setRange] = useState<'hour' | 'day'>('day');
   const [filter, setFilter] = useState<EventFilter>(DEFAULT_FILTER);
+  // What screen readers hear: a refresh someone asked for, and new problems — never the clock.
+  const [announcement, setAnnouncement] = useState('');
   const ctx = useMemo<ExplainContext>(() => ({ ...statusContext(), currentBuild: currentBuild() }), []);
+  const seenProblems = useRef<number | null>(null);
 
-  const load = useCallback(async (signal?: AbortSignal) => {
+  const load = useCallback(async (signal?: AbortSignal, manual = false) => {
     setLoading(true);
     try {
       const next = await fetchDiagnostics(signal);
       setSnap(next);
       setError(null);
       setUpdatedAt(Date.now());
+      const problems = next.events.filter(isProblem).length;
+      const added = seenProblems.current === null ? 0 : problems - seenProblems.current;
+      seenProblems.current = problems;
+      const news = added > 0 ? (added === 1 ? '1 new problem.' : `${added} new problems.`) : '';
+      setAnnouncement(manual ? `Updated.${news ? ` ${news}` : ' Nothing new.'}` : news);
     } catch (err) {
       if (isAbortError(err)) return;
       setError(describeError(err).message);
@@ -136,14 +144,18 @@ export function Dashboard() {
       <div className="ub-st-dash__head">
         <div>
           <h1 className="ub-st-title">Builder status</h1>
-          <p className="ub-st-subtitle" aria-live="polite">
+          {/* Not a live region: it changes every 30 seconds (see `announcement`). */}
+          <p className="ub-st-subtitle">
             {updatedAt ? `Updated ${clockTime(updatedAt, updatedAt)}` : 'Loading…'}
             {auto ? ' · refreshes every 30 seconds' : ''}
+          </p>
+          <p className="ub-st-sr" role="status" aria-live="polite">
+            {announcement}
           </p>
         </div>
         <div className="ub-st-dash__tools">
           <Switch checked={auto} onChange={(v) => { setAuto(v); writeAuto(v); }} label="Auto-refresh" />
-          <Button icon={<RefreshCw size={14} aria-hidden className={cx(loading && 'ub-st-spin')} />} onClick={() => void load()} disabled={loading}>
+          <Button icon={<RefreshCw size={14} aria-hidden className={cx(loading && 'ub-st-spin')} />} onClick={() => void load(undefined, true)} disabled={loading}>
             Refresh
           </Button>
           <Button icon={<Download size={14} aria-hidden />} onClick={download} disabled={!snap} title="Download everything on this page as a JSON file (to share with a developer)">
@@ -156,7 +168,7 @@ export function Dashboard() {
         <div className="ub-st-alert" role="alert">
           <AlertTriangle size={16} aria-hidden />
           <span>{snap ? `Couldn’t refresh: ${error}` : error}</span>
-          <Button size="sm" onClick={() => void load()}>
+          <Button size="sm" onClick={() => void load(undefined, true)}>
             Try again
           </Button>
         </div>
@@ -291,7 +303,10 @@ function Attention({ items, onShow }: { items: AttentionItem[]; onShow: (f: Even
             <li key={item.key} className={cx('ub-st-issue', `ub-st-issue--${item.explanation.tone}`)}>
               <div className="ub-st-issue__head">
                 <span className="ub-st-issue__icon">{TONE_ICON[item.explanation.tone]}</span>
-                <h3 className="ub-st-issue__title">{item.explanation.title}</h3>
+                <h3 className="ub-st-issue__title">
+                  {item.explanation.title}
+                  {item.explanation.unverified && <Unverified />}
+                </h3>
                 <span className="ub-st-issue__count">
                   {item.count === 1 ? 'once' : `${item.count} times`}
                   {item.visitors > 1 ? ` · ${item.visitors} visitors` : ''}
@@ -313,6 +328,15 @@ function Attention({ items, onShow }: { items: AttentionItem[]; onShow: (f: Even
         </button>
       )}
     </section>
+  );
+}
+
+/** Marks what a browser reported (anyone can send a report). */
+function Unverified() {
+  return (
+    <span className="ub-st-chip ub-st-chip--unverified" title="Reported by a visitor’s browser. The server can’t check it: anyone can send a report.">
+      Reported by a browser · not verified
+    </span>
   );
 }
 
@@ -357,14 +381,27 @@ function Timeline({ snap, ctx, filter, onFilter }: { snap: DiagnosticsSnapshot; 
   const events = useMemo(() => filterEvents(snap.events, filter, snap.now), [snap, filter]);
   const filtered = filter.group !== 'all' || filter.problemsOnly || filter.range !== 'all' || filter.query.trim() !== '';
   const shown = events.slice(0, limit);
+  const countText = events.length === snap.events.length ? `${events.length} events` : `${events.length} of ${snap.events.length} events`;
+  // Screen readers hear the count when the filters change, not on every refresh.
+  const [said, setSaid] = useState('');
+  const firstFilter = useRef(true);
+  useEffect(() => {
+    if (firstFilter.current) {
+      firstFilter.current = false;
+      return;
+    }
+    setSaid(countText);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the filters change
+  }, [filter]);
   return (
     <section className="ub-st-section" id="ub-st-timeline" aria-labelledby="ub-st-timeline-title">
       <div className="ub-st-section__head">
         <h2 id="ub-st-timeline-title" className="ub-st-h2">
           Timeline
         </h2>
-        <span className="ub-st-muted" aria-live="polite">
-          {events.length === snap.events.length ? `${events.length} events` : `${events.length} of ${snap.events.length} events`}
+        <span className="ub-st-muted">{countText}</span>
+        <span className="ub-st-sr" aria-live="polite">
+          {said}
         </span>
       </div>
       <div className="ub-st-filters" role="search">
@@ -441,7 +478,10 @@ function EventRow({ event: e, now, you, ctx }: { event: DiagnosticEvent; now: nu
           <span className="ub-st-sr">{TONE_LABEL[x.tone]}: </span>
         </span>
         <span className="ub-st-event__main">
-          <span className="ub-st-event__title">{x.title}</span>
+          <span className="ub-st-event__title">
+            {x.title}
+            {x.unverified && <Unverified />}
+          </span>
           <span className="ub-st-event__meta">
             <span className="ub-st-chip">{GROUP_LABEL[group]}</span>
             {e.count > 1 && <span className="ub-st-chip ub-st-chip--strong">{e.count}×</span>}
@@ -575,7 +615,11 @@ function PrivacyCard() {
         What is recorded
       </h2>
       <ul className="ub-st-side__list">
-        <li>Sign-ins, publishes, refused requests and errors in visitors’ browsers — with codes, never messages people typed.</li>
+        <li>Sign-ins, publishes and refused requests — with codes, never messages people typed.</li>
+        <li>
+          Errors that visitors’ browsers report, with their message (no email addresses, keys or outside links). Anyone can send such a report, so they are marked
+          “not verified”.
+        </li>
         <li>Visitors are an anonymous code that changes every day, plus the HubSpot account they signed in to. No names, emails or IP addresses.</li>
         <li>Never tokens, keys, cookies or CRM records.</li>
         <li>Only the admins in ADMIN_EMAILS / ADMIN_PORTALS can open this page.</li>

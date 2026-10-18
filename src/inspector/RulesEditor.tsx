@@ -12,7 +12,16 @@ import type { PropDef } from '../registry/types';
 import { IconButton } from '../ui';
 import { usePreviewScope } from './controls';
 import { LiteralEditor } from './editors';
-import { declaredSubjectType, parseValueText, type ConditionOp } from './power-conditions';
+import {
+  declaredSubjectType,
+  expectedLiteralText,
+  isSimpleRef,
+  parseValueText,
+  rawComparisonMismatch,
+  strictSubjectType,
+  subjectMayBeNull,
+  type ConditionOp,
+} from './power-conditions';
 import { SubjectPicker } from './power-SubjectPicker';
 import { isNumericOp, RULE_OPS, rulesToExpr, ruleSubjectsFor, toRuleLiteral, type RuleLiteral, type RuleOp, type RuleSet } from './rules';
 import { safeEvaluate } from './scope';
@@ -82,6 +91,13 @@ export function RulesEditor({ node, nodeId: at, eventParams, def, ext, value, on
   };
 
   const declared = declaredSubjectType(ext, subject);
+  // A threshold the exported card's type-check would refuse (e.g. an emptied box for a number).
+  const whenProblem = (op: RuleOp, when: RuleLiteral): string | null => {
+    if (!isSimpleRef(subject)) return null;
+    const expected = rawComparisonMismatch(AS_CONDITION_OP[op], when, strictSubjectType(ext, subject), subjectMayBeNull(ext, subject));
+    if (!expected) return null;
+    return expected === 'start value' ? `${subject} starts empty: give it a start value, or use “is” / “is not”.` : expectedLiteralText(expected);
+  };
   const update = (patch: Partial<RuleSet>) => onChange({ ...value, ...patch });
   const updateCase = (i: number, patch: Partial<RuleSet['cases'][number]>) =>
     update({
@@ -158,6 +174,7 @@ export function RulesEditor({ node, nodeId: at, eventParams, def, ext, value, on
                 <Trash2 size={12} />
               </IconButton>
             </div>
+            {whenProblem(c.op, c.when) && <div className="ub-insp-rules__problem">{whenProblem(c.op, c.when)}</div>}
             <div className="ub-insp-rules__then">
               <ArrowRight size={12} aria-hidden />
               {valueEditor(c.then, (then) => updateCase(i, { then }), `Rule ${i + 1} result`, `then-${i}`)}

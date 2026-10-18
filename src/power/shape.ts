@@ -20,7 +20,12 @@ import { tokenize, type Token } from '../model/jsTokens';
 import type { DataSource, Extension } from '../model/types';
 import { isSimpleRef } from '../inspector/power-conditions';
 
-export type SortAs = 'text' | 'number';
+/**
+ * How values compare: as text, as numbers, or as numbers written with symbols — HubSpot's
+ * formatted values such as "$48,000.00" or "45%" ('formatted': the symbols and thousands
+ * separators are dropped before comparing, so $7,800 comes before $48,000).
+ */
+export type SortAs = 'text' | 'number' | 'formatted';
 
 export interface ShapeSort {
   /** Field path inside a row, e.g. ['properties', 'amount']. */
@@ -120,6 +125,10 @@ export function formatExpr(f: ShapeFormat, row = ROW): string {
 export function sortExpr(s: ShapeSort): string {
   const [first, second] = s.dir === 'asc' ? ['a', 'b'] : ['b', 'a'];
   const acc = accessor(s.field);
+  if (s.as === 'formatted') {
+    const num = (row: string) => `Number(String(${row}${acc} ?? "").replace(/[^0-9.-]/g, ""))`;
+    return `${num(first)} - ${num(second)}`;
+  }
   return s.as === 'number'
     ? `Number(${first}${acc} ?? 0) - Number(${second}${acc} ?? 0)`
     : `String(${first}${acc} ?? "").localeCompare(String(${second}${acc} ?? ""))`;
@@ -194,11 +203,11 @@ function readAccessor(text: string): string[] | null {
 }
 
 function readSort(body: string): ShapeSort | null {
-  const m = new RegExp(`^(?:Number|String)\\(([ab])${ACCESSOR_RE} `).exec(body);
+  const m = new RegExp(`^(?:Number\\(String|Number|String)\\(([ab])${ACCESSOR_RE} `).exec(body);
   if (!m) return null;
   const field = readAccessor(m[2]);
   if (!field) return null;
-  for (const as of ['number', 'text'] as const) {
+  for (const as of ['number', 'text', 'formatted'] as const) {
     for (const dir of ['asc', 'desc'] as const) {
       const s: ShapeSort = { field, dir, as };
       if (squash(sortExpr(s)) === body) return s;
@@ -426,8 +435,12 @@ export function fieldValue(row: unknown, path: string[]): unknown {
 export function guessSortAs(rows: unknown[], path: string[]): SortAs {
   const values = rows.map((r) => fieldValue(r, path)).filter((v) => v !== null && v !== undefined && v !== '');
   if (!values.length) return 'text';
-  return values.every((v) => typeof v === 'number' || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)))) ? 'number' : 'text';
+  if (values.every((v) => typeof v === 'number' || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))))) return 'number';
+  // Formatted numbers ("$48,000.00", "1,250", "45%", "€ 9.99"): digits with symbols around them.
+  return values.every((v) => typeof v === 'string' && FORMATTED_NUMBER_RE.test(v.trim())) ? 'formatted' : 'text';
 }
+
+const FORMATTED_NUMBER_RE = /^[^\d-]{0,4}-?\d[\d,]*(\.\d+)?[^\d]{0,4}$/;
 
 /** A likely format for a field (amounts as currency, dates as dates). */
 export function guessFormat(path: string[], sample: unknown): FormatKind {
@@ -454,7 +467,7 @@ export function describeShape(shape: ListShape): string {
   if (shape.filter?.trim()) parts.push('filtered');
   if (shape.sort) {
     const dir =
-      shape.sort.as === 'number' ? (shape.sort.dir === 'asc' ? 'lowest first' : 'highest first') : shape.sort.dir === 'asc' ? 'A → Z' : 'Z → A';
+      shape.sort.as !== 'text' ? (shape.sort.dir === 'asc' ? 'lowest first' : 'highest first') : shape.sort.dir === 'asc' ? 'A → Z' : 'Z → A';
     parts.push(`sorted by ${fieldLabel(shape.sort.field)} (${dir})`);
   }
   if (shape.limit !== undefined) parts.push(`first ${shape.limit}`);

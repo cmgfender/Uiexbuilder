@@ -3,7 +3,9 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { isExpr } from '../model/types';
 import { Inspector } from './Inspector';
-import { parseRules } from './rules';
+import { parseRules, rulesToExpr } from './rules';
+import { useEditor } from '../model/store';
+import { validateProject } from '../model/validate';
 import { loadWith, nodeById, selectTop } from './testUtils';
 
 function row(name: string): HTMLElement {
@@ -44,6 +46,22 @@ describe('Rules in the Properties tab', () => {
     expect(rulesOfProp(node.id, 'variant')!.cases).toHaveLength(3);
     await userEvent.click(within(row('variant')).getByRole('button', { name: 'Remove rule 3' }));
     expect(rulesOfProp(node.id, 'variant')!.cases).toHaveLength(2);
+  });
+
+  it('an emptied threshold for a number shows what to enter, and validation stops the export', async () => {
+    loadWith([{ type: 'ProgressBar', props: { title: 'Progress', value: 3, maxValue: 5 } }], 'card', {
+      state: [{ id: 's1', name: 'count', type: 'number', initial: 3 }],
+    });
+    const node = selectTop();
+    useEditor.getState().setProp(node.id, 'variant', { $expr: rulesToExpr({ subject: 'count', cases: [{ op: '>=', when: 80, then: 'success' }], otherwise: 'danger' }) });
+    render(<Inspector />);
+    expect(within(row('variant')).queryByText('Enter a number.')).toBeNull();
+    await userEvent.clear(within(row('variant')).getByLabelText('Rule 1 value to compare with'));
+    expect(rulesOfProp(node.id, 'variant')!.cases[0].when).toBe('');
+    expect(within(row('variant')).getByText('Enter a number.')).toBeInTheDocument();
+    const issues = validateProject(useEditor.getState().project).filter((i) => i.rule === 'condition-type');
+    expect(issues.map((i) => [i.severity, i.nodeId, i.field])).toEqual([['error', node.id, 'variant']]);
+    expect(issues[0].message).toContain('compares count with an empty value, but count is a number. Enter a number.');
   });
 
   it('keeps following the bar when its value changes', async () => {

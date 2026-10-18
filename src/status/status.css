@@ -822,6 +822,15 @@ html.ub-st-root #root {
   background: var(--ub-warning-soft);
   color: var(--ub-text);
 }
+/* What a browser reported: anyone can send it. */
+.ub-st-chip--unverified {
+  margin-left: 8px;
+  vertical-align: 2px;
+  background: transparent;
+  border: 1px dashed var(--ub-border-strong, var(--ub-text-3));
+  color: var(--ub-text-2);
+  font-weight: 500;
+}
 .ub-st-event__time {
   flex: none;
   display: grid;

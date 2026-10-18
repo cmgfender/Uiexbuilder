@@ -1054,6 +1054,7 @@ export const layoutComponents: ComponentDef[] = [
     parents: ['Tabs'],
     children: { mode: 'nodes', placeholder: 'Drop tab content here' },
     create: () => ({ type: 'Tab', props: { tabId: newTabId(), title: 'New tab' } }),
+    identityProps: ['tabId'],
     props: [
       {
         name: 'title',

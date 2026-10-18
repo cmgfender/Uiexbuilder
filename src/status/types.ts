@@ -5,9 +5,10 @@
  *
  * What is recorded (in the server's memory only, see server/core/diagnostics/log.ts): sign-ins,
  * publishes, refused API requests and errors reported by browsers. Never tokens, keys, cookies,
- * CRM record data, email addresses or messages that may echo what someone typed. Visitors are an
- * anonymous id (a salted hash of their IP address; the salt changes every day) plus the HubSpot
- * account id they signed in to.
+ * CRM record data or email addresses. Browser error reports keep their (cleaned) message: they are
+ * untrusted — anyone can send one — so outside links are removed and the status page says so.
+ * Visitors are an anonymous id (a salted hash of their IP address; the salt changes every day)
+ * plus the HubSpot account id they signed in to.
  */
 
 export const DIAGNOSTICS_ROUTES = {
@@ -15,7 +16,10 @@ export const DIAGNOSTICS_ROUTES = {
   access: '/api/admin/access',
   /** GET → DiagnosticsSnapshot (admins only: signed in with HubSpot + ADMIN_EMAILS / ADMIN_PORTALS). */
   diagnostics: '/api/admin/diagnostics',
-  /** POST ClientReport → 204. Browsers report errors and what the HubSpot sign-in window showed. */
+  /**
+   * POST ClientReport → 204. Browsers report errors and what the HubSpot sign-in window showed
+   * (only with the builder's own Origin header).
+   */
   report: '/api/diagnostics/report',
 } as const;
 
@@ -105,6 +109,11 @@ export interface ClientErrorDetails {
   path?: string;
   /** Build of the builder that reported it (hash of its main script; "dev" in development). */
   build?: string;
+  /**
+   * Set by the server on the row that counts a visitor's (or everyone's) further reports within an
+   * hour, once several distinct ones were kept: their messages aren't kept.
+   */
+  overflow?: boolean;
 }
 
 export type ClientErrorSource = 'error' | 'unhandledrejection' | 'react';
