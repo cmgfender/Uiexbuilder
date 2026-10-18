@@ -209,15 +209,52 @@ describe('connect(): the HubSpot sign-in window', () => {
     expect(useConnection.getState().errorCode).toBe('session_not_kept');
   });
 
-  it('falls back to a full-page sign-in when the popup is blocked', async () => {
+  it('a blocked popup changes nothing and offers a full-page sign-in in this tab, one click away', async () => {
     await ready();
     window.history.replaceState(null, '', '/editor?p=2');
     connectEnv.open = () => null;
     const navigate = vi.fn();
     connectEnv.navigate = navigate;
     await useConnection.getState().connect();
+    // Nothing happens behind the person's back: the page stays, the reason is reported.
+    expect(navigate).not.toHaveBeenCalled();
+    expect(useConnection.getState()).toMatchObject({ status: 'disconnected', errorCode: 'popup_blocked', errorSource: 'sign-in', connectingSince: null });
+    expect(useConnection.getState().error).toMatch(/blocked the HubSpot window/);
+    await useConnection.getState().connectInThisTab();
     expect(navigate).toHaveBeenCalledWith(`/api/auth/start?returnTo=${encodeURIComponent(`${ORIGIN}/editor?p=2`)}&mode=redirect`);
+    expect(useConnection.getState()).toMatchObject({ status: 'connecting', error: null, errorCode: null });
+  });
+
+  it('continuing a blocked "Switch account" in this tab signs out first', async () => {
+    const r = await ready(() => json(connectedInfo()));
+    expect(useConnection.getState().status).toBe('connected');
+    connectEnv.open = () => null;
+    const navigate = vi.fn();
+    connectEnv.navigate = navigate;
+    await useConnection.getState().switchPortal();
+    // Still connected to the first account until the person chooses to continue.
+    expect(useConnection.getState()).toMatchObject({ status: 'connected', errorCode: 'popup_blocked' });
+    expect(r.calls.some((c) => c.path === '/api/auth/logout')).toBe(false);
+    await useConnection.getState().connectInThisTab();
+    expect(r.calls.some((c) => c.path === '/api/auth/logout')).toBe(true);
+    expect(navigate).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/auth\/start\?.*&mode=redirect$/));
+    expect(useConnection.getState().info.connected).toBe(false);
+  });
+
+  it('connectInThisTab() gives up an open sign-in window quietly and continues in this tab', async () => {
+    await ready();
+    const popup = fakePopup();
+    connectEnv.open = () => popup as unknown as Window;
+    const navigate = vi.fn();
+    connectEnv.navigate = navigate;
+    const first = useConnection.getState().connect();
     expect(useConnection.getState().status).toBe('connecting');
+    await useConnection.getState().connectInThisTab();
+    await first;
+    expect(popup.closed).toBe(true);
+    expect(navigate).toHaveBeenCalledTimes(1);
+    // The abandoned window reports nothing (no "not connected" error while the page navigates).
+    expect(useConnection.getState()).toMatchObject({ status: 'connecting', errorCode: null });
   });
 
   it('ends the attempt when the user closes the window', async () => {

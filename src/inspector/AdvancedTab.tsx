@@ -2,8 +2,10 @@
  * Advanced tab: visibility condition, repeat (render once per item), layer settings and node info.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { BookOpen, Copy, Eye, EyeOff, Repeat } from 'lucide-react';
+import { BookOpen, ChevronDown, ChevronRight, ClipboardCopy, ClipboardPaste, Copy, Eye, EyeOff, ListFilter, Repeat } from 'lucide-react';
 import { isValidIdentifier, uniqueName } from '../model/ids';
+import { canPasteSettings } from '../model/settings';
+import { getComponent } from '../registry';
 import { useEditor } from '../model/store';
 import type { Extension, RepeatConfig, UINode } from '../model/types';
 import type { ComponentDef } from '../registry/types';
@@ -12,6 +14,11 @@ import { Button, cx, IconButton, Select, Switch, TextInput, useToast } from '../
 import { ExpressionInput, usePreviewScope, useScopeVariables } from './controls';
 import { copyText } from './clipboard';
 import { formatPreviewValue } from './propValue';
+import { ConditionBuilder } from './power-ConditionBuilder';
+import { asOneUndoStep } from './history';
+import { addShapedList, listSourceOf } from '../power/actions';
+import { parseShape, shapeToExpr } from '../power/shape';
+import { ShapeEditor } from '../power/ShapeEditor';
 import { safeEvaluate } from './scope';
 import { InspectorSection } from './Section';
 
@@ -26,6 +33,7 @@ export function AdvancedTab({ node, def, ext }: AdvancedTabProps) {
     <div className="ub-insp-tabpanel">
       <ConditionSection node={node} ext={ext} />
       <RepeatSection node={node} ext={ext} />
+      <ReuseSection node={node} def={def} />
       <LayerSection node={node} def={def} />
     </div>
   );
@@ -54,16 +62,16 @@ function ConditionSection({ node, ext }: { node: UINode; ext: Extension }) {
   const result = useMemo(() => (cond.trim() ? safeEvaluate(cond, scope) : null), [cond, scope]);
   return (
     <div data-adv="condition">
-      <InspectorSection id="adv:condition" title="Visibility condition" meta={cond ? <span className="ub-insp-setcount">on</span> : null}>
-        <div className="ub-insp-help">Show this component only when the expression is truthy.</div>
-        <ExpressionInput
-          value={cond}
-          onChange={(t) => updateNode(node.id, { condition: t.trim() ? t : undefined })}
+      <InspectorSection id="adv:condition" title="Visibility" meta={cond ? <span className="ub-insp-setcount">on</span> : null}>
+        <div className="ub-insp-help">Show this component only when the checks below are true — e.g. once the data has loaded, or for big deals.</div>
+        <ConditionBuilder
           ext={ext}
           nodeId={node.id}
-          placeholder="e.g. items.length > 0"
-          aria-label="Visibility condition"
-          hidePreview
+          value={cond}
+          onChange={(t) => updateNode(node.id, { condition: t.trim() ? t : undefined })}
+          label="Show when"
+          codeLabel="Visibility condition"
+          addLabel="Add a condition"
         />
         {cond.trim() ? (
           <div className={cx('ub-insp-live', result?.ok ? (result.value ? 'is-on' : 'is-off') : 'is-unknown')} role="status">
@@ -171,8 +179,20 @@ function IdentifierInput({
   );
 }
 
+/**
+ * Whether a repeat's items can be shaped as a computed value: a list declared at the top of the card
+ * (state, data, computed value), not a repeat item of an outer repeat (computed values can't see those).
+ */
+export function canShapeItems(ext: Extension, items: string): boolean {
+  const src = listSourceOf(items);
+  const root = /^[A-Za-z_$][\w$]*/.exec(src)?.[0];
+  if (!root || !src) return false;
+  return ext.state.some((v) => v.name === root) || ext.dataSources.some((d) => d.name === root) || (ext.computed ?? []).some((c) => c.name === root);
+}
+
 function RepeatSection({ node, ext }: { node: UINode; ext: Extension }) {
   const updateNode = useEditor((s) => s.updateNode);
+  const [shapeOpen, setShapeOpen] = useState(true);
   const r = node.repeat;
   const scopeVars = useScopeVariables(ext, node.id);
   // The preview scope binds this repeat's first item; evaluate items in the parent's terms.
@@ -187,6 +207,16 @@ function RepeatSection({ node, ext }: { node: UINode; ext: Extension }) {
   );
   const set = (patch: Partial<RepeatConfig>) => r && updateNode(node.id, { repeat: { ...r, ...patch } });
   const items = useMemo(() => (r?.items.trim() ? safeEvaluate(r.items, scope) : null), [r, scope]);
+  // Repeating over a shaped list (computed value): edit its filter / sort / formats right here.
+  const shaped = r ? (ext.computed ?? []).find((c) => c.name === r.items.trim()) : undefined;
+  const shape = useMemo(() => (shaped ? parseShape(shaped.expr) : null), [shaped]);
+  const shapeItems = () => {
+    if (!r) return;
+    asOneUndoStep(() => {
+      const c = addShapedList(r.items);
+      updateNode(node.id, { repeat: { ...r, items: c.name } });
+    });
+  };
 
   const enable = (on: boolean) => {
     if (!on) return updateNode(node.id, { repeat: undefined });
@@ -237,6 +267,31 @@ function RepeatSection({ node, ext }: { node: UINode; ext: Extension }) {
                         : `Not a list (got ${formatPreviewValue(items.value, 40)})`
                       : `Can’t evaluate: ${items.error}`}
               </div>
+              {shaped && shape ? (
+                <div className="ub-pw-repeatshape">
+                  <button type="button" className="ub-pw-repeatshape__toggle" aria-expanded={shapeOpen} onClick={() => setShapeOpen((o) => !o)}>
+                    {shapeOpen ? <ChevronDown size={13} aria-hidden /> : <ChevronRight size={13} aria-hidden />}
+                    <ListFilter size={13} aria-hidden /> Filter, sort & format <code>{shaped.name}</code>
+                  </button>
+                  {shapeOpen && (
+                    <ShapeEditor
+                      ext={ext}
+                      shape={shape}
+                      computedId={shaped.id}
+                      name={shaped.name}
+                      itemName={r.itemName}
+                      onChange={(next) => useEditor.getState().updateComputed(shaped.id, { expr: shapeToExpr(next) })}
+                    />
+                  )}
+                </div>
+              ) : (
+                r.items.trim() &&
+                canShapeItems(ext, r.items) && (
+                  <button type="button" className="ub-btn ub-btn--sm ub-pw-repeatshape__add" onClick={shapeItems}>
+                    <ListFilter size={13} aria-hidden /> Filter, sort & limit…
+                  </button>
+                )
+              )}
               {presets.length > 0 && (
                 <div className="ub-insp-quick" aria-label="Lists">
                   {presets.map((p) => (
@@ -287,6 +342,53 @@ function RepeatSection({ node, ext }: { node: UINode; ext: Extension }) {
         )}
       </InspectorSection>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/** Copy settings / Paste settings: give another component of the same kind this one's look, text and rules. */
+function ReuseSection({ node, def }: { node: UINode; def: ComponentDef }) {
+  const clip = useEditor((s) => s.settingsClipboard);
+  const toast = useToast();
+  const canPaste = canPasteSettings(clip, node);
+  return (
+    <InspectorSection id="adv:reuse" title="Reuse settings">
+      <div className="ub-insp-help">
+        Copy this {def.label.toLowerCase()}’s settings — look, text and rules, not its id — and paste them onto another {def.label.toLowerCase()}.
+        Select several components to change a setting on all of them.
+      </div>
+      <div className="ub-pw-reuse">
+        <Button
+          size="sm"
+          icon={<ClipboardCopy size={13} aria-hidden />}
+          onClick={() => {
+            const c = useEditor.getState().copySettings(node.id);
+            if (c) toast(`Copied the settings of ${c.label} — select another ${def.label.toLowerCase()} and paste them`);
+          }}
+        >
+          Copy settings
+        </Button>
+        <Button
+          size="sm"
+          icon={<ClipboardPaste size={13} aria-hidden />}
+          disabled={!canPaste}
+          title={
+            !clip
+              ? 'Copy the settings of another component first'
+              : canPaste
+                ? `Paste the settings of ${clip.label}`
+                : `The copied settings are for a ${getComponent(clip.type)?.label.toLowerCase() ?? clip.type}`
+          }
+          onClick={() => {
+            const n = useEditor.getState().pasteSettings([node.id]);
+            toast(n ? `Pasted the settings of ${clip!.label}` : 'It already has these settings');
+          }}
+        >
+          Paste settings
+        </Button>
+      </div>
+    </InspectorSection>
   );
 }
 

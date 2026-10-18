@@ -21,3 +21,5 @@ export type { FriendlyError } from './describe';
 export { canonicalObjectType, findStandardType, findObjectTypeInfo, objectTypeLabel, objectTypeIdOf, sameObjectType } from './objectTypes';
 export { useLiveData, LIVE_DATA_KEY_PREFIX } from './records';
 export type { LiveMode, LiveDataState, LiveDataError } from './records';
+export { signInFix, signInTroubleChoices } from './signInHelp';
+export type { SignInFix, SignInTrouble, SignInTroubleChoice, SignInHelpContext } from './signInHelp';

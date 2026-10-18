@@ -32,6 +32,8 @@ APP_URL = ""
 # HUBSPOT_APP_BASE = "https://app.hubspot.com"
 # ENABLE_FETCH_PROXY = "true"
 # ENABLE_DEPLOY = "true"
+# Who may open the status page (/status): the email(s) you sign in to HubSpot with.
+# ADMIN_EMAILS = "you@example.com"
 
 [observability]
 enabled = true

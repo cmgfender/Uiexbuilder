@@ -1784,6 +1784,7 @@ function checkSteps(ctx: ExtContext, steps: ActionStep[], scope: NameScope, loc:
         if (!str(step.message).trim() && !str(step.title).trim()) {
           collector.add('empty-alert', 'warning', 'A “Show alert” action has no title or message.', loc, `alert:${key}`);
         }
+        checkExpression(chk, step.alertTypeExpr, scope, loc, where('the rules of an alert type'));
         checkTemplate(chk, step.title, scope, loc, where('an alert title'));
         checkTemplate(chk, step.message, scope, loc, where('an alert message'));
         break;

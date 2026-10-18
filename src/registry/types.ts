@@ -39,6 +39,41 @@ export const CATEGORY_ORDER: ComponentCategory[] = [
 export interface EnumOption {
   value: string | number | boolean;
   label?: string;
+  /**
+   * Inspector hint (additive): how the option looks in HubSpot, drawn as a small swatch next to
+   * the option, e.g. a progress bar's green / yellow / red.
+   */
+  swatch?: OptionSwatch;
+}
+
+/** A color sample for an enum option: fill, optional border (outlined styles) and text color. */
+export interface OptionSwatch {
+  fill: string;
+  border?: string;
+  /** For text-like styles (links, transparent buttons): the text color, drawn as "Aa". */
+  text?: string;
+}
+
+/**
+ * What a "You can also…" tip in the inspector does when clicked (additive):
+ * - rules: switch on Rules for a prop (`'__text'` = the text content), e.g. color by percentage;
+ * - data: show CRM data / a variable in a prop or the text (opens the variable picker);
+ * - event: open the Events tab at that event; condition / repeat: open the Advanced tab there;
+ * - binding: show the value binding; overlay: show the overlay (modal / panel / tooltip) section.
+ */
+export type TipAction =
+  | { kind: 'rules'; prop: string }
+  | { kind: 'data'; prop: string }
+  | { kind: 'event'; event: string }
+  | { kind: 'condition' }
+  | { kind: 'repeat' }
+  | { kind: 'binding' }
+  | { kind: 'overlay' };
+
+export interface ComponentTip {
+  /** Plain-language sentence, e.g. "Change the color at different percentages". */
+  text: string;
+  action: TipAction;
 }
 
 /** Describes how a prop is edited in the inspector and how its value is shaped. */
@@ -46,7 +81,11 @@ export type PropType =
   | { kind: 'string'; multiline?: boolean; placeholder?: string }
   | { kind: 'number'; min?: number; max?: number; step?: number; integer?: boolean }
   | { kind: 'boolean' }
-  | { kind: 'enum'; options: EnumOption[] }
+  /**
+   * `display` (inspector hint, additive): 'spacing' draws each choice as a small spacing sample
+   * (gaps, divider / spacer sizes); 'direction' adds arrows (side by side / stacked).
+   */
+  | { kind: 'enum'; options: EnumOption[]; display?: 'spacing' | 'direction' }
   /** HubSpot href: string URL (or { url, external } object when `external` is toggled). */
   | { kind: 'href' }
   | { kind: 'url' }
@@ -282,5 +321,16 @@ export interface ComponentDef {
   /** Extra search keywords for the palette. */
   keywords?: string[];
   deprecated?: boolean;
+  /**
+   * Inspector (additive): prop groups shown first, in this order, so the most-used settings come
+   * first (e.g. CRM components start with 'Data'); the other groups follow the default order.
+   */
+  groupOrder?: PropGroup[];
+  /**
+   * Inspector (additive): "You can also…" tips that point to power the settings don't show,
+   * e.g. a progress bar's color by percentage. Generic tips (show when, repeat, events) are added
+   * by the inspector itself.
+   */
+  tips?: ComponentTip[];
   preview: ComponentType<PreviewProps>;
 }

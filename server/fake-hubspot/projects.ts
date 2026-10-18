@@ -10,8 +10,10 @@
  *
  * Failure modes for tests and demos: a personal access key that CONTAINS one of the FAKE_KEY_MODES
  * markers is accepted for the default portal and switches the mode on, e.g. "fail-build",
- * "pat-na1-fake-no-autodeploy-1". Test controls: fakeProjects(state) (uploads, expire tokens, polls,
- * clock).
+ * "pat-na1-fake-no-autodeploy-1" ("other-account" is accepted for FAKE_OTHER_PORTAL_ID instead).
+ * A key listed in `withoutDeveloperProjects` behaves like a real key whose "Developer projects"
+ * permission was removed on HubSpot's key page (the fake key page toggles it), until it is added back.
+ * Test controls: fakeProjects(state) (uploads, expire tokens, polls, clock, key permissions).
  */
 import { readStoredZip } from '../core/deploy/zip';
 import { RETIRED_SCOPES } from '../../src/model/scopes';
@@ -22,7 +24,19 @@ export interface FakeProjectsState {
   portalId: number;
   /** Personal access keys accepted by the fake (key -> portal id). */
   personalAccessKeys: Map<string, number>;
+  /**
+   * Keys whose "Developer projects" permission is currently removed (the fake key page's demo
+   * switch): the exchange lists no developer.projects scope group and project calls answer 403.
+   * Optional so older callers still type-check; created on first use.
+   */
+  withoutDeveloperProjects?: Set<string>;
 }
+
+/** The account a key containing "other-account" belongs to (a second HubSpot account). */
+export const FAKE_OTHER_PORTAL_ID = 87654321;
+
+/** Scope groups the fake reports for a key with every developer permission (what a CLI key has). */
+export const FAKE_DEVELOPER_SCOPE_GROUPS = ['developer.projects.write', 'developer.projects.read', 'developer.app_functions.write', 'developer.secrets.write', 'content'];
 
 /** Markers that switch on a failure mode when they appear in a personal access key. */
 export const FAKE_KEY_MODES = [
@@ -42,6 +56,12 @@ export const FAKE_KEY_MODES = [
   'project-locked',
   /** The key lacks developer projects: project endpoints answer 403 MISSING_SCOPES. */
   'no-projects-scope',
+  /** Developer projects aren't available in the account: project endpoints answer 403 GATED. */
+  'gated',
+  /** The key's user may not use developer tools: project endpoints answer a plain 403 with HubSpot's message. */
+  'no-dev-tools',
+  /** The key belongs to another HubSpot account (FAKE_OTHER_PORTAL_ID). */
+  'other-account',
   /** Build and deploy produce warning logs. */
   'warn',
 ] as const;
@@ -66,6 +86,8 @@ interface FakeToken {
   portalId: number;
   modes: Set<FakeKeyMode>;
   expiresAt: number;
+  /** Exchanged while the key had no "Developer projects" permission. */
+  noProjects: boolean;
 }
 
 interface FakeProject {
@@ -133,6 +155,14 @@ export interface FakeProjectsControls {
   /** Builds / deploys started so far. */
   readonly buildCount: number;
   readonly deployCount: number;
+  /** Remove or add back the "Developer projects" permission of a key (like editing it on HubSpot's key page). */
+  setDeveloperProjects(key: string, allowed: boolean): void;
+  hasDeveloperProjects(key: string): boolean;
+}
+
+function keysWithoutProjects(state: FakeProjectsState): Set<string> {
+  if (!state.withoutDeveloperProjects) state.withoutDeveloperProjects = new Set();
+  return state.withoutDeveloperProjects;
 }
 
 const stores = new WeakMap<FakeProjectsState, Store>();
@@ -184,6 +214,13 @@ export function fakeProjects(state: FakeProjectsState): FakeProjectsControls {
     },
     get deployCount() {
       return s.deploys.size;
+    },
+    setDeveloperProjects(key, allowed) {
+      if (allowed) keysWithoutProjects(state).delete(key);
+      else keysWithoutProjects(state).add(key);
+    },
+    hasDeveloperProjects(key) {
+      return !keysWithoutProjects(state).has(key) && !modesOf(key).has('no-projects-scope');
     },
   };
 }
@@ -249,7 +286,7 @@ export async function handleFakeProjects(request: Request, state: FakeProjectsSt
       return hsError(400, 'Invalid JSON body', 'VALIDATION_ERROR');
     }
     const modes = modesOf(key);
-    const portalId = state.personalAccessKeys.get(key) ?? (modes.size > 0 ? state.portalId : undefined);
+    const portalId = state.personalAccessKeys.get(key) ?? (modes.has('other-account') ? FAKE_OTHER_PORTAL_ID : modes.size > 0 ? state.portalId : undefined);
     if (!key || portalId === undefined) {
       return hsError(401, 'The personal access key is invalid or has been deactivated.', 'INVALID_AUTHENTICATION', {
         subCategory: 'LocalDevAuthErrorType.INVALID_PERSONAL_ACCESS_KEY',
@@ -261,10 +298,9 @@ export async function handleFakeProjects(request: Request, state: FakeProjectsSt
     }
     const token = `fake-pak-at-${crypto.randomUUID()}`;
     const expiresAt = s.now() + s.tokenTtlMs;
-    s.tokens.set(token, { portalId, modes, expiresAt });
-    const scopeGroups = modes.has('no-projects-scope')
-      ? ['crm.objects.contacts.read', 'content']
-      : ['developer.projects.write', 'developer.projects.read', 'developer.app_functions.write', 'developer.secrets.write', 'content'];
+    const noProjects = modes.has('no-projects-scope') || keysWithoutProjects(state).has(key);
+    s.tokens.set(token, { portalId, modes, expiresAt, noProjects });
+    const scopeGroups = noProjects ? ['crm.objects.contacts.read', 'content'] : FAKE_DEVELOPER_SCOPE_GROUPS;
     return json(200, {
       oauthAccessToken: token,
       expiresAtMillis: expiresAt,
@@ -273,7 +309,7 @@ export async function handleFakeProjects(request: Request, state: FakeProjectsSt
       scopeGroups,
       enabledFeatures: {},
       encodedOAuthRefreshToken: key,
-      hubName: portalId === state.portalId ? 'Acme Demo (fake)' : `Fake account ${portalId}`,
+      hubName: portalId === state.portalId ? 'Acme Demo (fake)' : portalId === FAKE_OTHER_PORTAL_ID ? 'Other Co (fake)' : `Fake account ${portalId}`,
       accountType: 'STANDARD',
     });
   }
@@ -289,9 +325,15 @@ export async function handleFakeProjects(request: Request, state: FakeProjectsSt
   if (portalParam !== null && Number(portalParam) !== tok.portalId) {
     return hsError(403, `The access token does not belong to portal ${portalParam}.`, 'INVALID_AUTHENTICATION');
   }
-  if (tok.modes.has('no-projects-scope')) {
+  if (tok.noProjects) {
     const message = 'This oauth-token does not have proper permissions! (requires any of [developer.projects.write])';
     return hsError(403, message, 'MISSING_SCOPES', { errors: [{ message, context: { requiredGranularScopes: ['developer.projects.write'] } }] });
+  }
+  if (tok.modes.has('gated')) {
+    return hsError(403, 'This portal does not have access to developer projects.', 'GATED', { subCategory: 'PortalGatedErrorType.PORTAL_GATED' });
+  }
+  if (tok.modes.has('no-dev-tools')) {
+    return hsError(403, 'The user does not have permission to use developer tools in this account.', 'FORBIDDEN');
   }
   const portalId = tok.portalId;
   let m: RegExpExecArray | null;

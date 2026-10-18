@@ -1,13 +1,19 @@
 /**
  * The consent explainer shown before the first "Connect HubSpot" (what the builder will see, what
- * it never does, how to revoke), and the result of a sign-in that did not work out.
+ * it never does, how to revoke), and the result of a sign-in that did not work out:
+ *  - the HubSpot window closed (or timed out) without a result → "What did HubSpot show?" with the
+ *    fix for each case (SignInHelp);
+ *  - the browser blocked the window → one click to continue in this tab;
+ *  - anything else → what happened and Try again.
  */
 import { useId, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, CircleAlert, ExternalLink, ShieldCheck, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, CircleAlert, ExternalLink, LogIn, ShieldCheck, X } from 'lucide-react';
 import { Button, Dialog } from '../../ui';
 import { describeAuthResult, scopeLabel } from '../describe';
+import { signInFix, type SignInTrouble } from '../signInHelp';
 import { useConnection } from '../store';
 import { HubSpotMark } from './HubSpotMark';
+import { SignInHelp, signInHelpContext } from './SignInHelp';
 
 export type ConnectDialogMode = 'consent' | 'result';
 
@@ -71,6 +77,11 @@ export function ConnectDialog({ open, mode, onClose, onContinue }: ConnectDialog
     );
   }
 
+  if (mode === 'result' && errorCode === 'popup_blocked') return <BlockedDialog open={open} onClose={onClose} onContinue={onContinue} />;
+  if (mode === 'result' && (errorCode === 'popup_closed' || errorCode === 'timeout')) {
+    return <TroubleDialog open={open} timedOut={errorCode === 'timeout'} onClose={onClose} onContinue={onContinue} />;
+  }
+
   if (mode === 'result') {
     const d = describeAuthResult(errorCode ?? 'unknown_error', error ?? undefined);
     return (
@@ -121,6 +132,89 @@ export function ConnectDialog({ open, mode, onClose, onContinue }: ConnectDialog
         <p className="ub-cn-dialog__muted">
           <ExternalLink size={12} aria-hidden /> A HubSpot window opens. Choose your account and approve — then come back here.
         </p>
+      </div>
+    </Dialog>
+  );
+}
+
+/** Leaves the dialog and signs in in this tab (full-page sign-in that comes back here). */
+function continueInThisTab(onClose: () => void): void {
+  onClose();
+  void useConnection.getState().connectInThisTab();
+}
+
+/** The browser blocked the HubSpot window: nothing happened yet; one click continues in this tab. */
+function BlockedDialog({ open, onClose, onContinue }: Pick<ConnectDialogProps, 'open' | 'onClose' | 'onContinue'>) {
+  const host = typeof window !== 'undefined' ? window.location.host : 'this site';
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title="Your browser blocked the HubSpot window"
+      footer={
+        <>
+          <Button onClick={onClose}>Close</Button>
+          <Button onClick={onContinue}>Try the window again</Button>
+          <Button variant="primary" icon={<LogIn size={14} aria-hidden />} onClick={() => continueInThisTab(onClose)}>
+            Continue in this tab
+          </Button>
+        </>
+      }
+    >
+      <div className="ub-cn-dialog">
+        <p>
+          No problem — nothing happened yet. <strong>Continue in this tab</strong> instead: you go to HubSpot, approve, and come straight back here.
+          Your work is saved.
+        </p>
+        <p className="ub-cn-dialog__hint">
+          Prefer the window? Allow pop-ups for <strong>{host}</strong> (your browser shows a blocked pop-up icon at the end of the address bar),
+          then click Try the window again.
+        </p>
+      </div>
+    </Dialog>
+  );
+}
+
+/**
+ * The HubSpot window closed (or the wait timed out) without a result. HubSpot shows its refusals
+ * inside that window and never comes back, so ask what it showed and give the fix.
+ */
+function TroubleDialog({ open, timedOut, onClose, onContinue }: Pick<ConnectDialogProps, 'open' | 'onClose' | 'onContinue'> & { timedOut: boolean }) {
+  const [choice, setChoice] = useState<SignInTrouble | null>(null);
+  const fix = choice ? signInFix(choice, signInHelpContext()) : null;
+  // The fix decides the main button: continue in this tab, or try again (only worth it right away
+  // when the person can fix it themselves).
+  const inTab = !!fix?.continueInTab;
+  const retryFirst = !fix || fix.who === 'you';
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={timedOut ? 'Connecting took too long' : 'HubSpot was not connected'}
+      footer={
+        <>
+          <Button onClick={onClose}>Close</Button>
+          {inTab ? (
+            <>
+              <Button onClick={onContinue}>Try the window again</Button>
+              <Button variant="primary" icon={<LogIn size={14} aria-hidden />} onClick={() => continueInThisTab(onClose)}>
+                Continue in this tab
+              </Button>
+            </>
+          ) : (
+            <Button variant={retryFirst ? 'primary' : 'default'} icon={<HubSpotMark />} onClick={onContinue}>
+              Try again
+            </Button>
+          )}
+        </>
+      }
+    >
+      <div className="ub-cn-dialog ub-cn-dialog--full">
+        <p className="ub-cn-dialog__lead">
+          {timedOut ? 'We stopped waiting for HubSpot' : 'The HubSpot window closed before connecting finished'}, so nothing was shared or changed.
+          HubSpot shows its messages inside that window, where the builder can’t see them — tell us what you saw and we’ll show you the fix.
+        </p>
+        <SignInHelp showContinue={false} onChoose={setChoice} />
       </div>
     </Dialog>
   );

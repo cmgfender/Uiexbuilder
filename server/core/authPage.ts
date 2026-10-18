@@ -7,7 +7,7 @@
  *
  * No external resources. CSP: default-src 'none' with the inline script and style allowed by hash.
  */
-import { escapeHtml, scriptSafeJson } from './http';
+import { ERROR_CODE_HEADER, escapeHtml, scriptSafeJson } from './http';
 import { sha256Base64 } from './crypto';
 
 export const AUTH_MESSAGE_TYPE = 'uiex-hubspot-auth';
@@ -81,13 +81,13 @@ export async function renderAuthPage(opts: AuthPageOptions): Promise<Response> {
 <script>${script}</script>
 </body>
 </html>`;
-  return new Response(html, {
-    status: opts.status,
-    headers: {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Content-Security-Policy': `default-src 'none'; script-src 'sha256-${scriptHash}'; style-src 'sha256-${styleHash}'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
-    },
-  });
+  const headers: Record<string, string> = {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Security-Policy': `default-src 'none'; script-src 'sha256-${scriptHash}'; style-src 'sha256-${styleHash}'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+  };
+  // The failure code for access logs and the status page (same header as JSON errors).
+  if (!opts.ok) headers[ERROR_CODE_HEADER] = msg.error ?? 'unknown_error';
+  return new Response(html, { status: opts.status, headers });
 }
 
 /** Plain-language explanations for OAuth error codes HubSpot (or the connector) can produce. */

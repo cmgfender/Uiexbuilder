@@ -71,7 +71,7 @@ describe('<Palette>', () => {
     resetEditor();
     renderPalette();
     const group = screen.getByRole('region', { name: 'Layout' });
-    const head = within(group).getByRole('button', { name: /Layout/ });
+    const head = within(group).getByRole('button', { name: /^Layout\s*\d+$/ });
     expect(head).toHaveAttribute('aria-expanded', 'true');
     fireEvent.click(head);
     expect(head).toHaveAttribute('aria-expanded', 'false');
@@ -177,7 +177,7 @@ describe('<Palette>', () => {
     // Up from the first tile goes to its group header (now reachable without Tab).
     act(() => first.focus());
     fireEvent.keyDown(first, { key: 'ArrowUp' });
-    const head = within(screen.getByRole('region', { name: 'Layout' })).getByRole('button', { name: /Layout/ });
+    const head = within(screen.getByRole('region', { name: 'Layout' })).getByRole('button', { name: /^Layout\s*\d+$/ });
     expect(head).toHaveFocus();
     // The focused element becomes the Tab stop.
     expect(head).toHaveAttribute('tabindex', '0');

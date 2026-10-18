@@ -43,6 +43,10 @@ import {
 } from './actionModel';
 import { ChipsInput } from './ChipsInput';
 import { ExpressionInput, TemplateInput } from './controls';
+import { ConditionBuilder } from './power-ConditionBuilder';
+import { ruleLiteralExpr, ruleLiteralText, rulesOfText, RulesRow, stateRuleDef, textOfRules } from './power-actionRules';
+import { parseRules, rulesToExpr } from './rules';
+import type { PropDef } from '../registry/types';
 import { asOneUndoStep } from './history';
 import { Popover } from './Popover';
 import { CodeEditorDialog } from '../power/CodeEditor';
@@ -330,7 +334,17 @@ function StepForm({
       const s = step as CopyToClipboardAction;
       const empty = !s.text.trim();
       return (
-        <Row label="Text to copy" htmlFor={`${id}-text`}>
+        <RulesRow
+          id="text"
+          label="Text to copy"
+          htmlFor={`${id}-text`}
+          ctx={ctx}
+          def={TEXT_DEF}
+          stored={rulesOfText(s.text)}
+          write={(r) => onChange({ ...s, text: textOfRules(r) })}
+          off={(v) => onChange({ ...s, text: ruleLiteralText(v) })}
+          current={s.text}
+        >
           <TemplateInput
             id={`${id}-text`}
             value={s.text}
@@ -345,7 +359,7 @@ function StepForm({
               Nothing will be copied yet — type the text, or insert a {'{{ variable }}'}.
             </div>
           )}
-        </Row>
+        </RulesRow>
       );
     }
     case 'runDataSource':
@@ -368,6 +382,18 @@ function StepForm({
 // ---- state variable picker with inline "new variable"
 
 const STATE_TYPES: StateVarType[] = ['string', 'number', 'boolean', 'array', 'object', 'any'];
+
+/** Value editor of text picked by rules (alert title / message, text to copy). */
+const TEXT_DEF: PropDef = { name: 'text', label: 'Text', type: { kind: 'string' } };
+
+/** The simple value a "Set variable" expression stands for (where rules start), else an empty one. */
+function literalOf(expr: string, v: StateVar | undefined): string | number | boolean | null {
+  const t = expr.trim();
+  if (v?.type === 'number') return t !== '' && Number.isFinite(Number(t)) ? Number(t) : 0;
+  if (v?.type === 'boolean') return t === 'true' ? true : t === 'false' ? false : true;
+  const quoted = /^(['"])(.*)\1$/s.exec(t);
+  return quoted ? quoted[2] : '';
+}
 
 function initialFor(type: StateVarType) {
   switch (type) {
@@ -502,6 +528,19 @@ function SetStateForm({ step, onChange, ctx }: { step: SetStateAction; onChange:
   if (ctx.eventParams.includes('checked'))
     quick.push({ label: 'Use checked', value: 'checked', title: 'Whether the control is now checked' });
   if (ctx.eventParams.includes('response')) quick.push({ label: 'Use response', value: 'response', title: 'The response of the request' });
+  const ruleDef = stateRuleDef(v);
+  const currentLiteral = literalOf(step.value, v);
+  const valueInput = (
+    <ExpressionInput
+      id={`${step.id}-value`}
+      value={step.value}
+      onChange={(value) => onChange({ ...step, value })}
+      ext={ctx.ext}
+      nodeId={ctx.nodeId}
+      eventParams={ctx.eventParams}
+      placeholder={v?.type === 'string' ? "e.g. 'Done' or value" : 'e.g. count + 1'}
+    />
+  );
   return (
     <>
       <Row label="Variable" htmlFor={`${step.id}-state`}>
@@ -518,22 +557,30 @@ function SetStateForm({ step, onChange, ctx }: { step: SetStateAction; onChange:
           ctx={ctx}
         />
       </Row>
-      <Row
-        label="New value"
-        htmlFor={`${step.id}-value`}
-        hint={!ctx.ext.state.length ? 'Create a state variable with + to store values between clicks.' : undefined}
-      >
-        <ExpressionInput
-          id={`${step.id}-value`}
-          value={step.value}
-          onChange={(value) => onChange({ ...step, value })}
-          ext={ctx.ext}
-          nodeId={ctx.nodeId}
-          eventParams={ctx.eventParams}
-          placeholder={v?.type === 'string' ? "e.g. 'Done' or value" : 'e.g. count + 1'}
-        />
-      </Row>
-      {quick.length > 0 && (
+      {ruleDef ? (
+        <RulesRow
+          id="value"
+          label="New value"
+          htmlFor={`${step.id}-value`}
+          ctx={ctx}
+          def={ruleDef}
+          stored={parseRules(step.value)}
+          write={(r) => onChange({ ...step, value: rulesToExpr(r) })}
+          off={(lit) => onChange({ ...step, value: ruleLiteralExpr(lit) })}
+          current={currentLiteral}
+        >
+          {valueInput}
+        </RulesRow>
+      ) : (
+        <Row
+          label="New value"
+          htmlFor={`${step.id}-value`}
+          hint={!ctx.ext.state.length ? 'Create a state variable with + to store values between clicks.' : undefined}
+        >
+          {valueInput}
+        </Row>
+      )}
+      {quick.length > 0 && !parseRules(step.value) && (
         <div className="ub-insp-quick" aria-label="Quick values">
           {quick.map((q) => (
             <button
@@ -560,18 +607,71 @@ const ALERT_TYPES: Array<{ value: AlertType; label: string }> = [
   { value: 'tip', label: 'Tip' },
 ];
 
+const ALERT_TYPE_DEF: PropDef = {
+  name: 'type',
+  label: 'Type',
+  type: { kind: 'enum', options: ALERT_TYPES.map((t) => ({ value: t.value, label: t.label })) },
+};
+
 function AlertForm({ step, onChange, ctx }: { step: AddAlertAction; onChange: (s: ActionStep) => void; ctx: ActionContext }) {
+  const typeRules = step.alertTypeExpr ? parseRules(step.alertTypeExpr) : null;
+  const withoutExpr = (patch: Partial<AddAlertAction>): AddAlertAction => {
+    const next: AddAlertAction = { ...step, ...patch };
+    delete next.alertTypeExpr;
+    return next;
+  };
   return (
     <>
-      <Row label="Type">
-        <Segmented<AlertType>
-          aria-label="Alert type"
-          value={step.alertType}
-          onChange={(alertType) => onChange({ ...step, alertType })}
-          options={ALERT_TYPES}
-        />
-      </Row>
-      <Row label="Title" htmlFor={`${step.id}-title`}>
+      {step.alertTypeExpr && !typeRules ? (
+        <Row
+          label="Type"
+          htmlFor={`${step.id}-typeexpr`}
+          actions={
+            <button type="button" className="ub-insp-linkbtn" onClick={() => onChange(withoutExpr({}))}>
+              Use a fixed type
+            </button>
+          }
+        >
+          <ExpressionInput
+            id={`${step.id}-typeexpr`}
+            value={step.alertTypeExpr}
+            onChange={(alertTypeExpr) => onChange(alertTypeExpr.trim() ? { ...step, alertTypeExpr } : withoutExpr({}))}
+            ext={ctx.ext}
+            nodeId={ctx.nodeId}
+            eventParams={ctx.eventParams}
+            aria-label="Alert type expression"
+          />
+        </Row>
+      ) : (
+        <RulesRow
+          id="type"
+          label="Type"
+          ctx={ctx}
+          def={ALERT_TYPE_DEF}
+          stored={typeRules}
+          write={(r) => onChange({ ...step, alertTypeExpr: rulesToExpr(r) })}
+          off={(v) => onChange(withoutExpr({ alertType: ALERT_TYPES.some((t) => t.value === v) ? (v as AlertType) : step.alertType }))}
+          current={step.alertType}
+        >
+          <Segmented<AlertType>
+            aria-label="Alert type"
+            value={step.alertType}
+            onChange={(alertType) => onChange({ ...step, alertType })}
+            options={ALERT_TYPES}
+          />
+        </RulesRow>
+      )}
+      <RulesRow
+        id="title"
+        label="Title"
+        htmlFor={`${step.id}-title`}
+        ctx={ctx}
+        def={TEXT_DEF}
+        stored={rulesOfText(step.title)}
+        write={(r) => onChange({ ...step, title: textOfRules(r) })}
+        off={(v) => onChange({ ...step, title: ruleLiteralText(v) })}
+        current={step.title}
+      >
         <TemplateInput
           id={`${step.id}-title`}
           value={step.title}
@@ -581,8 +681,18 @@ function AlertForm({ step, onChange, ctx }: { step: AddAlertAction; onChange: (s
           eventParams={ctx.eventParams}
           placeholder="Optional"
         />
-      </Row>
-      <Row label="Message" htmlFor={`${step.id}-message`}>
+      </RulesRow>
+      <RulesRow
+        id="message"
+        label="Message"
+        htmlFor={`${step.id}-message`}
+        ctx={ctx}
+        def={TEXT_DEF}
+        stored={rulesOfText(step.message)}
+        write={(r) => onChange({ ...step, message: textOfRules(r) })}
+        off={(v) => onChange({ ...step, message: ruleLiteralText(v) })}
+        current={step.message}
+      >
         <TemplateInput
           id={`${step.id}-message`}
           value={step.message}
@@ -592,7 +702,7 @@ function AlertForm({ step, onChange, ctx }: { step: AddAlertAction; onChange: (s
           eventParams={ctx.eventParams}
           placeholder="e.g. Saved {{ name }}"
         />
-      </Row>
+      </RulesRow>
     </>
   );
 }
@@ -934,17 +1044,18 @@ function LogForm({ step, onChange, ctx }: { step: LogAction; onChange: (s: Actio
 function IfForm({ step, onChange, ctx, depth }: { step: IfAction; onChange: (s: ActionStep) => void; ctx: ActionContext; depth: number }) {
   return (
     <>
-      <Row label="Condition" htmlFor={`${step.id}-cond`}>
-        <ExpressionInput
-          id={`${step.id}-cond`}
-          value={step.condition}
-          onChange={(condition) => onChange({ ...step, condition })}
-          ext={ctx.ext}
-          nodeId={ctx.nodeId}
-          eventParams={ctx.eventParams}
-          placeholder="e.g. count > 10"
-        />
-      </Row>
+      <ConditionBuilder
+        ext={ctx.ext}
+        nodeId={ctx.nodeId}
+        eventParams={ctx.eventParams}
+        value={step.condition}
+        onChange={(condition) => onChange({ ...step, condition })}
+        label="If"
+        codeLabel="Condition"
+        codePlaceholder="e.g. count > 10"
+        addLabel="Add a check"
+        startWithCheck
+      />
       <div className="ub-insp-branches">
         <div className="ub-insp-branch is-then">
           <div className="ub-insp-branch__head">Then</div>

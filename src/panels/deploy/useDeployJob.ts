@@ -4,9 +4,9 @@
  * Polling stops when the component unmounts (the deploy itself keeps running in HubSpot).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { DeployRequest, DeployStatus } from '../../connect/types';
+import type { DeployKeyAccount, DeployRequest, DeployStatus } from '../../connect/types';
 import { DeployClientError, isTransientDeployError, type DeployClient } from './client';
-import { ACCOUNT_ERROR_CODES, KEY_ERROR_CODES, stepIndex } from './model';
+import { isFormErrorCode, stepIndex } from './model';
 
 export const DEPLOY_POLL_INTERVAL_MS = 1500;
 /** Consecutive failed polls (network / 5xx) before the panel gives up. */
@@ -24,6 +24,8 @@ export interface DeployFormError {
   message: string;
   /** For 'portal_mismatch': the account the key belongs to. */
   portalId?: number;
+  /** Errors about the key or its account: the account the key belongs to (name, key page). */
+  key?: DeployKeyAccount;
 }
 
 export interface DeployJob {
@@ -35,8 +37,13 @@ export interface DeployJob {
   clearFormError(): void;
 }
 
-function messageOf(err: unknown): { code: string; message: string; portalId?: number } {
-  if (err instanceof DeployClientError) return { code: err.code, message: err.message, portalId: err.portalId };
+function messageOf(err: unknown): DeployFormError {
+  if (err instanceof DeployClientError) {
+    const e: DeployFormError = { code: err.code, message: err.message };
+    if (err.portalId !== undefined) e.portalId = err.portalId;
+    if (err.key) e.key = err.key;
+    return e;
+  }
   return { code: 'error', message: err instanceof Error ? err.message : String(err) };
 }
 
@@ -70,7 +77,8 @@ export function useDeployJob(client: DeployClient, pollIntervalMs = DEPLOY_POLL_
       } catch (err) {
         if (run.current !== id) return;
         const e = messageOf(err);
-        if (KEY_ERROR_CODES.has(e.code) || ACCOUNT_ERROR_CODES.has(e.code) || e.code === 'portal_mismatch') {
+        // Problems with the key or the account stay on the form (the key and the project are kept).
+        if (isFormErrorCode(e.code)) {
           setFormError(e);
           setState({ kind: 'idle' });
         } else {

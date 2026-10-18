@@ -12,7 +12,7 @@
  * Test helpers: issueTokens, expireAccessTokens, revokeRefreshTokens, dropScopes / restoreScopes,
  * failNext (inject 401/403/429/5xx), requests (log), seed (mutable data), projects (deploy state).
  */
-import { FAKE_PROJECT_PATH_PREFIXES, handleFakeProjects, type FakeProjectsState } from './projects';
+import { FAKE_OTHER_PORTAL_ID, FAKE_PROJECT_PATH_PREFIXES, handleFakeProjects, type FakeProjectsState } from './projects';
 import { createSeed, DEFAULT_PORTAL_ID, type FakeObjectType, type FakeRecord, type FakeSeed } from './seed';
 import { runSearch } from './search';
 
@@ -90,6 +90,31 @@ export interface FakeHubSpotControls extends FakeHubSpot {
 export const FAKE_PERSONAL_ACCESS_KEY = 'CiRuYTEtZmFrZS1kZW1vLWtleS1hY21lZGVtby0wMDAwMDAwMRIYdWlleC1kZW1vLWZha2UtcGFrLTAwMDAwMQ';
 /** The key earlier demos printed (still accepted). */
 export const LEGACY_FAKE_PERSONAL_ACCESS_KEY = 'pat-na1-fake0000-0000-4000-8000-000000000001';
+/**
+ * A personal access key of a second account (FAKE_OTHER_PORTAL_ID, "Other Co"), shown on that
+ * account's key page: publishing with it while connected to the demo account is a mismatch.
+ */
+export const FAKE_OTHER_ACCOUNT_KEY = 'CiRuYTEtZmFrZS1vdGhlci1jby0wMDAwMDAwMQ-other-account-key-000001';
+
+/**
+ * The fake's stand-ins for what HubSpot shows INSIDE the sign-in window when it refuses to install
+ * the app (it never redirects back to the builder, so the builder only sees the window close). The
+ * consent page links to them so the builder's "What did HubSpot show?" help can be tried end to end.
+ */
+export const FAKE_INSTALL_ERRORS: Record<string, { title: string; body: string }> = {
+  aup: {
+    title: 'The app could not be installed',
+    body: 'The app could not be installed because the app developer has not signed the acceptable use policy. Please contact the app developer.',
+  },
+  permission: {
+    title: "You don't have permission to install this app",
+    body: 'Only Super Admins and users with App Marketplace access can install apps in this account. Ask a Super Admin to install it.',
+  },
+  limit: {
+    title: 'This app has reached its install limit',
+    body: 'Apps that are not listed on the HubSpot App Marketplace can be installed in up to 25 accounts. Please contact the app developer.',
+  },
+};
 
 interface Grant {
   refreshToken: string;
@@ -166,6 +191,7 @@ export function createFakeHubSpot(opts: FakeHubSpotOptions): FakeHubSpotControls
       [LEGACY_FAKE_PERSONAL_ACCESS_KEY, portalId],
       ...Object.entries(opts.personalAccessKeys ?? {}),
     ]),
+    withoutDeveloperProjects: new Set<string>(),
   };
 
   const effectiveScopes = (g: Grant) => g.scopes.filter((s) => !dropped.has(s));
@@ -256,29 +282,56 @@ export function createFakeHubSpot(opts: FakeHubSpotOptions): FakeHubSpotControls
       .map((k) => `<input type="hidden" name="${k}" value="${esc(url.searchParams.get(k) ?? '')}">`)
       .join('');
     void redirect;
+    const demoErrors = Object.entries(FAKE_INSTALL_ERRORS)
+      .map(([kind, e]) => `<li><a href="/oauth/authorize/demo-error?kind=${kind}">${esc(e.title)}</a></li>`)
+      .join('');
     return html(
       200,
-      `<main><h1>Connect to HubSpot (fake)</h1><p>Portal <strong>${portalId}</strong> (${esc(seed.hubDomain)}) — signed in as ${esc(user.email)}.</p>
+      `<style>body{font:15px/1.5 system-ui,sans-serif;margin:32px auto;max-width:560px;padding:0 16px;color:#33475b}button{font:inherit;padding:6px 16px;margin-right:6px}ul{padding-left:20px}.demo{border-top:1px solid #dfe3eb;margin-top:24px;padding-top:12px;font-size:14px}</style>
+<main><h1>Connect to HubSpot (fake)</h1><p>Portal <strong>${portalId}</strong> (${esc(seed.hubDomain)}) — signed in as ${esc(user.email)}.</p>
 <p>The app is asking for:</p><ul>${all.map((s) => `<li>${esc(s)}</li>`).join('')}</ul>
 <form method="get" action="/oauth/authorize/decision">${hidden}
 <button type="submit" name="decision" value="approve">Approve</button>
 <button type="submit" name="decision" value="deny">Deny</button></form>
+<div class="demo"><strong>Demo:</strong> see what HubSpot shows here when it refuses to install the app (HubSpot then never returns to the builder):<ul>${demoErrors}</ul></div>
 <p hidden>${esc(state)}</p></main>`,
     );
   }
 
-  /** The fake "Personal access key" settings page (what "How do I get this?" opens in the demo). */
-  function personalAccessKeyPage(): Response {
-    const key = esc(FAKE_PERSONAL_ACCESS_KEY);
+  /** What HubSpot shows inside the sign-in window when it won't install the app (no way back). */
+  function installErrorPage(kind: string): Response {
+    const e = FAKE_INSTALL_ERRORS[kind] ?? FAKE_INSTALL_ERRORS.aup;
+    return html(
+      200,
+      `<style>body{font:15px/1.5 system-ui,sans-serif;margin:48px auto;max-width:520px;padding:0 16px;color:#33475b;text-align:center}.err{font-size:40px;color:#d93f4c}</style>
+<main><div class="err" aria-hidden="true">&#9888;</div><h1>${esc(e.title)}</h1><p>${esc(e.body)}</p><p><small>HubSpot (fake) — close this window.</small></p></main>`,
+    );
+  }
+
+  /**
+   * The fake "Personal access key" settings page (what "How do I get this?" opens in the demo). The
+   * second account (FAKE_OTHER_PORTAL_ID) has its own key. A demo switch removes or adds back the
+   * key's "Developer projects" permission, like editing the key in HubSpot.
+   */
+  function personalAccessKeyPage(requestedPortal: number | null): Response {
+    const other = requestedPortal === FAKE_OTHER_PORTAL_ID;
+    const rawKey = other ? FAKE_OTHER_ACCOUNT_KEY : FAKE_PERSONAL_ACCESS_KEY;
+    const key = esc(rawKey);
+    const account = other ? `<strong>${FAKE_OTHER_PORTAL_ID}</strong> (Other Co)` : `<strong>${portalId}</strong> (${esc(seed.hubDomain)})`;
+    const withProjects = !projects.withoutDeveloperProjects?.has(rawKey);
+    const action = `/personal-access-key/${other ? FAKE_OTHER_PORTAL_ID : portalId}/permissions`;
     return new Response(
       `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Personal access key · HubSpot (fake)</title>
-<style>body{font:15px/1.5 system-ui,sans-serif;margin:40px auto;max-width:640px;padding:0 16px;color:#33475b}code{display:block;word-break:break-all;background:#eaf0f6;padding:10px 12px;border-radius:6px;margin:8px 0}button{font:inherit;padding:6px 14px}</style>
+<style>body{font:15px/1.5 system-ui,sans-serif;margin:40px auto;max-width:640px;padding:0 16px;color:#33475b}code{display:block;word-break:break-all;background:#eaf0f6;padding:10px 12px;border-radius:6px;margin:8px 0}button{font:inherit;padding:6px 14px}.demo{border:1px dashed #cbd6e2;border-radius:8px;padding:10px 14px;margin-top:20px;font-size:14px}</style>
 </head><body><main><h1>Personal access key (fake HubSpot)</h1>
-<p>Account <strong>${portalId}</strong> (${esc(seed.hubDomain)}) — ${esc(user.email)}</p>
-<p>Permissions: <strong>Developer projects</strong> ✓</p>
+<p>Account ${account} — ${esc(user.email)}</p>
+<p id="perm">Permissions: <strong>Developer projects</strong> ${withProjects ? '✓' : '— not included'}</p>
 <label for="k">Your key</label><code id="k">${key}</code>
 <button type="button" id="copy">Copy</button> <span id="done" role="status"></span>
-<p>This is a demo account: the key only works with the fake HubSpot.</p></main>
+<p>This is a demo account: the key only works with the fake HubSpot.</p>
+<form class="demo" method="post" action="${action}"><strong>Demo:</strong> try what happens when the key lacks a permission.
+<input type="hidden" name="developerProjects" value="${withProjects ? 'off' : 'on'}">
+<button type="submit">${withProjects ? 'Remove Developer projects from this key' : 'Add Developer projects to this key'}</button></form></main>
 <script>document.getElementById('copy').onclick=function(){var t=document.getElementById('k').textContent;var d=document.getElementById('done');(navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(function(){d.textContent='Copied';},function(){var r=document.createRange();r.selectNodeContents(document.getElementById('k'));var s=getSelection();s.removeAllRanges();s.addRange(r);d.textContent='Selected - press Ctrl+C to copy';});};</script>
 </body></html>`,
       { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } },
@@ -692,7 +745,19 @@ button{font:inherit;padding:6px 14px}table{border-collapse:collapse}td,th{border
     if (FAKE_PROJECT_PATH_PREFIXES.some((p) => path.startsWith(p))) return handleFakeProjects(request, projects);
 
     if (request.method === 'GET' && path === '/oauth/authorize') return authorizePage(url);
-    if (request.method === 'GET' && (path === '/l/personal-access-key' || /^\/personal-access-key\/\d+\/?$/.test(path))) return personalAccessKeyPage();
+    if (request.method === 'GET' && (path === '/l/personal-access-key' || /^\/personal-access-key\/\d+\/?$/.test(path))) {
+      return personalAccessKeyPage(/^\/personal-access-key\/(\d+)/.test(path) ? Number(/^\/personal-access-key\/(\d+)/.exec(path)![1]) : null);
+    }
+    let pk: RegExpExecArray | null;
+    if (request.method === 'POST' && (pk = /^\/personal-access-key\/(\d+)\/permissions$/.exec(path))) {
+      const form = new URLSearchParams(await request.text());
+      const key = Number(pk[1]) === FAKE_OTHER_PORTAL_ID ? FAKE_OTHER_ACCOUNT_KEY : FAKE_PERSONAL_ACCESS_KEY;
+      if (!projects.withoutDeveloperProjects) projects.withoutDeveloperProjects = new Set();
+      if (form.get('developerProjects') === 'off') projects.withoutDeveloperProjects.add(key);
+      else projects.withoutDeveloperProjects.delete(key);
+      return new Response(null, { status: 303, headers: { location: `/personal-access-key/${pk[1]}` } });
+    }
+    if (request.method === 'GET' && path === '/oauth/authorize/demo-error') return installErrorPage(url.searchParams.get('kind') ?? '');
     if (request.method === 'GET' && path === '/oauth/authorize/decision') return decide(url, url.searchParams.get('decision') ?? 'deny');
     if (request.method === 'POST' && path === '/oauth/v1/token') return token(request);
     let m: RegExpExecArray | null;

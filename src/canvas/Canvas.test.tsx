@@ -431,11 +431,11 @@ describe('context menu', () => {
     expect(useEditor.getState().clipboard?.type).toBe('Button');
   });
 
-  it('wraps in a Flex', () => {
+  it('wraps in a layout box (Flex)', () => {
     setup(content);
     const btn = byName('btn');
     openMenuOn(el(btn.id));
-    chooseMenuItem('Wrap in Flex');
+    chooseMenuItem('Wrap in Layout box');
     const wrapperId = root().children[1];
     expect(ext().nodes[wrapperId].type).toBe('Flex');
     expect(ext().nodes[wrapperId].children).toEqual([btn.id]);
@@ -603,16 +603,16 @@ describe('screen-reader support', () => {
       });
     };
     await run(() => useEditor.getState().select(child(1)));
-    expect(announcer()).toHaveTextContent('Selected Text “Body copy”, 2 of 3 in col (Flex).');
+    expect(announcer()).toHaveTextContent('Selected Text “Body copy”, 2 of 3 in col (Layout box).');
     const textId = child(1);
     await run(() => useEditor.getState().moveNode(textId, { parentId: byName('col').id, index: 3 }));
-    expect(announcer()).toHaveTextContent('Moved Text “Body copy” to position 3 of 3 in col (Flex).');
+    expect(announcer()).toHaveTextContent('Moved Text “Body copy” to position 3 of 3 in col (Layout box).');
     await run(() => useEditor.getState().duplicateNode(textId));
-    expect(announcer()).toHaveTextContent(/^Duplicated Text “Body copy”, 4 of 4 in col \(Flex\)\.$/);
+    expect(announcer()).toHaveTextContent(/^Duplicated Text “Body copy”, 4 of 4 in col \(Layout box\)\.$/);
     await run(() => useEditor.getState().removeNode(useEditor.getState().selectedNodeId!));
     expect(announcer()).toHaveTextContent(/^Deleted Text “Body copy”\. /);
     await run(() => useEditor.getState().select(byName('col').id));
-    expect(announcer()).toHaveTextContent('Selected col (Flex), 1 of 1 in the card, contains 3 components.');
+    expect(announcer()).toHaveTextContent('Selected col (Layout box), 1 of 1 in the card, contains 3 components.');
     await run(() => useEditor.getState().select(null));
     expect(announcer()).toHaveTextContent('Nothing selected — the card.');
     // Prop edits are not announced.
@@ -631,7 +631,7 @@ describe('screen-reader support', () => {
     expect(announcer()).toHaveTextContent('');
     // Focusing the stage with a selection says what is selected.
     fireEvent.focus(stage());
-    expect(announcer()).toHaveTextContent('Selected Heading “Deal summary”, 1 of 3 in col (Flex).');
+    expect(announcer()).toHaveTextContent('Selected Heading “Deal summary”, 1 of 3 in col (Layout box).');
   });
 });
 
@@ -713,8 +713,8 @@ describe('drag and drop', () => {
     drag({ kind: 'new', componentType: 'Button' });
     fireEvent.dragOver(ph);
     const ind = useDragStore.getState().indicator!;
-    expect(ind).toMatchObject({ mode: 'inside', target: { parentId: flex.id, index: 0 }, source: 'canvas', label: 'Into Flex' });
-    expect(screen.getByTestId('canvas-drop-inside')).toHaveTextContent('Into Flex');
+    expect(ind).toMatchObject({ mode: 'inside', target: { parentId: flex.id, index: 0 }, source: 'canvas', label: 'Into Layout box' });
+    expect(screen.getByTestId('canvas-drop-inside')).toHaveTextContent('Into Layout box');
     fireEvent.drop(ph);
     expect(byName('empty').children).toHaveLength(1);
     expect(ext().nodes[byName('empty').children[0]].type).toBe('Button');

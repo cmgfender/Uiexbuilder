@@ -274,6 +274,44 @@ describe('HubSpot path', () => {
     expect(connect).toHaveBeenCalled();
   });
 
+  it('asks what HubSpot showed when its window closed, and gives the fix in place', () => {
+    setStatus('disconnected', { error: 'The HubSpot window closed before connecting finished.', errorCode: 'popup_closed', errorSource: 'sign-in' });
+    const connect = vi.fn(async () => {});
+    useConnection.setState({ connect });
+    renderFirstRun();
+    fireEvent.click(screen.getByRole('button', { name: /Connect my HubSpot/ }));
+    expect(screen.getByRole('alert')).toHaveTextContent('HubSpot was not connected');
+    const question = screen.getByRole('group', { name: 'What did HubSpot show?' });
+    fireEvent.click(within(question).getByRole('radio', { name: /Acceptable Use Policy/i }));
+    expect(screen.getByRole('button', { name: /Copy a note for whoever set up this builder/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(connect).toHaveBeenCalled();
+  });
+
+  it('offers Continue in this tab when the browser blocked the HubSpot window', () => {
+    setStatus('disconnected', { error: 'Your browser blocked the HubSpot window.', errorCode: 'popup_blocked', errorSource: 'sign-in' });
+    const connectInThisTab = vi.fn(async () => {});
+    const connect = vi.fn(async () => {});
+    useConnection.setState({ connect, connectInThisTab });
+    renderFirstRun();
+    fireEvent.click(screen.getByRole('button', { name: /Connect my HubSpot/ }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Your browser blocked the HubSpot window');
+    fireEvent.click(screen.getByRole('button', { name: 'Continue in this tab' }));
+    expect(connectInThisTab).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Try the window again' }));
+    expect(connect).toHaveBeenCalled();
+  });
+
+  it('says it is still waiting and asks what the HubSpot window shows after a while', () => {
+    setStatus('connecting', { connectingSince: Date.now() - 60_000 });
+    useOnboarding.setState({ view: 'setup', path: 'hubspot', step: 0 });
+    renderFirstRun();
+    expect(screen.getByText('Still waiting for HubSpot…')).toBeInTheDocument();
+    const question = screen.getByRole('group', { name: 'What does the HubSpot window show?' });
+    // The window is still open: no "I closed it" choice.
+    expect(within(question).queryByRole('radio', { name: /I closed it/ })).not.toBeInTheDocument();
+  });
+
   it('offers sample data when connecting is not possible after all', () => {
     setStatus('disconnected');
     renderFirstRun();

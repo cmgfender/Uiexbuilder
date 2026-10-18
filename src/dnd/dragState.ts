@@ -255,34 +255,86 @@ export function mainColumn(ext: Extension): NodeId | null {
  *
  * Forms get special care: adding to a Form goes into its fields' layout Flex, and inside a form
  * new content goes before the trailing submit / reset buttons.
+ *
+ * Right after a block was inserted its main component is selected (e.g. the progress bar of
+ * "Progress tracker", see `setBlockAnchor`); the next insert still goes after the whole block.
  */
 export function smartInsertTarget(ext: Extension, selectedId: NodeId | null, type: string): InsertTarget | null {
-  if (selectedId && ext.nodes[selectedId]) {
+  const anchored = anchoredBlock(ext, selectedId);
+  if (anchored) {
+    const after = afterNode(ext, anchored, type);
+    if (after) return after;
+  } else if (selectedId && ext.nodes[selectedId]) {
     const sel = ext.nodes[selectedId];
     if (canAccept(ext, selectedId, type).ok) {
       if (sel.type === 'Form') return intoForm(ext, selectedId, type);
       return beforeFormActions(ext, { parentId: selectedId, index: sel.children.length }, type);
     }
-    const wide = isFullWidthComponent(type);
-    let fallback: InsertTarget | null = null;
-    let cur: NodeId | null = selectedId;
-    // Walk up: after the selected node, then after its ancestors.
-    while (cur) {
-      const ref = findParent(ext, cur);
-      if (!ref) break;
-      if (!ref.slot && canAccept(ext, ref.parentId, type).ok) {
-        const target = beforeFormActions(ext, { parentId: ref.parentId, index: ref.index + 1 }, type);
-        if (!wide || !insideSideBySide(ext, ref.parentId)) return target;
-        fallback ??= target;
-      }
-      cur = ref.parentId;
-    }
-    if (fallback) return fallback;
+    const after = afterNode(ext, selectedId, type);
+    if (after) return after;
   }
   const main = mainColumn(ext);
   if (main && canAccept(ext, main, type).ok) return beforeFormActions(ext, { parentId: main, index: ext.nodes[main].children.length }, type);
   const root = ext.nodes[ext.rootId];
   if (canAccept(ext, ext.rootId, type).ok) return { parentId: ext.rootId, index: root.children.length };
+  return null;
+}
+
+/** After `id` in its parent, else after its ancestors (full-width types skip side-by-side rows). */
+function afterNode(ext: Extension, id: NodeId, type: string): InsertTarget | null {
+  const wide = isFullWidthComponent(type);
+  let fallback: InsertTarget | null = null;
+  let cur: NodeId | null = id;
+  // Walk up: after the node, then after its ancestors.
+  while (cur) {
+    const ref = findParent(ext, cur);
+    if (!ref) break;
+    if (!ref.slot && canAccept(ext, ref.parentId, type).ok) {
+      const target = beforeFormActions(ext, { parentId: ref.parentId, index: ref.index + 1 }, type);
+      if (!wide || !insideSideBySide(ext, ref.parentId)) return target;
+      fallback ??= target;
+    }
+    cur = ref.parentId;
+  }
+  return fallback;
+}
+
+/**
+ * The block just inserted, while its main component is still the selection: `selectedId` is the
+ * component selected after the insert and `blockId` the block's outermost node.
+ */
+export interface BlockAnchor {
+  selectedId: NodeId;
+  blockId: NodeId;
+}
+
+let blockAnchor: BlockAnchor | null = null;
+
+/**
+ * Remembers (or forgets, with null) the block that was just inserted, so the next click-to-add
+ * lands after the whole block rather than inside it next to its selected main component. The
+ * caller clears it when the selection changes.
+ */
+export function setBlockAnchor(anchor: BlockAnchor | null): void {
+  blockAnchor = anchor;
+}
+
+export function getBlockAnchor(): BlockAnchor | null {
+  return blockAnchor;
+}
+
+function anchoredBlock(ext: Extension, selectedId: NodeId | null): NodeId | null {
+  const a = blockAnchor;
+  if (!a || !selectedId || a.selectedId !== selectedId || a.blockId === selectedId) return null;
+  if (!ext.nodes[a.blockId] || !ext.nodes[selectedId]) return null;
+  // The selection must still be inside the block.
+  let cur: NodeId | null = selectedId;
+  while (cur) {
+    const ref = findParent(ext, cur);
+    if (!ref) return null;
+    if (ref.parentId === a.blockId) return a.blockId;
+    cur = ref.parentId;
+  }
   return null;
 }
 

@@ -416,6 +416,7 @@ function normalizeSteps(raw: unknown, r: Repairs, where: string): ActionStep[] |
       case 'addAlert':
         ensureStr('title');
         ensureStr('message');
+        optStr(step, 'alertTypeExpr', r, where);
         break;
       case 'openIframeModal':
         ensureStr('uri');

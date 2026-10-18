@@ -510,6 +510,15 @@
 .ub-ob-alert span {
   color: var(--ub-text);
 }
+/* "What did HubSpot show?" in the Connect step (and in the waiting box once it takes a while). */
+.ub-ob-signin-help {
+  width: 100%;
+}
+.ub-ob-waiting .ub-ob-signin-help {
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ub-border);
+}
 .ub-ob-connected {
   display: flex;
   align-items: flex-start;

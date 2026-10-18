@@ -643,3 +643,125 @@
 .ub-pw-cp__count {
   margin-left: auto;
 }
+
+/* ---------- Shaped lists (filter, sort, limit, format) ---------- */
+.ub-pw-shape {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.ub-pw-shape__row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: start;
+  gap: 6px;
+}
+.ub-pw-shape__label {
+  padding-top: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ub-text-2);
+}
+.ub-pw-shape__formats > .ub-pw-shape__label {
+  padding-top: 0;
+}
+.ub-pw-shape__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.ub-pw-shape__pair {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.ub-pw-shape__pair > .ub-select,
+.ub-pw-shape__pair > .ub-input {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.ub-pw-shape__pair > input[type='number'] {
+  flex: 0 0 72px;
+}
+.ub-pw-shape__warn {
+  font-size: 11.5px;
+  color: var(--ub-warning);
+}
+.ub-pw-shape__formats {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ub-pw-shape__format {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--ub-border);
+  border-radius: var(--ub-radius);
+  background: var(--ub-surface-2);
+}
+.ub-pw-shape__pair:empty {
+  display: none;
+}
+.ub-pw-shape__as {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  color: var(--ub-text-3);
+}
+.ub-pw-shape__add {
+  align-self: flex-start;
+}
+.ub-pw-shape__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.ub-pw-shape__count {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ub-text-2);
+}
+.ub-pw-shape__table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 11.5px;
+}
+.ub-pw-shape__table th,
+.ub-pw-shape__table td {
+  padding: 3px 6px;
+  border: 1px solid var(--ub-border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.ub-pw-shape__table th {
+  background: var(--ub-surface-2);
+  color: var(--ub-text-3);
+  font-weight: 600;
+}
+.ub-pw-shape__more {
+  font-size: 11px;
+  color: var(--ub-text-3);
+}
+.ub-pw-shape__mode {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ub-pw-shapebox {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}

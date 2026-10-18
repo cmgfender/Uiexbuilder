@@ -3,7 +3,11 @@
  * project to HubSpot with the admin's personal access key, through the hosted connector (no
  * terminal):
  *   1. Get your key   — a direct link to HubSpot's personal access key page (the page the HubSpot
- *                       CLI opens, for the connected account), the clicks to make, the paste field
+ *                       CLI opens, for the connected account), the clicks to make, the paste field.
+ *                       The key is checked with HubSpot before anything is uploaded (useKeyCheck):
+ *                       which account it belongs to, the "Developer projects" permission, the
+ *                       connected account — each problem with its fix, a deep link to the right key
+ *                       page and "Check again" (the project and the key stay as they are)
  *   2. Publish        — progress (uploading → building → going live → published)
  *   3. Finish in HubSpot — a checklist with direct links: install the app, add the card to the
  *                       record page (the exact clicks), open a record to see it. Ticks are remembered.
@@ -14,7 +18,7 @@
  * Once HubSpot sign-in is set up on the server, publishing needs a connected account (the key must
  * belong to it). The key is pasted for every publish and never stored.
  */
-import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Check,
   ChevronDown,
@@ -41,6 +45,7 @@ import { useLiveData } from '../../connect/records';
 import type { DeployRequest, DeployStatus } from '../../connect/types';
 import { setupPageUrl } from '../../connect/ui/links';
 import { HubSpotMark } from '../../connect/ui/HubSpotMark';
+import { CopyNote } from '../../connect/ui/CopyNote';
 import { formattedProjectFiles, generateProjectFiles } from '../../codegen';
 import { downloadFile, serializeProject } from '../../model/persistence';
 import { useEditor } from '../../model/store';
@@ -51,15 +56,20 @@ import { Callout } from '../common';
 import { useLastPublish, type LastPublish } from './checklist';
 import { deployClient, type DeployClient } from './client';
 import {
+  ACCOUNT_ERROR_CODES,
   DEPLOY_STEPS,
   KEY_GUIDE_FALLBACK,
   KEY_GUIDE_STEPS,
+  KEY_PROBLEM_CODES,
   PRIVATE_APP_TOKEN_HINT,
   WIZARD_STEPS,
+  accountName,
   failingExtensions,
   failureAdvice,
   hubspotOrigin,
   isConnectorApp,
+  keyProblemCopy,
+  keyProblemKind,
   looksLikePrivateAppToken,
   personalAccessKeyUrl,
   phaseMessage,
@@ -67,9 +77,12 @@ import {
   stepIndex,
   stepStates,
   type ChecklistItem,
+  type KeyProblemKind,
   type StepState,
 } from './model';
 import { useDeployJob, type DeployFormError } from './useDeployJob';
+import { useKeyCheck, type KeyCheckState } from './useKeyCheck';
+import type { DeployKeyAccount } from '../../connect/types';
 import './deploy.css';
 
 export interface DeployToHubSpotPanelProps {
@@ -184,6 +197,27 @@ function DeployFlow({ client, pollIntervalMs, onShowCli, onClose }: DeployFlowPr
   const [key, setKey] = useState('');
   const [preparing, setPreparing] = useState(false);
   const [last, setLast] = useState<LastTarget>({});
+  const keyCheck = useKeyCheck(client, key);
+
+  /**
+   * Publish: the key is checked with HubSpot first (unless it just was, and passed) — a problem
+   * stays on the form with its fix, nothing is uploaded. `force` skips the check ("Publish anyway").
+   */
+  const publishNow = async (portalId?: number, force = false) => {
+    if (!force) {
+      let checked = keyCheck.resultFor(key);
+      const passed = !!checked && (checked.kind === 'unavailable' || (checked.kind === 'done' && checked.result.ok));
+      if (!passed) {
+        job.clearFormError();
+        checked = await keyCheck.check();
+      }
+      if (!checked || checked.kind === 'error') return;
+      // Before sign-in is set up, "Publish to account N instead" is the fix for a key from account N.
+      const mismatchOverride = checked.kind === 'done' && checked.result.problem === 'portal_mismatch' && portalId === checked.result.key.portalId && !connected;
+      if (checked.kind === 'done' && !checked.result.ok && !mismatchOverride) return;
+    }
+    await deploy(portalId);
+  };
 
   const deploy = async (portalId?: number) => {
     setPreparing(true);
@@ -248,7 +282,7 @@ function DeployFlow({ client, pollIntervalMs, onShowCli, onClose }: DeployFlowPr
         failedStep={state.failedStep}
         status={state.status}
         project={project}
-        onRetry={() => void deploy(last.portalId)}
+        onRetry={() => void publishNow(last.portalId)}
         onBack={job.reset}
         onShowCli={onShowCli}
         onClose={onClose}
@@ -271,11 +305,17 @@ function DeployFlow({ client, pollIntervalMs, onShowCli, onClose }: DeployFlowPr
           keyValue={key}
           onKeyChange={(v) => {
             setKey(v);
-            if (job.formError && job.formError.code !== 'portal_mismatch') job.clearFormError();
+            if (job.formError) job.clearFormError();
           }}
           preparing={preparing}
           formError={job.formError}
-          onDeploy={(portalId) => void deploy(portalId)}
+          keyStatus={keyCheck.state}
+          onCheckAgain={() => {
+            job.clearFormError();
+            void keyCheck.check();
+          }}
+          onDeploy={(portalId) => void publishNow(portalId)}
+          onPublishAnyway={() => void publishNow(undefined, true)}
           onDismissError={job.clearFormError}
           onShowCli={onShowCli}
           onClose={onClose}
@@ -340,10 +380,44 @@ interface DeployFormProps {
   onKeyChange: (value: string) => void;
   preparing: boolean;
   formError: DeployFormError | null;
+  /** What HubSpot said about the key (checked before anything is uploaded). */
+  keyStatus: KeyCheckState;
+  onCheckAgain: () => void;
   onDeploy: (portalId?: number) => void;
+  /** Publish without the key check's verdict ("Publish anyway" for a missing permission). */
+  onPublishAnyway: () => void;
   onDismissError: () => void;
   onShowCli?: () => void;
   onClose?: () => void;
+}
+
+/** One problem with the key or its account, from the key check or from a publish HubSpot refused. */
+interface KeyIssue {
+  kind: KeyProblemKind;
+  message: string;
+  key?: DeployKeyAccount;
+  /** The key's account id when only that is known (portal_mismatch from an older server). */
+  keyPortalId?: number;
+  /** From a refused publish (fix: Try again) rather than the key check (fix: Check again). */
+  fromPublish: boolean;
+}
+
+function keyIssueOf(formError: DeployFormError | null, current: KeyCheckState): KeyIssue | null {
+  // While checking the same key again, the last verdict stays on screen (no flicker).
+  const status = current.kind === 'checking' && current.previous ? current.previous : current;
+  if (formError && KEY_PROBLEM_CODES.has(formError.code)) {
+    const kind = keyProblemKind(formError.code);
+    if (kind) return { kind, message: formError.message, key: formError.key, keyPortalId: formError.key?.portalId ?? formError.portalId, fromPublish: true };
+  }
+  if (!formError && status.kind === 'error' && KEY_PROBLEM_CODES.has(status.error.code)) {
+    const kind = keyProblemKind(status.error.code);
+    if (kind) return { kind, message: status.error.message, key: status.error.key, keyPortalId: status.error.key?.portalId ?? status.error.portalId, fromPublish: false };
+  }
+  if (!formError && status.kind === 'done' && !status.result.ok) {
+    const kind = keyProblemKind(status.result.problem ?? 'missing_permission') ?? 'missing_permission';
+    return { kind, message: status.result.message ?? '', key: status.result.key, keyPortalId: status.result.key.portalId, fromPublish: false };
+  }
+  return null;
 }
 
 function DeployForm(p: DeployFormProps) {
@@ -356,11 +430,15 @@ function DeployForm(p: DeployFormProps) {
   const warnings = issues.filter((i) => i.severity === 'warning');
   const blocked = errors.length > 0 && !ack;
   const keyUrl = personalAccessKeyUrl(p.connected?.appHost, p.connected?.portalId, p.appBase);
-  const mismatch = p.formError?.code === 'portal_mismatch' ? p.formError : null;
-  const accountError = p.formError && (p.formError.code === 'not_connected' || p.formError.code === 'portal_not_allowed') ? p.formError : null;
-  const keyError = p.formError && !mismatch && !accountError ? p.formError : null;
+  const checkError = p.keyStatus.kind === 'error' ? p.keyStatus.error : null;
+  const shown = p.formError ?? checkError;
+  const issue = keyIssueOf(p.formError, p.keyStatus);
+  const accountError = shown && ACCOUNT_ERROR_CODES.has(shown.code) ? shown : null;
+  const keyError = shown && !accountError && !KEY_PROBLEM_CODES.has(shown.code) ? shown : null;
+  const checking = p.keyStatus.kind === 'checking';
+  const checkedOk = !shown && p.keyStatus.kind === 'done' && p.keyStatus.result.ok ? p.keyStatus.result : null;
   const hasKey = p.keyValue.trim().length > 0;
-  const canDeploy = hasKey && !blocked && !p.preparing && !mismatch;
+  const canDeploy = hasKey && !blocked && !p.preparing && !checking;
   const privateAppToken = looksLikePrivateAppToken(p.keyValue);
 
   const showProblems = () => {
@@ -458,39 +536,42 @@ function DeployForm(p: DeployFormProps) {
             <TriangleAlert size={13} aria-hidden /> {PRIVATE_APP_TOKEN_HINT}
           </p>
         )}
+        {checking && (
+          <p className="ub-dp-keycheck" role="status">
+            <Loader2 size={13} className="ub-dp-spin" aria-hidden /> Checking your key with HubSpot…
+          </p>
+        )}
+        {checkedOk && (
+          <p className="ub-dp-keycheck ub-dp-keycheck--ok" role="status">
+            <CircleCheck size={14} aria-hidden />
+            <span>
+              Key checked: it belongs to <strong>{accountName(checkedOk.key)}</strong>
+              {checkedOk.key.developerProjects === 'yes' ? ' and has the Developer projects permission' : ''}. Ready to publish.
+            </span>
+          </p>
+        )}
+        {issue && (
+          <KeyProblem
+            id={`${ids}-problem`}
+            issue={issue}
+            connected={p.connected}
+            connectedKeyUrl={keyUrl}
+            checking={checking}
+            onCheckAgain={p.onCheckAgain}
+            onRetry={() => p.onDeploy()}
+            onPublishAnyway={p.onPublishAnyway}
+            onPublishTo={(portalId) => p.onDeploy(portalId)}
+            onDismiss={p.onDismissError}
+          />
+        )}
       </section>
 
       {accountError && (
         <Callout tone="warning" icon={<TriangleAlert size={14} aria-hidden />} role="alert">
           <div>{accountError.message}</div>
-          {accountError.code === 'not_connected' && (
-            <div className="ub-pn-row">
-              <Button size="sm" icon={<HubSpotMark />} onClick={() => void useConnection.getState().connect()}>
-                Reconnect
-              </Button>
-            </div>
-          )}
-        </Callout>
-      )}
-
-      {mismatch && (
-        <Callout tone="warning" icon={<TriangleAlert size={14} aria-hidden />} role="alert">
-          <div className="ub-pn-strong">This key is for a different HubSpot account</div>
-          <div>{mismatch.message}</div>
           <div className="ub-pn-row">
-            {p.connected ? (
-              <Button size="sm" icon={<Repeat size={13} aria-hidden />} onClick={() => void useConnection.getState().switchPortal()}>
-                Switch HubSpot account
-              </Button>
-            ) : (
-              mismatch.portalId !== undefined && (
-                <Button size="sm" onClick={() => p.onDeploy(mismatch.portalId)}>
-                  Publish to account {mismatch.portalId} instead
-                </Button>
-              )
-            )}
-            <Button size="sm" variant="ghost" icon={<X size={13} aria-hidden />} onClick={p.onDismissError}>
-              Use a different key
+            <Button size="sm" icon={<HubSpotMark />} onClick={() => void useConnection.getState().connect()}>
+              Reconnect
             </Button>
           </div>
         </Callout>
@@ -510,29 +591,201 @@ function DeployForm(p: DeployFormProps) {
               Publishing to <strong>{p.connected.hubDomain || 'your HubSpot account'}</strong> (account {p.connected.portalId}), the account you’re
               connected to.
             </>
+          ) : checkedOk ? (
+            <>
+              Publishing to <strong>{accountName(checkedOk.key)}</strong>, the account your key belongs to.
+            </>
           ) : (
             'The project goes to the HubSpot account your personal access key belongs to.'
           )}
+          {/* The key check's verdict stays in view next to the button (the details are above). */}
+          {checking ? (
+            <span className="ub-dp-keystate">
+              <Loader2 size={12} className="ub-dp-spin" aria-hidden /> Checking your key…
+            </span>
+          ) : checkedOk ? (
+            <span className="ub-dp-keystate ub-dp-keystate--ok">
+              <CircleCheck size={12} aria-hidden /> Key checked — ready to publish
+            </span>
+          ) : issue ? (
+            <button
+              type="button"
+              className="ub-dp-keystate ub-dp-keystate--warn"
+              onClick={() => document.getElementById(`${ids}-problem`)?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' })}
+            >
+              <TriangleAlert size={12} aria-hidden />{' '}
+              {issue.kind === 'missing_permission' || issue.kind === 'portal_mismatch' ? 'Fix the key first — see what to do' : 'HubSpot said no — see what to do'}
+            </button>
+          ) : null}
         </p>
         <Button
           variant="primary"
-          icon={p.preparing ? <Loader2 size={14} className="ub-dp-spin" aria-hidden /> : <UploadCloud size={14} aria-hidden />}
+          icon={p.preparing || checking ? <Loader2 size={14} className="ub-dp-spin" aria-hidden /> : <UploadCloud size={14} aria-hidden />}
           disabled={!canDeploy}
-          title={blocked ? 'Fix the problems or turn on “Publish anyway”' : !hasKey ? 'Paste your personal access key first' : undefined}
+          title={blocked ? 'Fix the problems or turn on “Publish anyway”' : !hasKey ? 'Paste your personal access key first' : issue ? 'Checks the key again, then publishes' : undefined}
           onClick={() => p.onDeploy()}
         >
-          {p.preparing ? 'Preparing files…' : 'Publish to HubSpot'}
+          {p.preparing ? 'Preparing files…' : checking ? 'Checking your key…' : 'Publish to HubSpot'}
         </Button>
       </div>
     </div>
   );
 }
 
+/**
+ * A problem with the key or its account, with the fix: the steps, a link to the right account's
+ * key page, the accounts involved, and a way to check again / try again without losing anything.
+ */
+function KeyProblem({
+  id,
+  issue,
+  connected,
+  connectedKeyUrl,
+  checking,
+  onCheckAgain,
+  onRetry,
+  onPublishAnyway,
+  onPublishTo,
+  onDismiss,
+}: {
+  id?: string;
+  issue: KeyIssue;
+  connected: DeployFormProps['connected'];
+  /** The connected account's key page. */
+  connectedKeyUrl: string;
+  checking: boolean;
+  onCheckAgain: () => void;
+  onRetry: () => void;
+  onPublishAnyway: () => void;
+  onPublishTo: (portalId: number) => void;
+  onDismiss: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const ids = useId();
+  // The callout can open below the fold of the dialog (the Publish button is sticky): show it.
+  useEffect(() => {
+    ref.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+  }, [issue.kind, issue.fromPublish]);
+  const keyAccount: { portalId: number; name?: string } | undefined = issue.key ?? (issue.keyPortalId !== undefined ? { portalId: issue.keyPortalId } : undefined);
+  const copy = keyProblemCopy(issue.kind, {
+    key: keyAccount,
+    connected: connected ? { portalId: connected.portalId, hubDomain: connected.hubDomain } : null,
+    builderUrl: typeof window !== 'undefined' ? window.location.origin : '',
+    setupUrl: absoluteUrl(setupPageUrl()),
+  });
+  const keyPageUrl = issue.key?.keyPageUrl;
+  // The fix for a key-check problem is checked again; one HubSpot refused while publishing is tried again.
+  const again = issue.fromPublish ? (
+    <Button size="sm" icon={<RotateCcw size={13} aria-hidden />} onClick={onRetry}>
+      Try again
+    </Button>
+  ) : (
+    <Button size="sm" icon={checking ? <Loader2 size={13} className="ub-dp-spin" aria-hidden /> : <RotateCcw size={13} aria-hidden />} disabled={checking} onClick={onCheckAgain}>
+      {checking ? 'Checking…' : 'Check again'}
+    </Button>
+  );
+  // HubSpot's own words say why it refused (the rest of the message is the fix below).
+  const said = issue.kind === 'forbidden' ? /HubSpot said: “([^”]+)”/.exec(issue.message)?.[1] : undefined;
+  return (
+    <div ref={ref} id={id} className="ub-dp-problem" role="alert" aria-labelledby={`${ids}-title`}>
+      <div className="ub-dp-problem__title" id={`${ids}-title`}>
+        <TriangleAlert size={15} aria-hidden /> {copy.title}
+      </div>
+      {issue.kind === 'portal_mismatch' && keyAccount && (
+        <dl className="ub-dp-accounts">
+          <div>
+            <dt>Your key is for</dt>
+            <dd>{accountName(keyAccount)}</dd>
+          </div>
+          {connected && (
+            <div>
+              <dt>You’re connected to</dt>
+              <dd>{accountName({ portalId: connected.portalId, hubDomain: connected.hubDomain })}</dd>
+            </div>
+          )}
+        </dl>
+      )}
+      {issue.kind !== 'portal_mismatch' && keyAccount && issue.kind !== 'origin' && (
+        <p className="ub-dp-problem__account">
+          Key for <strong>{accountName(keyAccount)}</strong>
+          {connected && connected.portalId === keyAccount.portalId ? ' — the account you’re connected to' : ''}
+        </p>
+      )}
+      <p>{copy.intro}</p>
+      {said && (
+        <p className="ub-dp-problem__said">
+          HubSpot said: “{said}”
+        </p>
+      )}
+      {copy.steps.length > 0 && (
+        <ol className="ub-dp-problem__steps">
+          {copy.steps.map((step) => (
+            <li key={step}>{step}</li>
+          ))}
+        </ol>
+      )}
+      {copy.note && copy.noteFor && (
+        <CopyNote
+          note={copy.note}
+          label={copy.noteFor === 'host' ? 'Copy a note for whoever set up this builder' : 'Copy a note for your Super Admin'}
+          recipient={copy.noteFor === 'host' ? 'whoever set up this builder' : 'a Super Admin of that HubSpot account'}
+        />
+      )}
+      <div className="ub-pn-row ub-dp-problem__actions">
+        {issue.kind === 'missing_permission' && keyPageUrl && (
+          <HubSpotLink href={keyPageUrl} primary small>
+            Open the key page for {keyAccount?.name || `account ${keyAccount?.portalId}`}
+          </HubSpotLink>
+        )}
+        {issue.kind === 'portal_mismatch' &&
+          (connected ? (
+            <>
+              <HubSpotLink href={connectedKeyUrl} primary small>
+                Open the key page for {connected.hubDomain || `account ${connected.portalId}`}
+              </HubSpotLink>
+              <Button size="sm" icon={<Repeat size={13} aria-hidden />} onClick={() => void useConnection.getState().switchPortal()}>
+                Switch HubSpot account
+              </Button>
+            </>
+          ) : (
+            keyAccount && (
+              <Button size="sm" variant="primary" onClick={() => onPublishTo(keyAccount.portalId)}>
+                Publish to account {keyAccount.portalId} instead
+              </Button>
+            )
+          ))}
+        {issue.kind !== 'origin' && again}
+        {issue.kind === 'portal_mismatch' && (
+          <Button size="sm" variant="ghost" icon={<X size={13} aria-hidden />} onClick={onDismiss}>
+            Use a different key
+          </Button>
+        )}
+      </div>
+      {issue.kind === 'missing_permission' && !issue.fromPublish && (
+        <p className="ub-dp-problem__anyway">
+          Sure the key has it?{' '}
+          <button type="button" className="ub-pn-link" onClick={onPublishAnyway}>
+            Publish anyway
+          </button>
+        </p>
+      )}
+    </div>
+  );
+}
+
+function absoluteUrl(url: string): string {
+  try {
+    return new URL(url, window.location.href).toString();
+  } catch {
+    return url;
+  }
+}
+
 function KeyErrorText({ error, keyUrl }: { error: DeployFormError; keyUrl: string }) {
   return (
     <span role="alert">
       {error.message}
-      {(error.code === 'invalid_key' || error.code === 'missing_scope') && (
+      {(error.code === 'invalid_key' || error.code === 'key_expired') && (
         <>
           {' '}
           <a className="ub-pn-link" href={keyUrl} target="_blank" rel="noreferrer">

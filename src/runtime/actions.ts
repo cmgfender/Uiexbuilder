@@ -629,7 +629,11 @@ async function executeStep(step: ActionStep, scope: Scope, host: ActionHost, res
     }
     case 'addAlert': {
       const alert = {
-        type: normalizeAlertType(step.alertType),
+        type: normalizeAlertType(
+          typeof step.alertTypeExpr === 'string' && step.alertTypeExpr.trim()
+            ? evalStrict(host, step, 'the alert type', step.alertTypeExpr, scope)
+            : step.alertType,
+        ),
         title: step.title ? interpolate(step.title, scope) : undefined,
         message: interpolate(step.message ?? '', scope),
       };

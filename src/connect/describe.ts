@@ -167,10 +167,19 @@ export function describeAuthResult(code: string, serverMessage?: string): { titl
       return {
         title: 'HubSpot was not connected',
         message:
-          'The HubSpot window closed before connecting finished, so nothing was shared. If HubSpot showed an error first: “acceptable use policy” means whoever hosts this builder must sign it in HubSpot (the app’s Distribution page); “not allowed to install” means a HubSpot Super Admin needs to connect first. Otherwise, just try again.',
+          'The HubSpot window closed before connecting finished, so nothing was shared. Did HubSpot show a message there? “Acceptable use policy” means whoever set up this builder must sign it in HubSpot; “not allowed to install apps” means a Super Admin of your HubSpot account must connect first. Otherwise, just try again.',
+      };
+    case 'popup_blocked':
+      return {
+        title: 'Your browser blocked the HubSpot window',
+        message:
+          'Your browser blocked the HubSpot window, so nothing happened yet. Continue in this tab instead — you go to HubSpot and come straight back here, and your work is saved. Or allow pop-ups for this site and try again.',
       };
     case 'timeout':
-      return { title: 'Connecting took too long', message: 'We stopped waiting for HubSpot. Please try again.' };
+      return {
+        title: 'Connecting took too long',
+        message: 'We stopped waiting for HubSpot, so nothing was shared. If HubSpot showed a message in its window, it explains why. Please try again.',
+      };
     case 'session_not_kept':
       return {
         title: "Couldn't keep you signed in",

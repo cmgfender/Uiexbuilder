@@ -13,15 +13,59 @@ export type IconName = (typeof ICON_NAMES)[number];
 
 const opts = (...values: Array<string | number | boolean>): EnumOption[] => values.map((value) => ({ value }));
 
+/** Plain-language labels for HubSpot's size names (the values stay exact). */
+const SIZE_LABELS: Record<string, string> = {
+  flush: 'None',
+  'extra-small': 'Extra small',
+  small: 'Small',
+  medium: 'Medium',
+  large: 'Large',
+  'extra-large': 'Extra large',
+};
+const sizes = (...values: string[]): EnumOption[] => values.map((value) => ({ value, label: SIZE_LABELS[value] ?? value }));
+
 /** AllDistances: 'flush' | AllSizes (both aliases are valid TS; we offer the long names). */
-export const DISTANCE_OPTIONS: EnumOption[] = opts('flush', 'extra-small', 'small', 'medium', 'large', 'extra-large');
+export const DISTANCE_OPTIONS: EnumOption[] = sizes('flush', 'extra-small', 'small', 'medium', 'large', 'extra-large');
 /** Padding variants exclude 'flush'. */
-export const PADDING_OPTIONS: EnumOption[] = opts('extra-small', 'small', 'medium', 'large', 'extra-large');
-export const SIZE_XS_MD: EnumOption[] = opts('extra-small', 'small', 'medium');
-export const SIZE_ALL: EnumOption[] = opts('extra-small', 'small', 'medium', 'large', 'extra-large');
-export const FLEX_JUSTIFY: EnumOption[] = opts('start', 'center', 'end', 'around', 'between');
-export const FLEX_ALIGN: EnumOption[] = opts('start', 'center', 'baseline', 'end', 'stretch');
+export const PADDING_OPTIONS: EnumOption[] = sizes('extra-small', 'small', 'medium', 'large', 'extra-large');
+export const SIZE_XS_MD: EnumOption[] = sizes('extra-small', 'small', 'medium');
+export const SIZE_ALL: EnumOption[] = sizes('extra-small', 'small', 'medium', 'large', 'extra-large');
+export const FLEX_JUSTIFY: EnumOption[] = [
+  { value: 'start', label: 'Start' },
+  { value: 'center', label: 'Center' },
+  { value: 'end', label: 'End' },
+  { value: 'around', label: 'Space around' },
+  { value: 'between', label: 'Space between' },
+];
+export const FLEX_ALIGN: EnumOption[] = [
+  { value: 'start', label: 'Start' },
+  { value: 'center', label: 'Center' },
+  { value: 'baseline', label: 'Text baseline' },
+  { value: 'end', label: 'End' },
+  { value: 'stretch', label: 'Stretch (fill)' },
+];
 export const ALERT_VARIANTS: EnumOption[] = opts('info', 'warning', 'success', 'error', 'danger', 'tip');
+
+/**
+ * HubSpot's colors for the inspector's swatches (OptionSwatch), approximating the Canvas design
+ * system used by the previews (src/preview/hubspot.css).
+ */
+export const HS_SWATCH = {
+  primary: { fill: '#ff7a59' },
+  secondary: { fill: '#ffffff', border: '#ff7a59' },
+  destructive: { fill: '#f2545b' },
+  transparent: { fill: 'transparent', text: '#0091ae' },
+  link: { fill: 'transparent', text: '#0091ae' },
+  light: { fill: 'transparent', text: '#7fd1de' },
+  dark: { fill: 'transparent', text: '#33475b' },
+  success: { fill: '#00bda5' },
+  warning: { fill: '#f5c26b' },
+  danger: { fill: '#f2545b' },
+  info: { fill: '#00a4bd' },
+  tip: { fill: '#7c4dbd' },
+  neutral: { fill: '#cbd6e2' },
+  inherit: { fill: '#33475b' },
+} as const;
 export { opts as enumOptions };
 
 /** Standard CRM object types usable in card objectTypes. */

@@ -2,7 +2,7 @@
  * Small in-memory token-bucket rate limiter (no dependencies, no database).
  *
  * The connector uses it for the routes that make the server call HubSpot (or other hosts) on a
- * caller's behalf: sign-in start / callback (keyed by client IP), deploy uploads and the fetch proxy
+ * caller's behalf: sign-in start / callback (keyed by client IP), deploy uploads, key checks and the fetch proxy
  * (keyed by the signed-in HubSpot user, else the client IP). Limits are per server instance — on
  * serverless hosts each instance counts on its own, which still bounds abuse.
  */
@@ -22,6 +22,10 @@ export const RATE_RULES = {
   deploy: { what: 'deploys', capacity: 10, refillMs: 30_000 },
   /** Deploy while sign-in isn't set up yet (first-time setup): stricter, per client IP. */
   deploySetup: { what: 'deploys', capacity: 4, refillMs: 2 * 60_000 },
+  /** Checking a personal access key before publishing (one key exchange with HubSpot each). */
+  keyCheck: { what: 'key checks', capacity: 20, refillMs: 10_000 },
+  /** Key checks while sign-in isn't set up yet: stricter, per client IP. */
+  keyCheckSetup: { what: 'key checks', capacity: 8, refillMs: 30_000 },
   proxy: { what: 'preview requests', capacity: 40, refillMs: 2_000 },
 } satisfies Record<string, RateRule>;
 

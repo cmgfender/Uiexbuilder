@@ -3,11 +3,11 @@
  * undefined when unset) and reports the next literal (undefined = unset / remove the prop).
  */
 import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
-import { RotateCcw, WandSparkles } from 'lucide-react';
+import { ArrowDown, ArrowRight, RotateCcw, WandSparkles } from 'lucide-react';
 import { resolveCreateTemplate } from '../model/store';
 import type { Extension, JsonValue, NodeId } from '../model/types';
 import { getComponent } from '../registry';
-import type { EnumOption, PropDef } from '../registry/types';
+import type { EnumOption, OptionSwatch, PropDef } from '../registry/types';
 import { Button, cx, IconButton, NumberField, Segmented, Select, Switch, TextArea } from '../ui';
 import { ChipsInput } from './ChipsInput';
 import { TemplateInput } from './controls';
@@ -54,6 +54,15 @@ export function prefersSegmented(options: EnumOption[]): boolean {
   return labels.every((l) => l.length <= 12) && labels.join('').length <= 30;
 }
 
+/** Enum choices drawn as visual chips: color swatches, spacing samples or direction arrows. */
+export function enumChips(type: PropDef['type']): 'swatch' | 'spacing' | 'direction' | null {
+  if (type.kind !== 'enum') return null;
+  if (type.display === 'spacing' && type.options.every((o) => SPACING_PX[String(o.value)] !== undefined)) return 'spacing';
+  if (type.display === 'direction') return 'direction';
+  if (type.options.length <= 8 && type.options.some((o) => o.swatch)) return 'swatch';
+  return null;
+}
+
 /** Whether an editor sits next to its label ('inline') or below it ('block'). */
 export function editorLayout(def: PropDef): 'inline' | 'block' {
   switch (def.type.kind) {
@@ -63,8 +72,12 @@ export function editorLayout(def: PropDef): 'inline' | 'block' {
     case 'date':
     case 'time':
       return 'inline';
-    case 'enum':
-      return prefersSegmented(def.type.options) ? 'block' : 'inline';
+    case 'enum': {
+      if (enumChips(def.type) || prefersSegmented(def.type.options)) return 'block';
+      // A dropdown next to its label only fits short choices ("Start (default)" would be cut off).
+      const longest = Math.max(0, ...def.type.options.map((o) => optionLabel(o).length));
+      return longest + (def.defaultValue !== undefined ? 10 : 0) <= 18 ? 'inline' : 'block';
+    }
     default:
       return 'block';
   }
@@ -263,6 +276,7 @@ function EnumEditor({ id, def, value, onChange, required }: LiteralEditorProps) 
   const options = def.type.kind === 'enum' ? def.type.options : [];
   const defIndex = options.findIndex((o) => o.value === def.defaultValue);
   const curIndex = options.findIndex((o) => o.value === value);
+  const name = useId();
   const choose = (key: string) => {
     if (key === '') return onChange(undefined);
     const o = options[Number(key)];
@@ -270,6 +284,43 @@ function EnumEditor({ id, def, value, onChange, required }: LiteralEditorProps) 
     if (!required && def.defaultValue !== undefined && o.value === def.defaultValue) onChange(undefined);
     else onChange(o.value);
   };
+  const chips = enumChips(def.type);
+  if (chips) {
+    const effective = curIndex !== -1 ? curIndex : required ? -1 : defIndex;
+    return (
+      <div className={cx('ub-insp-choices', `is-${chips}`)} role="radiogroup" aria-label={def.label} id={id}>
+        {options.map((o, i) => {
+          const label = optionLabel(o);
+          const short = chips === 'spacing' ? SPACING_SHORT[String(o.value)] : undefined;
+          const checked = i === effective;
+          return (
+            <label
+              key={i}
+              className={cx('ub-insp-choice', checked && 'is-on')}
+              title={`${label}${String(o.value) !== label ? ` (${String(o.value)})` : ''}${i === defIndex ? ' — HubSpot default' : ''}`}
+            >
+              <input
+                type="radio"
+                className="ub-insp-choice__input"
+                name={name}
+                value={String(i)}
+                checked={checked}
+                aria-label={short ? `${short} (${label.toLowerCase()})` : undefined}
+                onChange={() => choose(String(i))}
+              />
+              {chips === 'swatch' && <SwatchSample swatch={o.swatch} />}
+              {chips === 'spacing' && <SpacingSample px={SPACING_PX[String(o.value)]} />}
+              {chips === 'direction' && <DirectionSample value={String(o.value)} />}
+              <span className="ub-insp-choice__label" aria-hidden={short ? true : undefined}>
+                {short ?? label}
+              </span>
+              {i === defIndex && <span className="ub-insp-defdot" aria-label="(default)" title="HubSpot default" />}
+            </label>
+          );
+        })}
+      </div>
+    );
+  }
   if (prefersSegmented(options)) {
     const effective = curIndex !== -1 ? curIndex : defIndex;
     return (
@@ -301,9 +352,46 @@ function EnumEditor({ id, def, value, onChange, required }: LiteralEditorProps) 
       value={effective === -1 ? '' : String(effective)}
       onChange={choose}
       placeholder={effective === -1 ? (required ? 'Choose…' : 'Not set') : undefined}
-      options={options.map((o, i) => ({ value: String(i), label: i === defIndex ? `${optionLabel(o)} (default)` : optionLabel(o) }))}
+      options={options.map((o, i) => ({
+        value: String(i),
+        // "Default (default)" says nothing more: only mark labels that don't already say it.
+        label: i === defIndex && !/^default\b/i.test(optionLabel(o)) ? `${optionLabel(o)} (default)` : optionLabel(o),
+      }))}
     />
   );
+}
+
+/** HubSpot's spacing scale in pixels (Flex gap, Divider / Spacer size). */
+const SPACING_PX: Record<string, number> = { flush: 0, 'extra-small': 4, small: 8, medium: 16, large: 24, 'extra-large': 32 };
+const SPACING_SHORT: Record<string, string> = { flush: 'None', 'extra-small': 'XS', small: 'S', medium: 'M', large: 'L', 'extra-large': 'XL' };
+
+function SwatchSample({ swatch }: { swatch?: OptionSwatch }) {
+  if (!swatch) return <span className="ub-insp-swatch is-none" aria-hidden />;
+  return (
+    <span
+      className={cx('ub-insp-swatch', swatch.text && 'is-text')}
+      style={{ background: swatch.fill, borderColor: swatch.border ?? swatch.fill, color: swatch.text }}
+      aria-hidden
+    >
+      {swatch.text ? 'Aa' : null}
+    </span>
+  );
+}
+
+/** Two small blocks the option's spacing apart (scaled down). */
+function SpacingSample({ px }: { px: number }) {
+  return (
+    <span className="ub-insp-space" aria-hidden>
+      <i />
+      <i style={{ marginLeft: Math.round(px / 2.5) }} />
+    </span>
+  );
+}
+
+function DirectionSample({ value }: { value: string }) {
+  const down = value === 'column' || value === 'vertical';
+  const Icon = down ? ArrowDown : ArrowRight;
+  return <Icon size={13} aria-hidden className="ub-insp-dir" />;
 }
 
 function HrefEditor({ id, def, value, onChange, ext, nodeId, required }: LiteralEditorProps) {

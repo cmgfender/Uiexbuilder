@@ -89,7 +89,7 @@ test.describe('editor basics', () => {
     await textInput.fill('Save deal');
     await expect(cardNodes(page, 'Button')).toHaveText('Save deal');
 
-    await inspector(page).getByLabel('Variant', { exact: true }).selectOption({ label: 'Destructive' });
+    await inspector(page).getByRole('radiogroup', { name: 'Style' }).getByRole('radio', { name: 'Destructive' }).check();
     await expect(cardNodes(page, 'Button')).toHaveClass(/destructive/);
 
     await page.getByRole('tab', { name: 'Code' }).click();

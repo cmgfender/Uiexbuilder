@@ -130,6 +130,8 @@ function apiEnv(fileEnv, fakeUrl) {
       // The browser opens the consent page via localhost; the connector calls the API on 127.0.0.1.
       HUBSPOT_APP_BASE: fakeUrl.replace('127.0.0.1', 'localhost'),
       HUBSPOT_API_BASE: fakeUrl,
+      // The demo account may open the status page (/status) after signing in to the fake portal.
+      ADMIN_PORTALS: process.env.ADMIN_PORTALS ?? '12345678',
     });
   } else {
     for (const key of [
@@ -143,6 +145,9 @@ function apiEnv(fileEnv, fakeUrl) {
       'ENABLE_DEPLOY',
       'ALLOWED_ORIGINS',
       'ALLOWED_PORTALS',
+      'ADMIN_EMAILS',
+      'ADMIN_PORTALS',
+      'LOG_EVENTS',
     ]) {
       if (fileEnv[key] !== undefined && process.env[key] === undefined) env[key] = fileEnv[key];
     }

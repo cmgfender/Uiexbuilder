@@ -1,6 +1,6 @@
 /** Data sources of the active extension: list, "+ Add data" menu, editors and UI generation. */
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Database, Plus, WandSparkles } from 'lucide-react';
+import { ChevronDown, ChevronRight, Database, ListFilter, Plus, WandSparkles } from 'lucide-react';
 import { useEditor } from '../../model/store';
 import type { DataSource, DataSourceKind, Extension } from '../../model/types';
 import { Button, Field, IconButton, Menu, Section, cx, useMenu, useToast } from '../../ui';
@@ -11,6 +11,22 @@ import { validateDeclaredName } from '../names';
 import { DataSourceEditor } from './DataSourceEditors';
 import { DeleteGuard } from './DeleteGuard';
 import { consumeDataReveal, useDataReveal } from '../reveal';
+import { addShapedList } from '../../power/actions';
+import { parseShape } from '../../power/shape';
+import { usePowerUi } from '../../power/uiStore';
+
+/**
+ * "Filter & sort" on a list data source: opens the shaped list (Computed) that already starts from
+ * it, or adds one (`dealsView`).
+ */
+function shapeDataSource(ext: Extension, ds: DataSource): { name: string; created: boolean } {
+  const existing = (ext.computed ?? []).find((c) => parseShape(c.expr)?.source === ds.name);
+  const c = existing ?? addShapedList(ds.name);
+  usePowerUi.getState().revealComputed(c.id);
+  return { name: c.name, created: !existing };
+}
+
+const LIST_KINDS = new Set<DataSource['kind']>(['associations', 'crmSearch', 'fetch', 'function']);
 
 export function DataSourcesSection({ ext }: { ext: Extension }) {
   const functions = useEditor((s) => s.project.functions);
@@ -172,6 +188,19 @@ function DataSourceRow({
             >
               Generate UI
             </Button>
+            {LIST_KINDS.has(ds.kind) && (
+              <Button
+                size="sm"
+                icon={<ListFilter size={13} aria-hidden />}
+                title="Filter, sort, limit and format the rows without code (adds a computed list you can repeat over)"
+                onClick={() => {
+                  const r = shapeDataSource(ext, ds);
+                  toast(r.created ? `Added “${r.name}” under Computed — choose filters, sorting and formats there` : `Opened “${r.name}” under Computed`);
+                }}
+              >
+                Filter & sort
+              </Button>
+            )}
             <DeleteGuard ext={ext} name={ds.name} noun="source" onDelete={() => useEditor.getState().removeDataSource(ds.id)} />
           </div>
         </div>

@@ -7,3 +7,7 @@ export { RecordPicker, RecordSearch, PreviewDataNote, SEARCH_DEBOUNCE_MS } from 
 export type { RecordSearchProps } from './RecordPicker';
 export { HubSpotMark } from './HubSpotMark';
 export { useConnectUiHost, setConnectResultsInline } from './host';
+export { SignInHelp, signInHelpContext } from './SignInHelp';
+export type { SignInHelpProps } from './SignInHelp';
+export { WaitingPanel, useWaitingLong } from './ConnectButton';
+export { CopyNote } from './CopyNote';

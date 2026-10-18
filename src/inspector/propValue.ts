@@ -242,7 +242,13 @@ export function isMismatchedLiteral(value: PropValue | undefined, type: PropType
 
 /** Display text of an enum option. */
 export function optionLabel(o: EnumOption): string {
-  return o.label ?? String(o.value);
+  if (o.label !== undefined) return o.label;
+  // Unlabelled HubSpot values read better capitalized ("extra-small" → "Extra small").
+  if (typeof o.value === 'string' && /^[a-z][a-z-]*$/.test(o.value)) {
+    const words = o.value.replace(/-/g, ' ');
+    return words.charAt(0).toUpperCase() + words.slice(1);
+  }
+  return String(o.value);
 }
 
 /** Human readable rendering of a default value (placeholders, "(default)" markers). */

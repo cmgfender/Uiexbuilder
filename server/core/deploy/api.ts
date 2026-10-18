@@ -26,6 +26,8 @@ export class DeployApiError extends HubSpotApiError {
     requiredScopes?: string[],
     /** Worth retrying later (network, 429, 5xx). */
     public transient = false,
+    /** HubSpot's own message, when it sent one (shown in quotes next to the plain explanation). */
+    public hubspotMessage?: string,
   ) {
     super(message, status, code, correlationId, requiredScopes);
     this.name = 'DeployApiError';
@@ -94,9 +96,21 @@ export function mapDeployError(status: number, body: HubSpotErrorBody | null, re
         'not_available',
         details,
         correlationId,
+        undefined,
+        false,
+        hsMessage || undefined,
       );
     }
-    return new DeployApiError(hsMessage ? `HubSpot refused the request: ${hsMessage}` : "HubSpot says this key can't do that.", 403, 'forbidden', details, correlationId);
+    return new DeployApiError(
+      hsMessage ? `HubSpot refused the request: ${hsMessage}` : "HubSpot says this key can't do that.",
+      403,
+      'forbidden',
+      details,
+      correlationId,
+      undefined,
+      false,
+      hsMessage || undefined,
+    );
   }
   if (sub.includes('PROJECT_LOCKED') || status === 423) {
     return new DeployApiError(

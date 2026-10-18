@@ -8,8 +8,12 @@
  * - `--api-only` runs just the connector (used by `npm run dev`, where Vite serves the app).
  *
  * Run: `npm run build && npm start` (bundled to dist-server/node.mjs by scripts/build-server.mjs).
- * Env: PORT (default 3000), HOST, STATIC_DIR, API_ONLY, LOG_REQUESTS, TRUST_PROXY + everything
- * configFromEnv reads (APP_URL, HUBSPOT_CLIENT_ID, HUBSPOT_CLIENT_SECRET, SESSION_SECRET, …).
+ * Env: PORT (default 3000), HOST, STATIC_DIR, API_ONLY, LOG_REQUESTS, LOG_EVENTS, TRUST_PROXY +
+ * everything configFromEnv reads (APP_URL, HUBSPOT_CLIENT_ID, HUBSPOT_CLIENT_SECRET, SESSION_SECRET, …).
+ *
+ * Logs: the start-up summary, one `[api]` access line per /api request (LOG_REQUESTS) and one
+ * `[event]` JSON line per sign-in, publish, refused request or browser error (LOG_EVENTS) — the
+ * same events the private status page (/status) shows from memory.
  *
  * The helpers (toWebRequest, writeWebResponse, createStaticHandler, createNodeServer) are exported
  * for the fake HubSpot dev server and for tests. Importing this module has no side effects.
@@ -31,6 +35,9 @@ export const DEFAULT_BODY_LIMIT = 5 * 1024 * 1024;
 const DEFAULT_PORT = 3000;
 const CALLBACK_PATH = '/api/auth/callback';
 const HEALTH_PATH = '/api/health';
+const STATUS_PATH = '/status';
+/** How often sign-ins that never came back are concluded (so their `[event]` line is timely). */
+const DIAGNOSTICS_SWEEP_MS = 60_000;
 
 /** The part of the connector the HTTP layer needs (createConnector(config) satisfies it). */
 export interface ApiHandler {
@@ -848,6 +855,16 @@ export function describeStartup(config: ServerConfig, info: StartupInfo): string
   if (config.allowedOrigins.length > 0) lines.push(`  Extra origins:    ${config.allowedOrigins.join(', ')}`);
   if (config.allowedPortals?.length) lines.push(`  Allowed accounts: ${config.allowedPortals.join(', ')} (ALLOWED_PORTALS)`);
   else if (configured) lines.push('  Allowed accounts: any HubSpot account that installs your app (set ALLOWED_PORTALS to limit it)');
+  // The private status page: who may open it (counts only - no email addresses in logs).
+  const statusUrl = `${config.appUrl || info.listenUrl}${STATUS_PATH}`;
+  const emails = config.adminEmails?.length ?? 0;
+  const admins = [
+    emails ? `${emails} email${emails === 1 ? '' : 's'} in ADMIN_EMAILS` : '',
+    config.adminPortals?.length ? `account${config.adminPortals.length === 1 ? '' : 's'} ${config.adminPortals.join(', ')} (ADMIN_PORTALS)` : '',
+  ].filter(Boolean);
+  if (admins.length) lines.push(`  Status page:      ${statusUrl} (signed-in admins: ${admins.join('; ')})`);
+  else lines.push(`  Status page:      ${statusUrl} - set ADMIN_EMAILS to the email you sign in to HubSpot with to open it`);
+  lines.push('  Event log:        kept in memory until the server restarts or sleeps; search these logs for "[event]"');
   lines.push(`  Health check:     ${config.appUrl || info.listenUrl}${HEALTH_PATH}`);
   return lines;
 }
@@ -916,7 +933,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   const host = args.host ?? (env.HOST?.trim() || undefined);
   const apiOnly = args.apiOnly || truthy(env.API_ONLY);
 
-  const { configFromEnv, createConnector } = await import('./core/index');
+  const { configFromEnv, createConnector, Diagnostics } = await import('./core/index');
   const { createGuardedFetch } = await import('./guardedFetch');
 
   const server = tuneServer(createServer());
@@ -938,7 +955,12 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   const overrides: Partial<ServerConfig> = { proxyFetch: createGuardedFetch(), ...(opts.overrides ?? {}) };
   if (!env.APP_URL?.trim() && overrides.appUrl === undefined && detected.url) overrides.appUrl = detected.url;
   const config = configFromEnv(env, overrides);
-  const core = createConnector(config);
+  // One process keeps the status page's whole event log; `[event]` lines go to the same log.
+  const logEvents = env.LOG_EVENTS === undefined || env.LOG_EVENTS.trim() === '' || truthy(env.LOG_EVENTS);
+  const diagnostics = new Diagnostics({ now: config.now, emit: logEvents ? log : null, singleProcess: true });
+  const core = createConnector(config, { diagnostics });
+  const sweeper = setInterval(() => diagnostics.log.sweep(), DIAGNOSTICS_SWEEP_MS);
+  sweeper.unref?.();
   const connector: ApiHandler = { handle: (request, meta) => core.handle(allowPlainHealthCheck(request), meta) };
 
   const staticRoot = apiOnly ? null : findStaticRoot(args.staticDir ?? env.STATIC_DIR);
@@ -972,6 +994,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
 
   const close = () =>
     new Promise<void>((resolve) => {
+      clearInterval(sweeper);
       server.close(() => resolve());
       server.closeIdleConnections();
     });

@@ -27,3 +27,7 @@ services:
       # Optional: only needed with a custom domain. Empty = your https://<name>.onrender.com address.
       - key: APP_URL
         sync: false
+      # Optional: the email you sign in to HubSpot with, to open the private status page at /status
+      # (comma separated for several people). ADMIN_PORTALS (HubSpot account ids) works too.
+      - key: ADMIN_EMAILS
+        sync: false

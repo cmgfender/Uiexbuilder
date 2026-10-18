@@ -7,8 +7,11 @@
  *                focus (throttled), so an expired or revoked sign-in shows up without a reload.
  *  connect()     opens a centred popup on /api/auth/start?returnTo=<origin>&mode=popup and waits for
  *                its { type: 'uiex-hubspot-auth' } message (from the connector origin only; also via
- *                BroadcastChannel when same-origin). A blocked popup falls back to a full-page
- *                redirect that returns to the builder. A closed popup / timeout ends the attempt.
+ *                BroadcastChannel when same-origin). A blocked popup ends the attempt with
+ *                'popup_blocked': the UI then offers "Continue in this tab" (connectInThisTab, a
+ *                full-page sign-in that returns to the builder). A closed popup / timeout ends the
+ *                attempt ('popup_closed' / 'timeout'; the UI asks "What did HubSpot show?").
+ *  connectInThisTab()  full-page sign-in (?mode=redirect) in this tab, for a blocked or broken window.
  *  disconnect()  POST /api/auth/logout.
  *
  * Nothing is persisted: tokens live in the connector's HttpOnly cookie, never in the browser.
@@ -76,6 +79,12 @@ export interface ConnectionState {
   notice: ConnectionNotice | null;
   /** Give up on the open sign-in window and open a new one (must run inside a click). */
   restartConnect: () => Promise<void>;
+  /**
+   * Sign in in this tab instead of a window (full-page redirect to HubSpot and back): one click for
+   * a blocked or broken sign-in window. Closes an open sign-in window first; after a blocked
+   * "Switch account" it signs out first. The page navigates away (autosave flushes on unload).
+   */
+  connectInThisTab: () => Promise<void>;
 }
 
 /** Message posted by the connector's sign-in result page (server/core/authPage.ts). */
@@ -103,6 +112,12 @@ export const CONNECT_TIMINGS = {
   cutOffGiveUpMs: 60_000,
   /** After this long in 'connecting' the button shows a visible "Waiting for HubSpot…" panel. */
   waitingHintMs: 8000,
+  /**
+   * After this long the panel says "Still waiting for HubSpot… having trouble?" and opens its
+   * "What does HubSpot show?" help (HubSpot shows install refusals inside its window, and never
+   * comes back).
+   */
+  stillWaitingMs: 30_000,
   /** Give up waiting for the sign-in after this long. */
   timeoutMs: 5 * 60_000,
   /** Minimum time between /api/me re-checks triggered by window focus. */
@@ -245,6 +260,8 @@ interface Flow {
 
 let flow: Flow | null = null;
 let attemptSeq = 0;
+/** The last blocked attempt was "Switch account": continuing in this tab signs out first. */
+let blockedSwitch = false;
 let initPromise: Promise<void> | null = null;
 let focusWatcher: (() => void) | null = null;
 let lastMeCheck = 0;
@@ -455,15 +472,17 @@ function startSignIn(beforeAuth?: () => Promise<void>): Promise<void> {
   } catch {
     /* treat as open */
   }
-  useConnection.setState({ status: 'connecting', error: null, errorCode: null, errorSource: null, connectingSince: connectEnv.now() });
 
   if (blocked || !popup) {
-    // Popup blocked: continue in this tab and come back here afterwards (autosave flushes on unload).
-    return (async () => {
-      if (beforeAuth) await beforeAuth();
-      connectEnv.navigate(c.authStartUrl({ returnTo: returnUrl(), mode: 'redirect' }));
-    })();
+    // Popup blocked: nothing changed yet. The UI offers "Continue in this tab" (connectInThisTab) —
+    // one click, and the person knows the page is about to go to HubSpot and come back.
+    blockedSwitch = !!beforeAuth;
+    useConnection.setState({ connectingSince: null });
+    settle({ kind: 'failed', code: 'popup_blocked' }, previous);
+    return Promise.resolve();
   }
+  blockedSwitch = false;
+  useConnection.setState({ status: 'connecting', error: null, errorCode: null, errorSource: null, connectingSince: connectEnv.now() });
 
   const win = popup;
   const openedAt = connectEnv.now();
@@ -685,6 +704,45 @@ export const useConnection = create<ConnectionState>()((_set, get) => ({
     return next;
   },
 
+  connectInThisTab: async () => {
+    const s = get();
+    if (!s.health?.oauthConfigured) return;
+    // An open sign-in window is given up quietly (it sees it was superseded and reports nothing).
+    const current = flow;
+    flow = null;
+    if (current) {
+      try {
+        current.popup.close();
+      } catch {
+        /* ignore */
+      }
+      current.cancel();
+    }
+    const c = client();
+    const switching = blockedSwitch;
+    blockedSwitch = false;
+    const previous = { status: s.status === 'connecting' ? ('disconnected' as const) : s.status, info: s.info };
+    useConnection.setState({ status: 'connecting', error: null, errorCode: null, errorSource: null, connectingSince: connectEnv.now() });
+    if (switching) {
+      try {
+        await c.logout();
+      } catch (err) {
+        if (!(isConnectorError(err) && err.code === 'not_connected')) {
+          settle({ kind: 'cancelled' }, previous);
+          useConnection.setState({
+            error: `Couldn't switch accounts: ${describeError(err).message}`,
+            errorCode: isConnectorError(err) ? err.code : 'unknown_error',
+            errorSource: 'sign-in',
+          });
+          return;
+        }
+      }
+      c.setCacheScope(null);
+      useConnection.setState({ info: SIGNED_OUT });
+    }
+    connectEnv.navigate(c.authStartUrl({ returnTo: returnUrl(), mode: 'redirect' }));
+  },
+
   focusPopup: () => {
     try {
       flow?.popup.focus();
@@ -703,6 +761,7 @@ useConnection.subscribe((s) => setHubSpotAccess(s.status === 'connected' && s.in
 export function resetConnectionForTests(): void {
   flow?.cancel();
   flow = null;
+  blockedSwitch = false;
   initPromise = null;
   focusWatcher?.();
   focusWatcher = null;

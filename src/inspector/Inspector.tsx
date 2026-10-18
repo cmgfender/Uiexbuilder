@@ -1,6 +1,7 @@
 /**
  * Inspector (right sidebar): edits the selected component — Properties | Events | Advanced — or,
- * with nothing selected, the active extension's settings.
+ * with nothing selected, the active extension's settings; with several selected, the settings they
+ * share (MultiInspector).
  */
 import { CircleHelp } from 'lucide-react';
 import { useActiveExtension, useEditor, type RightPanelTab } from '../model/store';
@@ -14,14 +15,18 @@ import { EventsTab } from './EventsTab';
 import { ExtensionSettings } from './ExtensionSettings';
 import { NodeHeader } from './NodeHeader';
 import { NodeProblems, useNodeIssues } from './Problems';
-import { PropertiesTab } from './PropertiesTab';
+import { focusSettingsFilter, hasSettingsFilter, PropertiesTab } from './PropertiesTab';
+import { MultiInspector } from './power-MultiInspector';
 import './inspector.css';
 
 export function Inspector() {
   const ext = useActiveExtension();
   const project = useEditor((s) => s.project);
   const selectedId = useEditor((s) => s.selectedNodeId);
+  const multi = useEditor((s) => s.selectedNodeIds);
   const node = selectedId ? ext.nodes[selectedId] : undefined;
+  // Several components selected (Shift/Cmd/Ctrl-click): edit what they share.
+  if (multi.length > 1) return <MultiInspector ids={multi} />;
   if (!node || node.type === ROOT_TYPE) return <ExtensionSettings ext={ext} project={project} />;
   const def = getComponent(node.type);
   if (!def) return <UnknownComponent node={node} />;
@@ -71,8 +76,21 @@ function NodeInspector({ node, def, ext }: { node: UINode; def: ComponentDef; ex
     },
   ];
 
+  // "/" (focus anywhere in the inspector, not in a text field) jumps to "Filter settings".
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented || isTextEntry(e.target)) return;
+    if (tab === 'properties') {
+      if (focusSettingsFilter()) e.preventDefault();
+      return;
+    }
+    if (!hasSettingsFilter(def, node)) return;
+    e.preventDefault();
+    setTab('properties');
+    requestAnimationFrame(() => focusSettingsFilter());
+  };
+
   return (
-    <div className="ub-insp" data-node-type-inspected={node.type}>
+    <div className="ub-insp" data-node-type-inspected={node.type} onKeyDown={onKeyDown}>
       <NodeHeader node={node} def={def} ext={ext} project={project} />
       <Tabs<RightPanelTab> className="ub-insp-tabs" idBase="ub-insp" aria-label="Inspector sections" value={tab} onChange={setTab} tabs={tabs} />
       <div className="ub-insp-body ub-scroll" {...tabPanelProps('ub-insp', tab)}>
@@ -83,4 +101,15 @@ function NodeInspector({ node, def, ext }: { node: UINode; def: ComponentDef; ex
       </div>
     </div>
   );
+}
+
+/** Fields where "/" is typed rather than a shortcut. */
+function isTextEntry(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
+  if (target instanceof HTMLInputElement) {
+    return !['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'color', 'file'].includes(target.type);
+  }
+  return false;
 }

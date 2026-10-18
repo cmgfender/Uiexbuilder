@@ -29,14 +29,43 @@ describe('Properties tab', () => {
   });
 
   it('enum select stores values and unsets the HubSpot default', async () => {
+    loadWith([{ type: 'Flex', props: { justify: 'center' }, children: [] }]);
+    const node = selectTop();
+    render(<Inspector />);
+    const select = within(row('justify')).getByRole('combobox');
+    await userEvent.selectOptions(select, within(select).getByRole('option', { name: 'Space between' }));
+    expect(nodeById(node.id).props.justify).toBe('between');
+    await userEvent.selectOptions(select, within(select).getByRole('option', { name: 'Start (default)' }));
+    expect(nodeById(node.id).props).not.toHaveProperty('justify');
+  });
+
+  it('color choices show swatches as a radio group and unset the HubSpot default', async () => {
     loadWith([{ type: 'Button', props: { variant: 'primary' }, text: 'Go' }]);
     const node = selectTop();
     render(<Inspector />);
-    const select = within(row('variant')).getByRole('combobox');
-    await userEvent.selectOptions(select, within(select).getByRole('option', { name: 'Destructive' }));
+    const group = within(row('variant')).getByRole('radiogroup', { name: 'Style' });
+    expect(within(group).getByRole('radio', { name: /Primary/ })).toBeChecked();
+    expect(group.querySelectorAll('.ub-insp-swatch')).toHaveLength(4);
+    await userEvent.click(within(group).getByRole('radio', { name: /Destructive/ }));
     expect(nodeById(node.id).props.variant).toBe('destructive');
-    await userEvent.selectOptions(select, within(select).getByRole('option', { name: 'Secondary (default)' }));
+    await userEvent.click(within(group).getByRole('radio', { name: /Secondary/ }));
     expect(nodeById(node.id).props).not.toHaveProperty('variant');
+    // The exact HubSpot prop name stays visible next to the plain label.
+    expect(within(row('variant')).getByText('variant')).toHaveClass('ub-insp-propname');
+  });
+
+  it('spacing and direction choices are radio groups with short, labelled options', async () => {
+    loadWith([{ type: 'Flex', props: { direction: 'column', gap: 'small' }, children: [] }]);
+    const node = selectTop();
+    render(<Inspector />);
+    const gap = within(row('gap')).getByRole('radiogroup', { name: 'Space between' });
+    expect(within(gap).getByRole('radio', { name: 'S (small)' })).toBeChecked();
+    await userEvent.click(within(gap).getByRole('radio', { name: 'L (large)' }));
+    expect(nodeById(node.id).props.gap).toBe('large');
+    const arrange = within(row('direction')).getByRole('radiogroup', { name: 'Arrange' });
+    await userEvent.click(within(arrange).getByRole('radio', { name: /Side by side/ }));
+    // Side by side is HubSpot's default: the prop is removed.
+    expect(nodeById(node.id).props).not.toHaveProperty('direction');
   });
 
   it('segmented enum marks the default and stores choices', async () => {
@@ -80,15 +109,15 @@ describe('Properties tab', () => {
     render(<Inspector />);
     const format = row('format');
     const weight = within(format).getByRole('group', { name: 'Font weight' });
-    await userEvent.click(within(weight).getByRole('button', { name: /^bold/ }));
+    await userEvent.click(within(weight).getByRole('button', { name: /^Bold/ }));
     expect(nodeById(node.id).props.format).toEqual({ fontWeight: 'bold' });
     await userEvent.click(within(format).getByRole('checkbox'));
     expect(nodeById(node.id).props.format).toEqual({ fontWeight: 'bold', italic: true });
-    const transform = within(format).getByRole('combobox', { name: 'Text transform' });
+    const transform = within(format).getByRole('combobox', { name: 'Capitals' });
     await userEvent.selectOptions(transform, 'UPPERCASE');
     expect(nodeById(node.id).props.format).toEqual({ fontWeight: 'bold', italic: true, textTransform: 'uppercase' });
     await userEvent.selectOptions(transform, 'None (default)');
-    await userEvent.click(within(weight).getByRole('button', { name: /^regular/ }));
+    await userEvent.click(within(weight).getByRole('button', { name: /^Regular/ }));
     await userEvent.click(within(format).getByRole('checkbox'));
     expect(nodeById(node.id).props).not.toHaveProperty('format');
   });
@@ -131,12 +160,12 @@ describe('Properties tab', () => {
     loadWith([{ type: 'Button', props: { variant: 'primary' }, text: 'Go' }]);
     const node = selectTop();
     render(<Inspector />);
-    await userEvent.click(within(row('variant')).getByRole('button', { name: /Use an expression for Variant/ }));
+    await userEvent.click(within(row('variant')).getByRole('button', { name: /Use an expression for Style/ }));
     expect(nodeById(node.id).props.variant).toEqual({ $expr: '"primary"' });
-    const expr = within(row('variant')).getByLabelText('Variant expression');
+    const expr = within(row('variant')).getByLabelText('Style expression');
     fireEvent.change(expr, { target: { value: '"destructive"' } });
     expect(nodeById(node.id).props.variant).toEqual({ $expr: '"destructive"' });
-    await userEvent.click(within(row('variant')).getByRole('button', { name: /Use a fixed value for Variant/ }));
+    await userEvent.click(within(row('variant')).getByRole('button', { name: /Use a fixed value for Style/ }));
     expect(nodeById(node.id).props.variant).toBe('destructive');
   });
 
@@ -161,7 +190,7 @@ describe('Properties tab', () => {
     loadWith([{ type: 'Button', props: { variant: 'primary' }, text: 'Go' }]);
     const node = selectTop();
     render(<Inspector />);
-    await userEvent.click(within(row('variant')).getByRole('button', { name: 'Reset Variant to default' }));
+    await userEvent.click(within(row('variant')).getByRole('button', { name: 'Reset Style to default' }));
     expect(nodeById(node.id).props).not.toHaveProperty('variant');
   });
 
@@ -216,7 +245,7 @@ describe('Properties tab', () => {
     unmount();
     const flex = selectTop(1);
     render(<Inspector />);
-    await userEvent.click(screen.getByRole('button', { name: /Add child/ }));
+    await userEvent.click(screen.getByRole('button', { name: /Add inside/ }));
     const dialog = screen.getByRole('dialog', { name: 'Add child component' });
     await userEvent.type(within(dialog).getByLabelText('Search components'), 'Heading');
     await userEvent.click(within(dialog).getByRole('option', { name: /Heading/ }));
@@ -384,11 +413,11 @@ describe('pickers from the keyboard', () => {
     return () => restore();
   });
 
-  it('"Add child" moves focus into the component search; Escape closes and refocuses the button', async () => {
+  it('"Add inside" moves focus into the component search; Escape closes and refocuses the button', async () => {
     loadWith([{ type: 'Flex', children: [] }]);
     const flex = selectTop();
     render(<Inspector />);
-    const trigger = screen.getByRole('button', { name: /Add child/ });
+    const trigger = screen.getByRole('button', { name: /Add inside/ });
     trigger.focus();
     await userEvent.keyboard('{Enter}');
     const dialog = screen.getByRole('dialog', { name: 'Add child component' });

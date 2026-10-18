@@ -16,6 +16,7 @@ import { downloadFile, listSavedProjects, loadSavedProject, serializeProject, ty
 import { useEditor } from '../model/store';
 import type { Project } from '../model/types';
 import { Button, useToast } from '../ui';
+import { reportReactError } from '../status/reporter';
 import {
   blankProject,
   openProjectFromRecovery,
@@ -177,6 +178,8 @@ export class EditorErrorBoundary extends Component<{ children: ReactNode }, Boun
 
   componentDidCatch(error: unknown, info: ErrorInfo): void {
     console.error('The editor crashed:', error, info.componentStack);
+    // React doesn't send caught render errors to window 'error' in production builds.
+    reportReactError(error, info.componentStack);
   }
 
   private reset = () => this.setState({ error: null, project: null });

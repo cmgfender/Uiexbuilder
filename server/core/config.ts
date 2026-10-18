@@ -3,7 +3,9 @@
  *
  * Env: APP_URL, HUBSPOT_CLIENT_ID, HUBSPOT_CLIENT_SECRET, SESSION_SECRET, HUBSPOT_SCOPES,
  * HUBSPOT_OPTIONAL_SCOPES, HUBSPOT_API_BASE, HUBSPOT_APP_BASE, ENABLE_FETCH_PROXY, ENABLE_DEPLOY,
- * ALLOWED_ORIGINS, ALLOWED_PORTALS, NODE_ENV.
+ * ALLOWED_ORIGINS, ALLOWED_PORTALS, ADMIN_EMAILS, ADMIN_PORTALS, NODE_ENV (+ the commit the host
+ * built from: RENDER_GIT_COMMIT, VERCEL_GIT_COMMIT_SHA, CF_PAGES_COMMIT_SHA, WORKERS_CI_COMMIT_SHA,
+ * GIT_COMMIT).
  */
 import type { ServerConfig } from './types';
 
@@ -106,6 +108,29 @@ export function parsePortalList(raw: string | undefined): number[] {
   return out;
 }
 
+/** Email addresses from ADMIN_EMAILS ("me@x.com, you@y.com"), lower-cased; invalid entries are skipped. */
+export function parseEmailList(raw: string | undefined): string[] {
+  if (!raw) return [];
+  const out: string[] = [];
+  for (const part of raw.split(/[\s,;]+/)) {
+    const email = part.trim().toLowerCase();
+    if (email.length <= 254 && /^[^\s@<>()]+@[^\s@<>()]+\.[a-z]{2,}$/.test(email) && !out.includes(email)) out.push(email);
+  }
+  return out;
+}
+
+/** Environment variables hosts set to the git commit they built from (first one set wins). */
+export const BUILD_COMMIT_VARS = ['RENDER_GIT_COMMIT', 'VERCEL_GIT_COMMIT_SHA', 'CF_PAGES_COMMIT_SHA', 'WORKERS_CI_COMMIT_SHA', 'GIT_COMMIT'] as const;
+
+/** The short git commit the host built this server from (status page), when it says. */
+export function detectBuildCommit(env: Record<string, string | undefined>): string | undefined {
+  for (const name of BUILD_COMMIT_VARS) {
+    const value = env[name]?.trim();
+    if (value && /^[0-9a-f]{7,40}$/i.test(value)) return value.slice(0, 7).toLowerCase();
+  }
+  return undefined;
+}
+
 /** True when ALLOWED_PORTALS is empty or lists this HubSpot account. */
 export function portalAllowed(config: Pick<ServerConfig, 'allowedPortals'>, portalId: number): boolean {
   const list = config.allowedPortals ?? [];
@@ -138,6 +163,9 @@ export function configFromEnv(env: Record<string, string | undefined>, overrides
     enableDeploy: parseBool(env.ENABLE_DEPLOY, true),
     allowedOrigins: parseOrigins(env.ALLOWED_ORIGINS),
     allowedPortals: parsePortalList(env.ALLOWED_PORTALS),
+    adminEmails: parseEmailList(env.ADMIN_EMAILS),
+    adminPortals: parsePortalList(env.ADMIN_PORTALS),
+    buildCommit: detectBuildCommit(env),
     secureCookies: appUrl.startsWith('https:'),
     fetch: defaultFetch,
     now: () => Date.now(),

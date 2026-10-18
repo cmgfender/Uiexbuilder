@@ -1,11 +1,11 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { useDragStore } from '../dnd/dragState';
+import { smartInsertTarget, useDragStore } from '../dnd/dragState';
 import { createExtension, createProject } from '../model/factory';
 import { selectActiveExtension, useEditor } from '../model/store';
 import type { Extension, NodeTemplate } from '../model/types';
 import { ToastProvider } from '../ui';
-import { addTemplateToProject, insertBlock, replaceActiveWithTemplate } from './actions';
+import { addTemplateToProject, insertBlock, mainComponentOf, replaceActiveWithTemplate } from './actions';
 import { BLOCK_TEMPLATES, PROJECT_TEMPLATES } from './catalog';
 import { TemplatesPanel } from './TemplatesPanel';
 import { deleteUserBlock, listUserBlocks, reloadUserBlocks, renameUserBlock, saveUserBlock } from './userBlocks';
@@ -52,15 +52,52 @@ describe('template flows', () => {
     expect(rootTypes()).toEqual(['Flex']);
     expect(mainTypes()).toEqual(['Text', 'Flex']);
     expect(active().state.map((s) => s.name)).toEqual(['query']);
-    expect(useEditor.getState().selectedNodeId).toBe(r.ok ? r.value : null);
-    // Existing state is reused, not duplicated.
+    // The block's main component (its search box) is selected, not the layout wrapper.
+    const block = r.ok ? active().nodes[r.value] : undefined;
+    expect(active().nodes[useEditor.getState().selectedNodeId!].type).toBe('SearchInput');
+    expect(block?.children).toContain(useEditor.getState().selectedNodeId);
+    // Existing state is reused, not duplicated; the second block goes after the first one.
     insertBlock(search.template, search.state, search.name);
     expect(active().state.map((s) => s.name)).toEqual(['query']);
+    expect(mainTypes()).toEqual(['Text', 'Flex', 'Flex']);
     // One undo removes both the block and the state variable it added.
     useEditor.getState().undo();
     useEditor.getState().undo();
     expect(mainTypes()).toEqual(['Text']);
     expect(active().state).toEqual([]);
+  });
+
+  it('selects the progress bar of "Progress tracker" and the table of "Associated records"', () => {
+    reset();
+    const progress = BLOCK_TEMPLATES.find((b) => b.id === 'progress')!;
+    const r = insertBlock(progress.template, progress.state, progress.name);
+    expect(r.ok && r.message).toMatch(/Its progress bar is selected/);
+    const selected = active().nodes[useEditor.getState().selectedNodeId!];
+    expect(selected.type).toBe('ProgressBar');
+    // A palette click right after the insert goes after the whole block, not inside it.
+    const at = smartInsertTarget(active(), selected.id, 'Text');
+    expect(at).toEqual({ parentId: named('Main').id, index: 2 });
+    // Once the person picks something else, inserts follow the selection again.
+    useEditor.getState().select(named('Main').children[0]);
+    useEditor.getState().select(selected.id);
+    expect(smartInsertTarget(active(), selected.id, 'Text')?.parentId).toBe(r.ok ? r.value : '');
+
+    const assoc = BLOCK_TEMPLATES.find((b) => b.id === 'associated-records')!;
+    const built = assoc.create!(active(), useEditor.getState().project);
+    insertBlock(built.template, assoc.state, assoc.name, undefined, built.dataSources);
+    expect(active().nodes[useEditor.getState().selectedNodeId!].type).toBe('Table');
+  });
+
+  it('keeps a block of only layout and text selected as a whole', () => {
+    const ext = createExtension({
+      name: 'Card',
+      content: [{ type: 'Flex', props: { direction: 'row' }, children: [{ type: 'Box', children: [{ type: 'Text', text: 'a' }] }, { type: 'Text', text: 'b' }] }],
+    });
+    expect(mainComponentOf(ext, ext.nodes[ext.rootId].children[0])).toBe(ext.nodes[ext.rootId].children[0]);
+    const two = BLOCK_TEMPLATES.find((b) => b.id === 'two-columns')!;
+    reset();
+    const r = insertBlock(two.template, two.state, two.name);
+    expect(useEditor.getState().selectedNodeId).toBe(r.ok ? r.value : null);
   });
 
   it('inserts into the selected container when it accepts the block', () => {

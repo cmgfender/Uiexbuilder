@@ -579,7 +579,10 @@ export function Canvas() {
     if (modeRef.current !== 'design' || isChromeTarget(e.target)) return;
     e.stopPropagation();
     const el = closestNodeElement(e.target, surfaceRef.current);
-    useEditor.getState().select(el ? nodeIdOf(el) : null);
+    const st = useEditor.getState();
+    // Shift / Cmd / Ctrl-click adds a component to the selection (or takes it out again).
+    if (el && (e.shiftKey || e.metaKey || e.ctrlKey)) st.toggleSelection(nodeIdOf(el));
+    else st.select(el ? nodeIdOf(el) : null);
   }, []);
 
   const onDoubleClick = useCallback((e: ReactMouseEvent) => {
@@ -615,7 +618,9 @@ export function Canvas() {
     }
     const el = closestNodeElement(e.target, surfaceRef.current);
     const id = el ? nodeIdOf(el) : null;
-    useEditor.getState().select(id);
+    // Right-clicking one of several selected components keeps them all selected (e.g. Paste settings).
+    const st = useEditor.getState();
+    if (!id || !st.selectedNodeIds.includes(id)) st.select(id);
     useCanvasUi.getState().openMenu({ x: e.clientX, y: e.clientY, nodeId: id });
   }, []);
 

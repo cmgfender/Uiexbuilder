@@ -22,6 +22,7 @@ import { newId } from '../model/ids';
 import { buildParentIndex, cloneActions } from '../model/tree';
 import type { ActionStep, ActionType, Extension, NodeId, Project, StateVar } from '../model/types';
 import { getComponent } from '../registry';
+import { describeCondition, parseCondition } from './power-conditions';
 import { listScopeVariables } from './scope';
 
 export type ActionGroup = 'State' | 'Feedback' | 'HubSpot' | 'Data' | 'Logic' | 'Advanced';
@@ -254,7 +255,8 @@ export function summarizeStep(step: ActionStep, ctx: Pick<ActionContext, 'ext' |
       return step.state ? `set ${step.state} to ${step.value.trim() ? clip(step.value, 32) : '(empty)'}` : 'set a variable (choose one)';
     case 'addAlert': {
       const text = step.title || step.message;
-      return `show ${ALERT_WORDS[step.alertType] ?? 'an'} alert${text ? ` “${clip(text, 30)}”` : ''}`;
+      const kind = step.alertTypeExpr?.trim() ? 'an' : (ALERT_WORDS[step.alertType] ?? 'an');
+      return `show ${kind} alert${text ? ` “${clip(text, 30)}”` : ''}${step.alertTypeExpr?.trim() ? ' (type by rules)' : ''}`;
     }
     case 'refreshObjectProperties':
       return 'refresh the record’s properties';
@@ -283,7 +285,9 @@ export function summarizeStep(step: ActionStep, ctx: Pick<ActionContext, 'ext' |
     case 'if': {
       const n = step.then.length;
       const e = step.else.length;
-      return `if ${step.condition.trim() ? clip(step.condition, 28) : '(no condition)'} → ${n} action${n === 1 ? '' : 's'}${e ? `, else ${e}` : ''}`;
+      const set = step.condition.trim() ? parseCondition(step.condition) : null;
+      const cond = set && set.groups.length ? clip(describeCondition(set), 40) : step.condition.trim() ? clip(step.condition, 28) : '(no condition)';
+      return `if ${cond} → ${n} action${n === 1 ? '' : 's'}${e ? `, else ${e}` : ''}`;
     }
     case 'custom': {
       const first = step.code.split('\n').find((l) => l.trim() && !l.trim().startsWith('//'));

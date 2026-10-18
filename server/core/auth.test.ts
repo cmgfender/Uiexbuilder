@@ -172,6 +172,8 @@ describe('GET /api/auth/callback', () => {
     const page = await res.text();
     expect(page).toContain('You chose not to give the builder access');
     expect(page).toContain('"ok":false,"error":"access_denied"');
+    // The code is also in a header, for access logs and the status page.
+    expect(res.headers.get('X-UIEX-Error-Code')).toBe('access_denied');
   });
 
   it('never echoes attacker-controlled error codes or HTML', async () => {
@@ -182,6 +184,7 @@ describe('GET /api/auth/callback', () => {
     const page = await res.text();
     expect(page).not.toContain('<script>alert');
     expect(page).toContain('"error":"oauth_error"');
+    expect(res.headers.get('X-UIEX-Error-Code')).toBe('oauth_error');
   });
 
   it('reports a failed code exchange', async () => {

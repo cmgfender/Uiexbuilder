@@ -58,7 +58,7 @@ import {
   X,
 } from 'lucide-react';
 import type { ComponentDef, EnumOption, EventDef, PreviewProps, PreviewRootProps, PropDef, SlotDef } from '../types';
-import { STANDARD_DOCS } from '../constants';
+import { HS_SWATCH, STANDARD_DOCS } from '../constants';
 import { cx, hrefUrl, normalizeSize, str } from '../../preview/util';
 import '../../preview/styles/buttons.css';
 
@@ -111,7 +111,7 @@ const VARIANT_LABELS: Record<ButtonVariant, string> = {
   transparent: 'Transparent',
 };
 const variantOptions = (values: readonly ButtonVariant[]): EnumOption[] =>
-  values.map((value) => ({ value, label: VARIANT_LABELS[value] }));
+  values.map((value) => ({ value, label: VARIANT_LABELS[value], swatch: HS_SWATCH[value] }));
 
 /**
  * `TShirtSizes['xs' | 'sm' | 'md']` accepts both aliases ('xs' | 'extra-small', ...). We offer the
@@ -794,7 +794,7 @@ const DISABLED_PROP: PropDef = {
   type: { kind: 'boolean' },
   defaultValue: false,
   group: 'Behavior',
-  description: 'Renders the button greyed out so it cannot be clicked.',
+  description: 'Greys the button out so it can’t be clicked. Use Rules or fx to disable it only sometimes.',
 };
 
 const BUTTON_TYPE_PROP: PropDef = {
@@ -810,25 +810,24 @@ const BUTTON_TYPE_PROP: PropDef = {
   },
   defaultValue: 'button',
   group: 'Behavior',
-  description: "The button's HTML type. Use Submit for a Form's submit button and Reset to clear the form.",
+  description: 'Submit sends the form it is in; Reset empties the form. Leave it on Button for anything else.',
 };
 
 const BUTTON_HREF_PROP: PropDef = {
   name: 'href',
-  label: 'Link URL',
+  label: 'Open a web page',
   type: { kind: 'href' },
   group: 'Behavior',
-  description:
-    'Opens this URL on click (click actions run too). Pages outside HubSpot open in a new tab with an external link icon unless External is set.',
+  description: 'Opens this web address when clicked (its click actions still run). Sites outside HubSpot open in a new tab.',
 };
 
 const TRUNCATE_PROP: PropDef = {
   name: 'truncate',
-  label: 'Truncate',
+  label: 'Cut off long text',
   type: { kind: 'boolean' },
   defaultValue: false,
   group: 'Layout',
-  description: 'Truncates long button text with an ellipsis and shows the full text in a tooltip on hover.',
+  description: 'Shortens long button text with “…”; the full text appears on hover.',
 };
 
 // ---------------------------------------------------------------------------
@@ -850,11 +849,11 @@ export const buttonComponents: ComponentDef[] = [
     props: [
       {
         name: 'variant',
-        label: 'Variant',
+        label: 'Style',
         type: { kind: 'enum', options: variantOptions(BUTTON_VARIANTS) },
         defaultValue: 'secondary',
         group: 'Appearance',
-        description: 'Sets the color of the button.',
+        description: 'Primary is the main (orange) button, secondary is outlined, destructive (red) is for deleting, transparent looks like a link.',
       },
       sizeProp('size', 'Size', 'The size of the button.'),
       BUTTON_TYPE_PROP,
@@ -881,11 +880,11 @@ export const buttonComponents: ComponentDef[] = [
     props: [
       {
         name: 'variant',
-        label: 'Variant',
+        label: 'Style',
         type: { kind: 'enum', options: variantOptions(LOADING_BUTTON_VARIANTS) },
         defaultValue: 'secondary',
         group: 'Appearance',
-        description: 'Sets the color of the button.',
+        description: 'Primary is the main (orange) button, secondary is outlined, destructive (red) is for deleting.',
       },
       sizeProp('size', 'Size', 'The size of the button.'),
       {
@@ -894,15 +893,15 @@ export const buttonComponents: ComponentDef[] = [
         type: { kind: 'boolean' },
         defaultValue: false,
         group: 'Behavior',
-        description: 'Shows the loading indicator and disables the button. Bind it to a state variable.',
+        description: 'Shows a spinner and stops clicks while something runs. Usually linked to a variable your click actions set.',
       },
       {
         name: 'resultIconName',
-        label: 'Result icon',
+        label: 'Icon when done',
         type: { kind: 'icon' },
         defaultValue: 'success',
         group: 'Appearance',
-        description: 'Icon displayed after loading finishes. Defaults to a check mark.',
+        description: 'The icon shown after loading finishes (a check mark unless you pick another).',
       },
       BUTTON_TYPE_PROP,
       BUTTON_HREF_PROP,
@@ -963,17 +962,17 @@ export const buttonComponents: ComponentDef[] = [
     props: [
       {
         name: 'disableDropdown',
-        label: 'Disable overflow dropdown',
+        label: 'No “More” menu',
         type: { kind: 'boolean' },
         defaultValue: false,
         group: 'Behavior',
-        description: "Prevents interacting with the dropdown that collects buttons that don't fit.",
+        description: 'Buttons that don’t fit are not collected into a “More” menu.',
       },
       {
         name: 'dropDownButtonOptions',
-        label: 'Overflow dropdown button',
+        label: '“More” button',
         group: 'Appearance',
-        description: "Customizes the dropdown button shown when buttons don't fit in the row.",
+        description: 'The button that collects buttons that don’t fit in the row.',
         type: {
           kind: 'object',
           fields: [
@@ -1034,11 +1033,11 @@ export const buttonComponents: ComponentDef[] = [
       },
       {
         name: 'variant',
-        label: 'Variant',
+        label: 'Style',
         type: { kind: 'enum', options: variantOptions(MENU_BUTTON_VARIANTS) },
         defaultValue: 'secondary',
         group: 'Appearance',
-        description: 'The dropdown button style. Transparent displays it as a hyperlink.',
+        description: 'How the menu button looks; transparent shows it as a link.',
       },
       sizeProp('buttonSize', 'Button size', 'The size of the dropdown button.'),
       {
@@ -1081,36 +1080,35 @@ export const buttonComponents: ComponentDef[] = [
     props: [
       {
         name: 'href',
-        label: 'URL',
+        label: 'Web address',
         type: { kind: 'href' },
         required: true,
         group: 'Content',
-        description:
-          "The link's URL. Pages outside HubSpot open in a new tab with an external link icon unless External is set.",
+        description: 'Where the link goes. Sites outside HubSpot open in a new tab with an external-link icon.',
       },
       {
         name: 'variant',
-        label: 'Variant',
+        label: 'Color',
         type: {
           kind: 'enum',
           options: [
-            { value: 'primary', label: 'Primary' },
-            { value: 'destructive', label: 'Destructive' },
-            { value: 'light', label: 'Light' },
-            { value: 'dark', label: 'Dark' },
+            { value: 'primary', label: 'Blue (primary)', swatch: HS_SWATCH.link },
+            { value: 'destructive', label: 'Red (destructive)', swatch: { fill: 'transparent', text: '#f2545b' } },
+            { value: 'light', label: 'Light', swatch: HS_SWATCH.light },
+            { value: 'dark', label: 'Dark', swatch: HS_SWATCH.dark },
           ],
         },
         defaultValue: 'primary',
         group: 'Appearance',
-        description: 'The color of the link.',
+        description: 'The link’s color. Light is for dark backgrounds.',
       },
       {
         name: 'preventDefault',
-        label: 'Prevent navigation',
+        label: 'Don’t open the address',
         type: { kind: 'boolean' },
         defaultValue: false,
         group: 'Behavior',
-        description: 'Calls event.preventDefault() before onClick runs, so clicking does not open the URL.',
+        description: 'Clicking runs the link’s actions (Events) without opening the web address.',
       },
       TEST_ID_PROP,
     ],

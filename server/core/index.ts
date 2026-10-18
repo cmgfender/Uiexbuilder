@@ -8,6 +8,10 @@
  * `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, CORS headers for ALLOWED_ORIGINS only, and
  * the session cookies the route set. Errors are ConnectorErrorBody JSON. Tokens and secrets never
  * appear in responses or logs.
+ *
+ * Diagnostics (the private status page, ./diagnostics): every answered request is observed once
+ * (sign-ins, publishes, refused requests) into an in-memory event log, also written as `[event]`
+ * JSON log lines; admins read it at /status.
  */
 import type { RequestContext, Route, ServerConfig, SessionData } from './types';
 import { HubSpotApiError } from './types';
@@ -24,6 +28,7 @@ import { crmRoutes } from './routes/crm';
 import { proxyRoutes } from './routes/proxy';
 import { deployRoutes } from './routes/deploy';
 import { describeAuthError, renderAuthPage } from './authPage';
+import { Diagnostics, diagnosticsRoutes, errorTypeName } from './diagnostics';
 
 export { configFromEnv, checkConfig, CONNECTOR_VERSION, DEFAULT_OPTIONAL_SCOPES, DEFAULT_REQUIRED_SCOPES } from './config';
 export type { ConfigStatus } from './config';
@@ -34,6 +39,8 @@ export type { RateRule } from './rateLimit';
 export { appHostFor } from './oauth';
 export { AUTH_MESSAGE_TYPE, AUTH_BROADCAST_CHANNEL } from './authPage';
 export * from './types';
+export { Diagnostics, adminConfigured, isAdminUser } from './diagnostics';
+export type { DiagnosticsOptions } from './diagnostics';
 
 /** Overall time budget for one API request before the connector answers 504. */
 export const REQUEST_TIMEOUT_MS = 25_000;
@@ -50,6 +57,8 @@ export interface RequestMeta {
 
 export interface Connector {
   handle(request: Request, meta?: RequestMeta): Promise<Response | null>;
+  /** The status page's event log (additive; see ./diagnostics). */
+  readonly diagnostics?: Diagnostics;
 }
 
 /** Internal knobs (tests). */
@@ -60,6 +69,23 @@ export interface ConnectorOptions {
   log?: (message: string) => void;
   /** Rate limiter (tests share or replace it). Defaults to one per connector. */
   rateLimiter?: RateLimiter;
+  /** The status page's event log (the Node server passes its own). Defaults to one per connector. */
+  diagnostics?: Diagnostics;
+  /** Where `[event]` log lines go when the connector makes its own log (null: nowhere). Default console.log. */
+  eventLog?: ((line: string) => void) | null;
+}
+
+/** `[event]` lines go to the host's log; not while unit tests run (many connectors, only noise). */
+function defaultEventLog(): ((line: string) => void) | null {
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
+  if (env?.VITEST) return null;
+  return (line: string) => console.log(line);
+}
+
+/** What dispatch matched (for diagnostics). */
+interface DispatchTrace {
+  route: Route | null;
+  params: Record<string, string>;
 }
 
 /** The message shown when a signed-in HubSpot account isn't on ALLOWED_PORTALS. */
@@ -79,11 +105,13 @@ function isApiPath(pathname: string): boolean {
 
 export function createConnector(config: ServerConfig, options: ConnectorOptions = {}): Connector {
   const status: ConfigStatus = checkConfig(config);
-  const router = new Router([...authRoutes(status), ...crmRoutes(), ...proxyRoutes()]);
+  const limiter = options.rateLimiter ?? new RateLimiter(config.now);
+  const diagnostics = options.diagnostics ?? new Diagnostics({ now: config.now, emit: options.eventLog === undefined ? defaultEventLog() : options.eventLog });
+  diagnostics.serverStarted(config);
+  const router = new Router([...authRoutes(status), ...crmRoutes(), ...proxyRoutes(), ...diagnosticsRoutes({ diagnostics, status, limiter })]);
   for (const r of deployRoutes) router.add(r);
   const timeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
   const log = options.log ?? ((m: string) => console.error(m));
-  const limiter = options.rateLimiter ?? new RateLimiter(config.now);
 
   /** Rate limits for the routes that make the server call out on the caller's behalf. */
   async function applyRateLimit(route: Route, request: Request, session: CookieSession, clientIp: string | undefined): Promise<Response | null> {
@@ -100,6 +128,10 @@ export function createConnector(config: ServerConfig, options: ConnectorOptions 
     else if (route.path === CONNECTOR_ROUTES.deployStart && route.method === 'POST') {
       const user = await userKey();
       rule = user ? RATE_RULES.deploy : RATE_RULES.deploySetup;
+      key = user ?? ipKey;
+    } else if (route.path === CONNECTOR_ROUTES.deployCheckKey) {
+      const user = await userKey();
+      rule = user ? RATE_RULES.keyCheck : RATE_RULES.keyCheckSetup;
       key = user ?? ipKey;
     } else if (route.path === CONNECTOR_ROUTES.proxyFetch) {
       rule = RATE_RULES.proxy;
@@ -127,7 +159,7 @@ export function createConnector(config: ServerConfig, options: ConnectorOptions 
     throw err;
   }
 
-  async function dispatch(request: Request, url: URL, session: CookieSession, meta: RequestMeta): Promise<Response> {
+  async function dispatch(request: Request, url: URL, session: CookieSession, meta: RequestMeta, trace: DispatchTrace): Promise<Response> {
     if (request.method === 'OPTIONS') return preflightResponse(config, request);
 
     if (!config.enableDeploy && (url.pathname === '/api/deploy' || url.pathname.startsWith('/api/deploy/'))) {
@@ -143,6 +175,8 @@ export function createConnector(config: ServerConfig, options: ConnectorOptions 
       return errorJson(405, 'method_not_allowed', `Use ${match.allow.join(' or ')} for this endpoint.`, { headers: { Allow: match.allow.join(', ') } });
     }
     const route: Route = match.route;
+    trace.route = route;
+    trace.params = match.params;
     if (route.csrf !== false) assertCsrf(config, request);
     const limited = await applyRateLimit(route, request, session, meta.clientIp);
     if (limited) return limited;
@@ -187,6 +221,7 @@ export function createConnector(config: ServerConfig, options: ConnectorOptions 
   }
 
   return {
+    diagnostics,
     async handle(request: Request, meta: RequestMeta = {}): Promise<Response | null> {
       let url: URL;
       try {
@@ -198,16 +233,21 @@ export function createConnector(config: ServerConfig, options: ConnectorOptions 
 
       const session = new CookieSession(request, config);
       const redact = (s: string) => redactText(s, [config.hubspotClientSecret, config.sessionSecret, ...session.knownSecrets()]);
+      const trace: DispatchTrace = { route: null, params: {} };
+      const pollBody = Diagnostics.wantsRequestBody(request.method, url.pathname) ? Diagnostics.peekBody(request) : undefined;
+      let errorName: string | undefined;
       let response: Response;
       try {
-        response = await dispatch(request, url, session, meta);
+        response = await dispatch(request, url, session, meta, trace);
       } catch (err) {
         if (!(err instanceof ConnectorError) && !(err instanceof HubSpotApiError)) {
           const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
           log(redact(`[uiex-connector] ${request.method} ${url.pathname} failed: ${detail}`));
+          errorName = errorTypeName(err);
         }
         response = errorToResponse(err, redact);
       }
+      await diagnostics.observe({ request, url, route: trace.route, params: trace.params, response, session, clientIp: meta.clientIp, pollBody, errorName });
       return finalize(response, request, session);
     },
   };

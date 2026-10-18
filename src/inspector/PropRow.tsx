@@ -4,7 +4,7 @@
  * literal value and an expression ({ $expr }), and the Rules toggle (pick the value by thresholds,
  * e.g. a progress bar's color by percentage; stored as an expression, see rules.ts).
  */
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { Link2, ListFilter, RotateCcw } from 'lucide-react';
 import { useEditor } from '../model/store';
 import { isExpr, type Extension, type JsonValue, type UINode } from '../model/types';
@@ -13,8 +13,22 @@ import { cx, IconButton, useToast } from '../ui';
 import { ExpressionInput } from './controls';
 import { describe, editorLayout, LiteralEditor } from './editors';
 import { exprToLiteral, isPropRequired, jsonToJs, literalToExpr, templateValueAsExpr } from './propValue';
+import { useInspectorPrefs } from './prefs';
+import { propSelector, revealInInspector, usePropRequests } from './requests';
 import { initialRules, rulesOf, rulesToExpr, supportsRules, syncRuleSubjects, type RuleSet } from './rules';
 import { RulesEditor } from './RulesEditor';
+
+const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/**
+ * The exact HubSpot prop name, shown next to a plain-language label when it says something else
+ * (e.g. "Color" → `variant`), so power users and HubSpot's docs still line up.
+ */
+export function propNameHint(def: Pick<PropDef, 'label' | 'name'>): string | null {
+  const label = squash(def.label);
+  const name = squash(def.name);
+  return label.includes(name) ? null : def.name;
+}
 
 export interface PropRowProps {
   node: UINode;
@@ -108,16 +122,59 @@ export function PropRow({ node, def, ext, boundState, onUnbind }: PropRowProps) 
     set(undefined);
   };
 
+  // "You can also…" tips ask a row to switch on Rules or to show data (fx + the variable picker).
+  const latest = useRef({ rulesMode, fxMode, toggleRules, toggleFx });
+  latest.current = { rulesMode, fxMode, toggleRules, toggleFx };
+  const literalText = def.type.kind === 'string' || def.type.kind === 'url' || def.type.kind === 'href';
+  useEffect(() => {
+    const check = () => {
+      const req = usePropRequests.getState().take(node.id, def.name);
+      if (!req || boundState) return;
+      const cur = latest.current;
+      const row = propSelector(def.name);
+      if (req.action === 'rules') {
+        if (!cur.rulesMode && supportsRules(def)) cur.toggleRules();
+        revealInInspector(row, 'select, input');
+        return;
+      }
+      // Text-like settings take {{ data }} in place; others switch to an expression first.
+      if (cur.rulesMode || (!literalText && !cur.fxMode)) cur.toggleFx();
+      revealInInspector(row, '.ub-insp-varbtn');
+      setTimeout(() => document.querySelector<HTMLElement>(`.ub-insp ${row} .ub-insp-varbtn`)?.click(), 80);
+    };
+    check();
+    return usePropRequests.subscribe(check);
+  }, [node.id, def, boundState, literalText]);
+
+  // The help text describes the field to screen readers too.
+  const showHelp = useInspectorPrefs((s) => s.showHelp);
+  const helpId = `${id}-help`;
+  const help = showHelp && def.description && !rulesMode ? def.description : null;
+  useLayoutEffect(() => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (help) el.setAttribute('aria-describedby', helpId);
+    else if (el.getAttribute('aria-describedby') === helpId) el.removeAttribute('aria-describedby');
+  });
+  const nameHint = propNameHint(def);
+
   const label = (
-    <label htmlFor={id} title={describe(def)} className={cx(def.description && 'has-help')}>
-      {def.label}
-      {def.deprecated && <span className="ub-insp-deprecated">deprecated</span>}
-      {required && (
-        <span className="ub-insp-req" aria-label="required" title={def.required ? 'Required' : 'Required with the current settings'}>
-          *
-        </span>
+    <>
+      <label htmlFor={id} title={describe(def)} className={cx(def.description && !help && 'has-help')}>
+        {def.label}
+        {def.deprecated && <span className="ub-insp-deprecated">deprecated</span>}
+        {required && (
+          <span className="ub-insp-req" aria-label="required" title={def.required ? 'Required' : 'Required with the current settings'}>
+            *
+          </span>
+        )}
+      </label>
+      {nameHint && (
+        <code className="ub-insp-propname" title={`HubSpot prop name: ${nameHint}`}>
+          {nameHint}
+        </code>
       )}
-    </label>
+    </>
   );
 
   const tools = boundState ? null : (
@@ -216,6 +273,11 @@ export function PropRow({ node, def, ext, boundState, onUnbind }: PropRowProps) 
       <div className="ub-insp-prop__label">{label}</div>
       <div className="ub-insp-prop__editor">{editor}</div>
       {tools}
+      {help && (
+        <div className="ub-insp-prop__desc" id={helpId}>
+          {help}
+        </div>
+      )}
     </div>
   );
 }

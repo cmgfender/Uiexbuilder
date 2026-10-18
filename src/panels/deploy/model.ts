@@ -129,10 +129,154 @@ export function installHint(project: Project): string {
     : 'On the project page, open your app, go to Distribution and click Install now.';
 }
 
-/** Error codes that are about the key (shown on the key field, the admin stays on the form). */
-export const KEY_ERROR_CODES = new Set(['invalid_key', 'missing_key', 'no_remembered_key', 'missing_scope']);
-/** Errors about who is deploying (shown on the form too): sign in first / account not allowed. */
-export const ACCOUNT_ERROR_CODES = new Set(['not_connected', 'portal_not_allowed']);
+/** Error codes that are about the key itself (shown on the key field, the admin stays on the form). */
+export const KEY_ERROR_CODES = new Set(['invalid_key', 'missing_key', 'no_remembered_key', 'key_expired']);
+/**
+ * Refusals about the key's permissions or account (a fix-it callout on the form, see keyProblemCopy):
+ * every 403 variant of a publish — the key lacks Developer projects (missing_scope), developer
+ * projects aren't available in the account (not_available), HubSpot refused for another reason
+ * (forbidden), the builder only publishes to some accounts (portal_not_allowed), this address may
+ * not use the connector (forbidden_origin / csrf) — and a key from another account (portal_mismatch).
+ */
+export const KEY_PROBLEM_CODES = new Set(['missing_scope', 'not_available', 'forbidden', 'portal_not_allowed', 'portal_mismatch', 'forbidden_origin', 'csrf']);
+/** Errors about who is publishing (shown on the form too): sign in first. */
+export const ACCOUNT_ERROR_CODES = new Set(['not_connected']);
+
+/** Errors shown on the form (the key and the project stay as they are) instead of the failure screen. */
+export function isFormErrorCode(code: string): boolean {
+  return KEY_ERROR_CODES.has(code) || KEY_PROBLEM_CODES.has(code) || ACCOUNT_ERROR_CODES.has(code);
+}
+
+/** "Acme (account 123)" / "account 123". */
+export function accountName(account: { portalId: number; name?: string; hubDomain?: string } | null | undefined): string {
+  if (!account) return 'your HubSpot account';
+  const name = account.name || account.hubDomain;
+  return name ? `${name} (account ${account.portalId})` : `account ${account.portalId}`;
+}
+
+export type KeyProblemKind = 'missing_permission' | 'portal_mismatch' | 'portal_not_allowed' | 'not_available' | 'forbidden' | 'origin';
+
+/** The callout kind for a key-check problem or a form error code. */
+export function keyProblemKind(code: string): KeyProblemKind | null {
+  switch (code) {
+    case 'missing_permission':
+    case 'missing_scope':
+      return 'missing_permission';
+    case 'portal_mismatch':
+    case 'portal_not_allowed':
+    case 'not_available':
+    case 'forbidden':
+      return code;
+    case 'forbidden_origin':
+    case 'csrf':
+      return 'origin';
+    default:
+      return null;
+  }
+}
+
+export interface KeyProblemCopy {
+  title: string;
+  /** What it means (the server's message adds the details). */
+  intro: string;
+  steps: string[];
+  /** Who fixes it, for the note button: undefined = the admin themselves. */
+  noteFor?: 'host' | 'super_admin';
+  /** The text of that note. */
+  note?: string;
+}
+
+export interface KeyProblemContext {
+  /** The account the key belongs to, when HubSpot said. */
+  key?: { portalId: number; name?: string };
+  /** The connected account (publishing goes there). */
+  connected?: { portalId: number; hubDomain?: string } | null;
+  /** The builder's address and setup page, for notes. */
+  builderUrl: string;
+  setupUrl: string;
+}
+
+/** Plain-language title, steps and (when someone else fixes it) a note to send, for each key problem. */
+export function keyProblemCopy(kind: KeyProblemKind, ctx: KeyProblemContext): KeyProblemCopy {
+  const keyAccount = ctx.key ? accountName(ctx.key) : 'the account the key belongs to';
+  switch (kind) {
+    case 'missing_permission':
+      return {
+        title: 'This key can’t publish yet: it’s missing the “Developer projects” permission',
+        intro: 'The key works, but HubSpot only takes projects from keys that have the Developer projects permission. It’s a one-time change on HubSpot’s key page:',
+        steps: [
+          `Open the key page for ${keyAccount} (button below).`,
+          'Add the Developer projects permission to your key and save. If HubSpot doesn’t let you change it, create a new key with Developer projects ticked and paste the new key above.',
+          'Come back here and click Check again.',
+        ],
+      };
+    case 'portal_mismatch':
+      return {
+        title: 'This key is for a different HubSpot account',
+        intro: ctx.connected
+          ? 'Your cards go to the account you’re connected to, so the key has to come from that account too. Either:'
+          : 'The key decides which HubSpot account your cards go to. Either:',
+        steps: ctx.connected
+          ? [
+              `Get a key for ${accountName(ctx.connected)}: open its key page, copy the key and paste it above, or`,
+              `publish to ${keyAccount} instead: switch the HubSpot account you’re connected to.`,
+            ]
+          : [`Paste a key from the account you want, or publish to ${keyAccount} instead.`],
+      };
+    case 'portal_not_allowed': {
+      const id = ctx.key?.portalId;
+      return {
+        title: id ? `This builder doesn’t publish to account ${id}` : 'This builder doesn’t publish to this account',
+        intro: 'Whoever set up this builder limited it to specific HubSpot accounts. They can add this one — or use a key from an account that is allowed.',
+        steps: [],
+        noteFor: 'host',
+        note: [
+          `Hi! I'd like to publish cards from the UI Extension Builder (${ctx.builderUrl}) to our HubSpot account ${ctx.key ? accountName(ctx.key) : ''}, but the builder only publishes to the accounts in its ALLOWED_PORTALS setting.`,
+          '',
+          `Could you add ${id ?? 'that account id'} to ALLOWED_PORTALS in the builder's hosting settings and redeploy?`,
+          `Setup checklist: ${ctx.setupUrl}`,
+        ].join('\n'),
+      };
+    }
+    case 'not_available':
+      return {
+        title: 'HubSpot doesn’t allow developer projects in this account',
+        intro: 'HubSpot refused to take projects into this account, whatever key is used:',
+        steps: [
+          'Check that the account shows Development in HubSpot’s main menu (developer projects).',
+          'Or publish to an account that has it, for example a developer test account: connect to it and use its key.',
+        ],
+      };
+    case 'forbidden':
+      return {
+        title: 'HubSpot refused to take the project',
+        intro: 'HubSpot accepted the key but not the upload. Usually the key’s user isn’t allowed to use developer tools in that account:',
+        steps: [
+          `Ask a Super Admin of ${keyAccount} to let your user use developer tools (Settings → Users & Teams → your user → permissions), then publish again.`,
+          'Or ask them to publish with their own key.',
+        ],
+        noteFor: 'super_admin',
+        note: [
+          `Hi! I'm publishing HubSpot cards from the UI Extension Builder (${ctx.builderUrl}) to ${keyAccount}, and HubSpot refused the upload with my personal access key.`,
+          '',
+          'Could you give my user permission to use developer tools in this account (Settings → Users & Teams → my user → permissions)? Or publish it with your own key.',
+        ].join('\n'),
+      };
+    case 'origin':
+      return {
+        title: 'This address can’t publish',
+        intro: 'The builder’s server only accepts the address it was set up for (APP_URL). Open the builder on that address — or ask whoever set it up to add this one.',
+        steps: [],
+        noteFor: 'host',
+        note: [
+          `Hi! Publishing from the UI Extension Builder at ${ctx.builderUrl} fails with "This website is not allowed to use the HubSpot connector".`,
+          '',
+          `Could you check that APP_URL is ${ctx.builderUrl} (or add it to ALLOWED_ORIGINS) in the builder's hosting settings and redeploy?`,
+          `Setup checklist: ${ctx.setupUrl}`,
+        ].join('\n'),
+      };
+  }
+}
 
 /** The HubSpot sign-in app of this builder (public/hubspot-connector-app.uiex.json). */
 export function isConnectorApp(project: Project): boolean {
@@ -366,6 +510,27 @@ export function failureAdvice(code: string): string[] {
     case 'key_expired':
     case 'invalid_key':
       return ['Create a new personal access key in HubSpot, paste it and publish again.'];
+    case 'missing_scope':
+      return [
+        'Your personal access key needs the “Developer projects” permission. Add it on HubSpot’s personal access key page (or create a new key with it).',
+        'Then click Back, paste the key and publish again.',
+      ];
+    case 'not_available':
+      return ['HubSpot doesn’t allow developer projects in this account. Publish to an account that shows Development in HubSpot’s main menu, such as a developer test account.'];
+    case 'forbidden':
+      return [
+        'HubSpot refused. Usually your user isn’t allowed to use developer tools in this account: ask a Super Admin to allow it (Settings → Users & Teams), or to publish with their own key.',
+        'Then click Try again.',
+      ];
+    case 'portal_not_allowed':
+      return ['This builder only publishes to specific HubSpot accounts. Ask whoever set it up to add yours (ALLOWED_PORTALS).'];
+    case 'not_connected':
+      return ['Your HubSpot sign-in expired. Click Back, connect HubSpot again (top right), then publish again.'];
+    case 'forbidden_origin':
+    case 'csrf':
+      return ['Open the builder on the address it was set up for (APP_URL), or ask whoever set it up to allow this address.'];
+    case 'deploy_not_found':
+      return ['The builder lost track of this publish (after an hour, or in another browser). Open the project in HubSpot to see how it went, or publish again.'];
     default:
       return ['Click Try again.', 'If it keeps failing, download the builder file and send it to whoever looks after the builder.'];
   }

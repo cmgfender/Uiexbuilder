@@ -5,6 +5,7 @@ import { ToastProvider } from '../../ui';
 import { connectedInfo, healthFixture } from '../testUtils';
 import { ConnectButton } from './ConnectButton';
 import { HOSTING_DOCS_URL } from './links';
+import { resetStatusAdminForTests } from '../../status/useStatusAdmin';
 
 const original: ConnectionState = { ...useConnection.getState() };
 
@@ -196,6 +197,35 @@ describe('ConnectButton', () => {
     fireEvent.click(chip);
     fireEvent.click(within(screen.getByRole('dialog', { name: 'HubSpot account' })).getByRole('button', { name: /Disconnect/ }));
     expect(actions.disconnect).toHaveBeenCalled();
+  });
+
+  it('links admins of this builder to the status page from the account menu', async () => {
+    stubActions();
+    resetStatusAdminForTests();
+    const access = (admin: boolean) =>
+      vi.fn(async () => new Response(JSON.stringify({ signInConfigured: true, signedIn: true, admin, adminConfigured: true }), { headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', access(true));
+    try {
+      useConnection.setState({ status: 'connected', health: healthFixture(), info: connectedInfo() });
+      const { unmount } = render(<ConnectButton />);
+      fireEvent.click(screen.getByRole('button', { name: /Connected to HubSpot/ }));
+      const menu = screen.getByRole('dialog', { name: 'HubSpot account' });
+      expect(await within(menu).findByRole('link', { name: /Status page/ })).toHaveAttribute('href', '/status');
+      unmount();
+
+      // Someone who isn't an admin never sees the link.
+      resetStatusAdminForTests();
+      const notAdmin = access(false);
+      vi.stubGlobal('fetch', notAdmin);
+      render(<ConnectButton />);
+      fireEvent.click(screen.getByRole('button', { name: /Connected to HubSpot/ }));
+      await act(async () => {});
+      expect(notAdmin).toHaveBeenCalled();
+      expect(within(screen.getByRole('dialog', { name: 'HubSpot account' })).queryByRole('link', { name: /Status page/ })).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      resetStatusAdminForTests();
+    }
   });
 
   it('flags an expired sign-in', () => {

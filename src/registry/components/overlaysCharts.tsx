@@ -47,7 +47,7 @@ import {
 import { newId } from '../../model/ids';
 import type { CloseOverlayAction, JsonValue, NodeTemplate } from '../../model/types';
 import type { ComponentDef, EnumOption, EventDef, PreviewProps, PropDef } from '../types';
-import { STANDARD_DOCS } from '../constants';
+import { HS_SWATCH, STANDARD_DOCS } from '../constants';
 import { cx, normalizeSize, str } from '../../preview/util';
 import '../../preview/styles/overlaysCharts.css';
 
@@ -314,7 +314,7 @@ const overlayIdProp = (noun: string): PropDef => ({
   type: { kind: 'string', placeholder: `e.g. edit-${noun}` },
   required: true,
   group: 'Content',
-  description: `Unique identifier of the ${noun}. Pass it to the “Close overlay” action (actions.closeOverlay) to close the ${noun}.`,
+  description: `A unique name for this ${noun} (no spaces). The “Close overlay” action uses it to close the ${noun}.`,
 });
 
 const overlayWidthProp = (noun: string): PropDef => ({
@@ -429,21 +429,21 @@ const overlayComponents: ComponentDef[] = [
         label: 'Title',
         type: { kind: 'string' },
         group: 'Content',
-        description: "The title displayed in the modal's top bar.",
+        description: 'The text in the modal’s top bar.',
       },
       {
         name: 'variant',
-        label: 'Variant',
+        label: 'Style',
         type: {
           kind: 'enum',
           options: [
-            { value: 'default', label: 'Default' },
-            { value: 'danger', label: 'Danger' },
+            { value: 'default', label: 'Default', swatch: HS_SWATCH.neutral },
+            { value: 'danger', label: 'Danger (red)', swatch: HS_SWATCH.danger },
           ],
         },
         defaultValue: 'default',
         group: 'Appearance',
-        description: 'The type of modal. Use danger when the user is about to perform a destructive action.',
+        description: 'Use danger (a red top bar) when people are about to delete or undo something.',
       },
       overlayWidthProp('modal'),
       ariaLabelProp('modal'),
@@ -509,22 +509,21 @@ const overlayComponents: ComponentDef[] = [
         label: 'Title',
         type: { kind: 'string' },
         group: 'Content',
-        description: 'The text displayed at the top of the panel.',
+        description: 'The text at the top of the panel.',
       },
       {
         name: 'variant',
-        label: 'Variant',
+        label: 'Style',
         type: {
           kind: 'enum',
           options: [
-            { value: 'default', label: 'Default' },
-            { value: 'modal', label: 'Modal' },
+            { value: 'default', label: 'Beside the page' },
+            { value: 'modal', label: 'Dim the page' },
           ],
         },
         defaultValue: 'default',
         group: 'Appearance',
-        description:
-          'The modal variant dims the page and keeps screen reader and keyboard focus on the panel (recommended for accessibility).',
+        description: 'Dim the page keeps keyboard and screen reader focus in the panel (recommended for accessibility).',
       },
       overlayWidthProp('panel'),
       ariaLabelProp('panel'),
@@ -1477,7 +1476,7 @@ function chartProps(noun: 'bars' | 'lines', sample: JsonValue): PropDef[] {
       name: 'options',
       label: 'Chart options',
       group: 'Appearance',
-      description: 'Title, legend, data labels, tooltips and color order.',
+      description: 'The chart’s title, legend, numbers on the bars or points, hover tooltips and colors.',
       type: {
         kind: 'object',
         fields: [
@@ -1524,6 +1523,8 @@ const chartComponents: ComponentDef[] = [
     category: 'Charts',
     description: 'A bar chart, best suited for comparing categorical data. Group by a field for colored or stacked bars.',
     icon: ChartColumn,
+    groupOrder: ['Data', 'Appearance'],
+    tips: [{ text: 'Chart your CRM data: build the rows with a data source or a computed value, then pick it with fx', action: { kind: 'data', prop: 'data' } }],
     docsUrl: `${STANDARD_DOCS}/charts/bar-chart`,
     importFrom: '@hubspot/ui-extensions',
     keywords: ['chart', 'graph', 'column', 'histogram', 'report', 'visualization', 'data viz', 'compare'],
@@ -1548,6 +1549,8 @@ const chartComponents: ComponentDef[] = [
     category: 'Charts',
     description: 'A line chart, best suited for time series and trends. Group by a field to compare several lines.',
     icon: ChartLine,
+    groupOrder: ['Data', 'Appearance'],
+    tips: [{ text: 'Chart your CRM data: build the rows with a data source or a computed value, then pick it with fx', action: { kind: 'data', prop: 'data' } }],
     docsUrl: `${STANDARD_DOCS}/charts/line-chart`,
     importFrom: '@hubspot/ui-extensions',
     keywords: ['chart', 'graph', 'trend', 'time series', 'report', 'visualization', 'data viz', 'over time'],

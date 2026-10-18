@@ -417,7 +417,9 @@ describe('<DeployToHubSpotPanel> deploying', () => {
     typeKey();
     fireEvent.click(screen.getByRole('button', { name: 'Publish to HubSpot' }));
     expect(await screen.findByText('This key is for a different HubSpot account')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Publish to HubSpot' })).toBeDisabled();
+    // Publishing again checks again (the admin may have switched accounts or pasted another key).
+    expect(screen.getByRole('button', { name: 'Publish to HubSpot' })).toBeEnabled();
+    expect(screen.getByText('Your key is for').nextSibling).toHaveTextContent('account 999');
     expect(screen.queryByRole('button', { name: /Publish to account 999 instead/ })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Switch HubSpot account' }));
     expect(useConnection.getState().switchPortal).toHaveBeenCalled();

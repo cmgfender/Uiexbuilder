@@ -95,6 +95,7 @@ describe('Events tab', () => {
     const node = selectTop();
     render(<Inspector />);
     await addAction('If / else');
+    await userEvent.click(screen.getByRole('button', { name: 'If: edit as code' }));
     fireEvent.change(screen.getByLabelText('Condition'), { target: { value: 'count > 3' } });
     const thenBranch = screen.getByRole('group', { name: 'Step 1: If / else' });
     // Buttons: [then Add action, else Add action, outer Add action]

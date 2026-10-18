@@ -410,7 +410,7 @@ export function LayersPanel() {
       { label: 'Cut', icon: <Scissors size={14} />, shortcut: shortcutLabel('cut'), disabled: locked, onSelect: () => cutNodeSafe(id, toast) },
       { label: 'Paste', icon: <ClipboardPaste size={14} />, shortcut: shortcutLabel('paste'), disabled: !hasClipboard, onSelect: () => pasteAt(id, toast) },
       { separator: true, label: '' },
-      { label: 'Wrap in Flex', icon: <SquareDashed size={14} />, shortcut: shortcutLabel('wrap'), disabled: locked, onSelect: () => wrapNodeSafe(id, 'Flex', toast) },
+      { label: 'Wrap in Layout box', icon: <SquareDashed size={14} />, shortcut: shortcutLabel('wrap'), disabled: locked, onSelect: () => wrapNodeSafe(id, 'Flex', toast) },
       { label: 'Wrap in Box', icon: <SquareDashed size={14} />, disabled: locked, onSelect: () => wrapNodeSafe(id, 'Box', toast) },
       { label: 'Wrap in Tile', icon: <SquareStack size={14} />, disabled: locked, onSelect: () => wrapNodeSafe(id, 'Tile', toast) },
       { label: 'Select parent', icon: <CornerLeftUp size={14} />, disabled: parentIsRoot, onSelect: () => selectParentOf(ext, id) },

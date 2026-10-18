@@ -1856,7 +1856,7 @@ const nameProp = (required: boolean): PropDef => ({
   type: { kind: 'string', placeholder: 'e.g. firstname' },
   required,
   group: 'Content',
-  description: "The input's unique identifier, like the HTML name attribute. It is the key of this field in a Form's submitted values.",
+  description: 'A short unique name for the field (no spaces). A form’s submitted answers use it, e.g. event.targetValue.firstname.',
 });
 
 const PLACEHOLDER_PROP: PropDef = {
@@ -1864,15 +1864,15 @@ const PLACEHOLDER_PROP: PropDef = {
   label: 'Placeholder',
   type: { kind: 'string' },
   group: 'Content',
-  description: 'The text that appears in the input before a value is set.',
+  description: 'Greyed-out example text shown while the field is empty.',
 };
 
 const DESCRIPTION_PROP: PropDef = {
   name: 'description',
-  label: 'Description',
+  label: 'Help text',
   type: { kind: 'string', multiline: true },
   group: 'Content',
-  description: "Text that describes the field's purpose, shown below the label.",
+  description: 'A short explanation shown under the label.',
 };
 
 const TOOLTIP_PROP: PropDef = {
@@ -1880,7 +1880,7 @@ const TOOLTIP_PROP: PropDef = {
   label: 'Tooltip',
   type: { kind: 'string' },
   group: 'Content',
-  description: 'Text shown in a tooltip next to the label.',
+  description: 'Extra help shown when hovering the (?) icon next to the label.',
 };
 
 const REQUIRED_PROP: PropDef = {
@@ -1889,7 +1889,7 @@ const REQUIRED_PROP: PropDef = {
   type: { kind: 'boolean' },
   defaultValue: false,
   group: 'Validation',
-  description: 'Displays a required field indicator. It does not block submission; validate in your handlers.',
+  description: 'Shows a red * next to the label. It doesn’t stop the form from being sent: check the answer in Events › On submit.',
 };
 
 const readOnlyProp = (subject = 'change the value'): PropDef => ({
@@ -1903,19 +1903,19 @@ const readOnlyProp = (subject = 'change the value'): PropDef => ({
 
 const ERROR_PROP: PropDef = {
   name: 'error',
-  label: 'Error',
+  label: 'Show as error',
   type: { kind: 'boolean' },
   defaultValue: false,
   group: 'Validation',
-  description: 'Renders the error state and shows the validation message as an error (otherwise as a success message).',
+  description: 'Outlines the field in red and shows the message below as an error. Use Rules or fx to turn it on only when the answer is wrong.',
 };
 
 const VALIDATION_MESSAGE_PROP: PropDef = {
   name: 'validationMessage',
-  label: 'Validation message',
+  label: 'Message under the field',
   type: { kind: 'string' },
   group: 'Validation',
-  description: 'Message shown below the input: an error when Error is on, otherwise a success message.',
+  description: 'Shown below the field: as an error when “Show as error” is on, otherwise as a success message.',
 };
 
 /** BaseInputProps<T>: label, name, (placeholder), description, tooltip, value, defaultValue, ... */
@@ -1931,14 +1931,14 @@ function baseInputProps(valueType: PropType, subject: string, opts: { placeholde
       label: 'Value',
       type: valueType,
       group: 'Data',
-      description: `The ${subject}. Set it (usually bound to a state variable) to control the input.`,
+      description: `The ${subject} shown in the field. Usually linked to a variable under “Value binding” so the card can use what people enter.`,
     },
     {
       name: 'defaultValue',
-      label: 'Default value',
+      label: 'Starting value',
       type: valueType,
       group: 'Data',
-      description: `The ${subject} on the first render, when Value is not set.`,
+      description: `The ${subject} the field starts with (when Value is not set).`,
     },
     REQUIRED_PROP,
     readOnlyProp('enter a value'),
@@ -1947,22 +1947,25 @@ function baseInputProps(valueType: PropType, subject: string, opts: { placeholde
   ];
 }
 
-const minMaxProps = (type: PropType, subject: string): PropDef[] => [
-  { name: 'min', label: 'Min', type, group: 'Validation', description: `The earliest / lowest valid ${subject}.` },
-  { name: 'max', label: 'Max', type, group: 'Validation', description: `The latest / highest valid ${subject}.` },
-];
+const minMaxProps = (type: PropType, subject: string): PropDef[] => {
+  const when = type.kind === 'date' || type.kind === 'time';
+  return [
+    { name: 'min', label: when ? 'Earliest allowed' : 'Lowest allowed', type, group: 'Validation', description: `The ${when ? 'earliest' : 'lowest'} ${subject} people can enter.` },
+    { name: 'max', label: when ? 'Latest allowed' : 'Highest allowed', type, group: 'Validation', description: `The ${when ? 'latest' : 'highest'} ${subject} people can enter.` },
+  ];
+};
 
 const PRECISION_PROP: PropDef = {
   name: 'precision',
-  label: 'Precision',
+  label: 'Decimal places',
   type: { kind: 'number', min: 0, max: 20, step: 1, integer: true },
   group: 'Appearance',
-  description: 'Number of digits to the right of the decimal point.',
+  description: 'How many digits are shown after the decimal point.',
 };
 
 const FORMAT_STYLE_PROP: PropDef = {
   name: 'formatStyle',
-  label: 'Format style',
+  label: 'Show as',
   type: {
     kind: 'enum',
     options: [
@@ -1972,12 +1975,12 @@ const FORMAT_STYLE_PROP: PropDef = {
   },
   defaultValue: 'decimal',
   group: 'Appearance',
-  description: 'Formats the input as a decimal number or a percentage.',
+  description: 'A plain number, or a percentage (e.g. 0.25 shows as 25%).',
 };
 
 const TIMEZONE_OPTIONS = [
-  { value: 'userTz', label: "User's time zone" },
-  { value: 'portalTz', label: "Portal's time zone" },
+  { value: 'userTz', label: 'The person’s time zone' },
+  { value: 'portalTz', label: 'The HubSpot account’s time zone' },
 ];
 
 const CHECK_SIZE_PROP: PropDef = {
@@ -2040,23 +2043,23 @@ const OPTIONS_PROP = (optionFields: Array<'description' | 'initialIsChecked' | '
   type: { kind: 'options', optionFields },
   required: true,
   group: 'Content',
-  description: 'The options to choose from. `label` is the display text and `value` the unique identifier submitted with the form.',
+  description: 'The choices people can pick. Each has a label (what people see) and a value (what the card and the form receive).',
   ...extra,
 });
 
 const SELECT_VARIANT_PROP: PropDef = {
   name: 'variant',
-  label: 'Variant',
+  label: 'Style',
   type: {
     kind: 'enum',
     options: [
-      { value: 'input', label: 'Input' },
-      { value: 'transparent', label: 'Transparent' },
+      { value: 'input', label: 'Field' },
+      { value: 'transparent', label: 'Text only' },
     ],
   },
   defaultValue: 'input',
   group: 'Appearance',
-  description: 'The visual style: a regular input field, or a borderless text-style dropdown.',
+  description: 'A regular field with a border, or a borderless dropdown that looks like text.',
 };
 
 /** BaseSelectProps (label and name are optional for selects). */

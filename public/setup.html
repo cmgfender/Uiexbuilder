@@ -152,13 +152,16 @@
           </li>
           <li><a href="/">Open the builder</a> → <strong>Project</strong> → <strong>Import .uiex.json…</strong> → choose the file you downloaded.</li>
           <li>
-            Click <strong>Export</strong> (top right) → open the <strong>Deploy to HubSpot</strong> tab → paste the personal access key →
-            click <strong>Deploy to HubSpot</strong>.
+            Click <strong>Publish</strong> (top right) → <strong>Publish to HubSpot</strong> tab → paste the personal access key. The builder checks
+            it right away: it names the HubSpot account the key belongs to and says if <strong>Developer projects</strong> is missing (add it
+            on the key page, then click <strong>Check again</strong>). Click <strong>Publish to HubSpot</strong>.
           </li>
-          <li>
-            In HubSpot open <strong>Development → Projects → uiex-builder-connector</strong> → the app → <strong>Distribution</strong> →
-            <strong>Begin publishing</strong> and sign HubSpot's <strong>Acceptable Use Policy</strong> (no Marketplace listing needed).
-            Without it, nobody can connect.
+          <li id="aup">
+            <strong>Don't skip this:</strong> in HubSpot open <strong>Development → Projects → uiex-builder-connector</strong> → the app →
+            <strong>Distribution</strong> → <strong>Begin publishing</strong> and sign HubSpot's <strong>Acceptable Use Policy</strong> (no
+            Marketplace listing needed). Until you do, HubSpot refuses to install the app in <em>every</em> account, yours too, with
+            <em>"the app developer has not signed the acceptable use policy"</em> - shown inside HubSpot's window, so the builder only sees the
+            window close.
           </li>
           <li>
             On the app's <strong>Auth</strong> tab, copy the <strong>Client ID</strong> and <strong>Client secret</strong>.
@@ -181,6 +184,39 @@
           </li>
         </ul>
         <p>Save, redeploy or restart, then click <strong>Check again</strong> in step 1.</p>
+      </section>
+
+      <section aria-labelledby="test-title">
+        <h2 id="test-title"><span class="step">5</span>Test it like an admin</h2>
+        <p>
+          Open <a href="/">the builder</a> in a private window and click <strong>Connect HubSpot</strong>. You should see HubSpot's permission
+          screen and come back connected. If HubSpot shows a message instead, it never comes back to the builder - the builder then asks
+          <em>What did HubSpot show?</em> and explains the fix. What each message means:
+        </p>
+        <ul>
+          <li>
+            <strong>"The app developer has not signed the acceptable use policy"</strong> - you haven't signed it yet:
+            <a href="#aup">step 3, item 4</a>. This is the most common reason people can't connect.
+          </li>
+          <li>
+            <strong>Not allowed to install apps</strong> - the first person to connect from a HubSpot account installs the app for that account,
+            and HubSpot only lets <strong>Super Admins</strong> (or users with <strong>App Marketplace access</strong>) do that. A Super Admin
+            connects once; then everyone in that account can.
+          </li>
+          <li>
+            <strong>An install limit</strong> - an app without a Marketplace listing can be installed in up to <strong>25</strong> HubSpot
+            accounts. Uninstall it where it's no longer used, or use <code>ALLOWED_PORTALS</code> so only your accounts install it.
+          </li>
+          <li><strong>A redirect URL error</strong> - the app's redirect URL must be exactly the one in step 2.</li>
+          <li>
+            <strong>Nothing happens / the window is blocked</strong> - a pop-up blocker. The builder offers <strong>Continue in this tab</strong>.
+          </li>
+        </ul>
+        <p class="note">
+          People who can't connect can copy you a note from the builder that says what HubSpot showed. Publishing from the builder needs a
+          personal access key with <strong>Developer projects</strong> from the account they're connected to; the builder checks that before
+          uploading.
+        </p>
       </section>
     </main>
     <script>

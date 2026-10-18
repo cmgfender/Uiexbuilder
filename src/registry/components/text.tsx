@@ -187,7 +187,7 @@ import {
 } from 'lucide-react';
 import type { ComponentDef, EnumOption, EventDef, PreviewProps, PropDef, SlotDef } from '../types';
 import type { IconName } from '../constants';
-import { STANDARD_DOCS, enumOptions } from '../constants';
+import { HS_SWATCH, STANDARD_DOCS, enumOptions } from '../constants';
 import type { UINode } from '../../model/types';
 import { cx, hrefUrl, normalizeSize, str } from '../../preview/util';
 import '../../preview/styles/text.css';
@@ -1339,19 +1339,19 @@ function TooltipPreview({ props, text, rootProps }: PreviewProps) {
 // ---------------------------------------------------------------------------
 
 const TAG_VARIANT_OPTIONS: EnumOption[] = [
-  { value: 'default', label: 'Default' },
-  { value: 'info', label: 'Info' },
-  { value: 'success', label: 'Success' },
-  { value: 'warning', label: 'Warning' },
-  { value: 'error', label: 'Error' },
+  { value: 'default', label: 'Grey', swatch: { fill: '#f5f8fa', border: '#cbd6e2' } },
+  { value: 'info', label: 'Blue (info)', swatch: { fill: '#e5f5f8', border: '#00a4bd' } },
+  { value: 'success', label: 'Green (success)', swatch: { fill: '#e5f8f6', border: '#00bda5' } },
+  { value: 'warning', label: 'Yellow (warning)', swatch: { fill: '#fef8f0', border: '#f5c26b' } },
+  { value: 'error', label: 'Red (error)', swatch: { fill: '#fde8e9', border: '#f2545b' } },
 ];
 
 const STATUS_VARIANT_OPTIONS: EnumOption[] = [
-  { value: 'default', label: 'Default' },
-  { value: 'info', label: 'Info' },
-  { value: 'success', label: 'Success' },
-  { value: 'warning', label: 'Warning' },
-  { value: 'danger', label: 'Danger' },
+  { value: 'default', label: 'Grey', swatch: HS_SWATCH.neutral },
+  { value: 'info', label: 'Blue (info)', swatch: HS_SWATCH.info },
+  { value: 'success', label: 'Green (success)', swatch: HS_SWATCH.success },
+  { value: 'warning', label: 'Yellow (warning)', swatch: HS_SWATCH.warning },
+  { value: 'danger', label: 'Red (danger)', swatch: HS_SWATCH.danger },
 ];
 
 const pixelSizeProps = (subject: string): PropDef[] => [
@@ -1364,7 +1364,7 @@ export const textComponents: ComponentDef[] = [
     type: 'Text',
     label: 'Text',
     category: 'Text & content',
-    description: 'Renders text with formatting options. Supports {{ expressions }} for dynamic values.',
+    description: 'A line or paragraph of text. It can show CRM properties and other data, e.g. “Hello {{ firstname }}”.',
     icon: TypeIcon,
     docsUrl: `${STANDARD_DOCS}/text`,
     importFrom: '@hubspot/ui-extensions',
@@ -1373,36 +1373,50 @@ export const textComponents: ComponentDef[] = [
     props: [
       {
         name: 'variant',
-        label: 'Variant',
+        label: 'Style',
         type: { kind: 'enum', options: [{ value: 'bodytext', label: 'Body text' }, { value: 'microcopy', label: 'Microcopy' }] },
         defaultValue: 'bodytext',
         group: 'Appearance',
-        description: 'The style of text to display.',
+        description: 'Body text is regular size; microcopy is smaller, for notes and hints.',
       },
       {
         name: 'format',
         label: 'Format',
         group: 'Appearance',
-        description: 'Font weight, italics, line decoration and capitalization.',
+        description: 'Bold, italic, underline or strikethrough, and capital letters.',
         type: {
           kind: 'object',
           fields: [
             {
               name: 'fontWeight',
               label: 'Font weight',
-              type: { kind: 'enum', options: enumOptions('regular', 'demibold', 'bold') },
+              type: {
+                kind: 'enum',
+                options: [
+                  { value: 'regular', label: 'Regular' },
+                  { value: 'demibold', label: 'Semi-bold' },
+                  { value: 'bold', label: 'Bold' },
+                ],
+              },
               defaultValue: 'regular',
             },
             { name: 'italic', label: 'Italic', type: { kind: 'boolean' }, defaultValue: false },
             {
               name: 'lineDecoration',
-              label: 'Line decoration',
-              type: { kind: 'enum', options: enumOptions('none', 'underline', 'strikethrough') },
+              label: 'Line',
+              type: {
+                kind: 'enum',
+                options: [
+                  { value: 'none', label: 'None' },
+                  { value: 'underline', label: 'Underline' },
+                  { value: 'strikethrough', label: 'Strikethrough' },
+                ],
+              },
               defaultValue: 'none',
             },
             {
               name: 'textTransform',
-              label: 'Text transform',
+              label: 'Capitals',
               type: {
                 kind: 'enum',
                 options: [
@@ -1420,22 +1434,21 @@ export const textComponents: ComponentDef[] = [
       },
       {
         name: 'inline',
-        label: 'Inline',
+        label: 'Same line',
         type: { kind: 'boolean' },
         defaultValue: false,
         group: 'Layout',
-        description: 'Insert the text without breaking the line.',
+        description: 'Keeps the text on the same line as what comes before and after it.',
       },
       {
         // TS type is `boolean | { maxWidth?: number; tooltipText?: string }`. The inspector edits the
         // common boolean form; the object form can be supplied as an expression.
         name: 'truncate',
-        label: 'Truncate',
+        label: 'Cut off long text',
         type: { kind: 'boolean' },
         defaultValue: false,
         group: 'Layout',
-        description:
-          'Truncate long text to one line; the full text shows in a tooltip on hover. For custom options use an expression such as { maxWidth: 200, tooltipText: "…" }.',
+        description: 'Shows long text on one line ending in “…”; the full text appears on hover.',
       },
       TEST_ID_PROP,
     ],
@@ -1454,11 +1467,11 @@ export const textComponents: ComponentDef[] = [
     props: [
       {
         name: 'inline',
-        label: 'Inline',
+        label: 'Same line',
         type: { kind: 'boolean' },
         defaultValue: false,
         group: 'Layout',
-        description: 'Keep the heading on the same line as surrounding content.',
+        description: 'Keeps the heading on the same line as what comes before and after it.',
       },
       TEST_ID_PROP,
     ],
@@ -1484,22 +1497,21 @@ export const textComponents: ComponentDef[] = [
         type: { kind: 'url' },
         required: true,
         group: 'Content',
-        description: 'The URL of the image (or an image imported from your project).',
+        description: 'The web address of the picture (it must start with https://).',
       },
       {
         name: 'alt',
         label: 'Alt text',
         type: { kind: 'string' },
         group: 'Content',
-        description: 'Alternative text describing the image for screen readers.',
+        description: 'Describes the picture for people who can’t see it (screen readers).',
       },
       {
         name: 'href',
-        label: 'Link',
+        label: 'Link when clicked',
         type: { kind: 'href' },
         group: 'Behavior',
-        description:
-          'URL opened when the image is clicked. HubSpot app links open in the same tab, others in a new tab unless "external" is set.',
+        description: 'Opens this web address when the image is clicked. HubSpot pages open in the same tab, other sites in a new one.',
       },
       ...pixelSizeProps('image'),
       TEST_ID_PROP,
@@ -1524,14 +1536,14 @@ export const textComponents: ComponentDef[] = [
         type: { kind: 'icon' },
         required: true,
         group: 'Content',
-        description: 'The icon to display.',
+        description: 'Which HubSpot icon to show.',
       },
       {
         name: 'size',
         label: 'Size',
         type: { kind: 'enum', options: [{ value: 'small', label: 'Small' }, { value: 'medium', label: 'Medium' }, { value: 'large', label: 'Large' }] },
         group: 'Appearance',
-        description: 'Overrides the size, which is otherwise set automatically from the parent component.',
+        description: 'Small, medium or large. When not set, it matches the text around it.',
       },
       {
         name: 'color',
@@ -1539,22 +1551,22 @@ export const textComponents: ComponentDef[] = [
         type: {
           kind: 'enum',
           options: [
-            { value: 'inherit', label: 'Inherit' },
-            { value: 'alert', label: 'Alert' },
-            { value: 'warning', label: 'Warning' },
-            { value: 'success', label: 'Success' },
+            { value: 'inherit', label: 'Same as text', swatch: HS_SWATCH.inherit },
+            { value: 'alert', label: 'Red (alert)', swatch: HS_SWATCH.danger },
+            { value: 'warning', label: 'Yellow (warning)', swatch: HS_SWATCH.warning },
+            { value: 'success', label: 'Green (success)', swatch: HS_SWATCH.success },
           ],
         },
         defaultValue: 'inherit',
         group: 'Appearance',
-        description: 'The color of the icon.',
+        description: 'The icon’s color.',
       },
       {
         name: 'screenReaderText',
         label: 'Screen reader text',
         type: { kind: 'string' },
         group: 'Content',
-        description: 'Text that screen readers read for the icon.',
+        description: 'What screen readers say for the icon. Leave empty when the icon is only decoration.',
       },
       TEST_ID_PROP,
     ],
@@ -1615,7 +1627,7 @@ export const textComponents: ComponentDef[] = [
     props: [
       {
         name: 'variant',
-        label: 'Variant',
+        label: 'Style',
         type: {
           kind: 'enum',
           options: [
@@ -1629,7 +1641,7 @@ export const textComponents: ComponentDef[] = [
         },
         defaultValue: 'unordered',
         group: 'Appearance',
-        description: 'The type of list to render. Styled variants show bullets or numbers.',
+        description: 'Bullets, numbers, or items in a row. “Plain” styles show no bullets or numbers.',
       },
       TEST_ID_PROP,
     ],
@@ -1650,19 +1662,19 @@ export const textComponents: ComponentDef[] = [
     props: [
       {
         name: 'variant',
-        label: 'Variant',
+        label: 'Color',
         type: { kind: 'enum', options: TAG_VARIANT_OPTIONS },
         defaultValue: 'default',
         group: 'Appearance',
-        description: 'The color of the tag.',
+        description: 'The tag’s color. To pick it by a value (e.g. a deal stage), click Rules next to it.',
       },
       {
         name: 'inline',
-        label: 'Inline',
+        label: 'Same line',
         type: { kind: 'boolean' },
         defaultValue: false,
         group: 'Layout',
-        description: 'Allow the tag to sit side-by-side with text.',
+        description: 'Lets the tag sit on the same line as text.',
       },
       TEST_ID_PROP,
     ],
@@ -1686,27 +1698,27 @@ export const textComponents: ComponentDef[] = [
     props: [
       {
         name: 'variant',
-        label: 'Variant',
+        label: 'Color',
         type: { kind: 'enum', options: STATUS_VARIANT_OPTIONS },
         defaultValue: 'default',
         group: 'Appearance',
-        description: 'The color of the dot indicator.',
+        description: 'The color of the dot. To pick it by a value (e.g. a lead status), click Rules next to it.',
       },
       {
         name: 'hollow',
-        label: 'Hollow',
+        label: 'Hollow dot',
         type: { kind: 'boolean' },
         defaultValue: false,
         group: 'Appearance',
-        description: 'Show the dot as a ring instead of a filled circle.',
+        description: 'Shows the dot as a ring instead of a filled circle.',
       },
       {
         name: 'showRemoveIcon',
-        label: 'Show remove icon',
+        label: 'Show remove (x)',
         type: { kind: 'boolean' },
         defaultValue: false,
         group: 'Behavior',
-        description: 'Include a small clickable x icon to remove the tag (handle it with On remove click).',
+        description: 'Adds a small x people can click (set what it does under Events › On remove click).',
       },
       TEST_ID_PROP,
     ],
@@ -1730,7 +1742,7 @@ export const textComponents: ComponentDef[] = [
         type: { kind: 'enum', options: enumOptions('top', 'bottom', 'left', 'right') },
         defaultValue: 'top',
         group: 'Layout',
-        description: 'Where the tooltip appears relative to the component it is attached to.',
+        description: 'Where the tooltip appears next to the component it explains.',
       },
       TEST_ID_PROP,
     ],

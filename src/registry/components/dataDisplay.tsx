@@ -80,7 +80,7 @@ import {
   VoteIcon,
 } from 'lucide-react';
 import type { ChildrenDef, ComponentDef, EnumOption, EventDef, PreviewProps, PreviewRootProps, PropDef } from '../types';
-import { ALERT_VARIANTS, SIZE_ALL, SIZE_XS_MD, STANDARD_DOCS, enumOptions } from '../constants';
+import { ALERT_VARIANTS, HS_SWATCH, SIZE_ALL, SIZE_XS_MD, STANDARD_DOCS, enumOptions } from '../constants';
 import type { NodeTemplate, PropValue, UINode } from '../../model/types';
 import { cx, normalizeSize, str, usePreviewValue } from '../../preview/util';
 import '../../preview/styles/dataDisplay.css';
@@ -145,6 +145,16 @@ function lookup<V>(table: Record<string, V>, key: unknown): V | undefined {
 }
 
 /** 'electronicSignatureEmptyState' -> 'Electronic signature empty state'. */
+/** Alert colors in plain words (the values stay HubSpot's). */
+const ALERT_LABELS: Record<string, string> = {
+  info: 'Blue (info)',
+  warning: 'Yellow (warning)',
+  success: 'Green (success)',
+  error: 'Red (error)',
+  danger: 'Red (danger)',
+  tip: 'Purple (tip)',
+};
+
 function humanize(name: string): string {
   const words = name.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
   return words.charAt(0).toUpperCase() + words.slice(1);
@@ -1126,15 +1136,15 @@ export const dataDisplayComponents: ComponentDef[] = [
     props: [
       {
         name: 'bordered',
-        label: 'Bordered',
+        label: 'Borders',
         type: { kind: 'boolean' },
         defaultValue: true,
         group: 'Appearance',
-        description: 'Show borders around the table and its cells.',
+        description: 'Draws lines around the table and between its cells.',
       },
       {
         name: 'density',
-        label: 'Density',
+        label: 'Row spacing',
         type: {
           kind: 'enum',
           options: [
@@ -1145,30 +1155,30 @@ export const dataDisplayComponents: ComponentDef[] = [
         },
         defaultValue: 'default',
         group: 'Appearance',
-        description: 'Row height and cell padding: default (generous), condensed (moderate) or compact (fits content).',
+        description: 'Default rows are roomy; condensed and compact fit more rows.',
       },
       {
         name: 'flush',
-        label: 'Flush',
+        label: 'No space below',
         type: { kind: 'boolean' },
         defaultValue: false,
         group: 'Layout',
-        description: 'Remove the bottom margin below the table.',
+        description: 'Removes the space under the table.',
       },
       {
         name: 'paginated',
-        label: 'Paginated',
+        label: 'Split into pages',
         type: { kind: 'boolean' },
         defaultValue: false,
         group: 'Behavior',
-        description: 'Show pagination navigation below the table. Requires a page count and an On page change handler.',
+        description: 'Shows page buttons under the table. Then set the number of pages and what happens on a page change (Events).',
       },
       {
         name: 'pageCount',
-        label: 'Page count',
+        label: 'Number of pages',
         type: { kind: 'number', min: 1, step: 1, integer: true },
         group: 'Behavior',
-        description: 'The total number of pages available. Required when paginated.',
+        description: 'How many pages there are in total.',
         requiredWhen: isPaginated,
         visibleWhen: paginationVisible,
       },
@@ -1177,7 +1187,7 @@ export const dataDisplayComponents: ComponentDef[] = [
         label: 'Current page',
         type: { kind: 'number', min: 1, step: 1, integer: true },
         group: 'Behavior',
-        description: 'The current page number (1-based). Bind it to state and update it in On page change.',
+        description: 'Which page is showing (the first page is 1). Link it to a variable under “Value binding”.',
         visibleWhen: paginationVisible,
       },
       {
@@ -1200,10 +1210,10 @@ export const dataDisplayComponents: ComponentDef[] = [
       },
       {
         name: 'maxVisiblePageButtons',
-        label: 'Max page buttons',
+        label: 'Page number buttons',
         type: { kind: 'number', min: 1, step: 1, integer: true },
         group: 'Behavior',
-        description: 'The maximum number of page number buttons to display.',
+        description: 'How many page number buttons are shown at most.',
         visibleWhen: paginationVisible,
       },
       TEST_ID_PROP,
@@ -1388,17 +1398,18 @@ export const dataDisplayComponents: ComponentDef[] = [
     props: [
       {
         name: 'direction',
-        label: 'Direction',
+        label: 'Arrange',
         type: {
           kind: 'enum',
           options: [
-            { value: 'column', label: 'Column (label above value)' },
-            { value: 'row', label: 'Row (label beside value)' },
+            { value: 'column', label: 'Label above value' },
+            { value: 'row', label: 'Label beside value' },
           ],
+          display: 'direction',
         },
         defaultValue: 'column',
         group: 'Layout',
-        description: 'How each label and value pair is laid out.',
+        description: 'Each label above its value, or label and value side by side.',
       },
       TEST_ID_PROP,
     ],
@@ -1477,7 +1488,7 @@ export const dataDisplayComponents: ComponentDef[] = [
         type: { kind: 'string', placeholder: 'e.g. 1,250 or {{ dealCount }}' },
         required: true,
         group: 'Content',
-        description: "The item's primary number (text or a number).",
+        description: 'The big number. Type it, or click { } to show a CRM property or other data.',
       },
       {
         name: 'id',
@@ -1509,16 +1520,16 @@ export const dataDisplayComponents: ComponentDef[] = [
         type: { kind: 'string', placeholder: 'e.g. 12.5%' },
         required: true,
         group: 'Content',
-        description: 'The text displayed as the trend value.',
+        description: 'The change, e.g. 12.5%.',
       },
       {
         name: 'direction',
-        label: 'Direction',
+        label: 'Arrow',
         type: { kind: 'enum', options: TREND_DIRECTION_OPTIONS },
         required: true,
         defaultValue: 'increase',
         group: 'Appearance',
-        description: 'The direction of the trend arrow.',
+        description: 'An up arrow (increase) or a down arrow (decrease).',
       },
       {
         name: 'color',
@@ -1526,12 +1537,12 @@ export const dataDisplayComponents: ComponentDef[] = [
         type: {
           kind: 'enum',
           options: [
-            { value: 'green', label: 'Green' },
-            { value: 'red', label: 'Red' },
+            { value: 'green', label: 'Green', swatch: HS_SWATCH.success },
+            { value: 'red', label: 'Red', swatch: HS_SWATCH.danger },
           ],
         },
         group: 'Appearance',
-        description: 'The color of the trend arrow. When unset, increases are green and decreases red.',
+        description: 'When not set, up arrows are green and down arrows red. Pick one to show a drop as good news (e.g. fewer tickets).',
       },
       TEST_ID_PROP,
     ],
@@ -1543,6 +1554,11 @@ export const dataDisplayComponents: ComponentDef[] = [
     category: 'Data display',
     description: 'Shows progress as a bar, with an optional title, value description and completion percentage.',
     icon: SlidersHorizontalIcon,
+    tips: [
+      { text: 'Change the color at different percentages, e.g. green from 80%, red below 40%', action: { kind: 'rules', prop: 'variant' } },
+      { text: 'Fill the bar from a CRM property or other data', action: { kind: 'data', prop: 'value' } },
+      { text: 'Show different text at different percentages', action: { kind: 'rules', prop: 'valueDescription' } },
+    ],
     docsUrl: `${STANDARD_DOCS}/progress-bar`,
     importFrom: '@hubspot/ui-extensions',
     keywords: ['progress', 'completion', 'percent', 'meter', 'goal', 'quota'],
@@ -1563,7 +1579,7 @@ export const dataDisplayComponents: ComponentDef[] = [
         label: 'Title',
         type: { kind: 'string' },
         group: 'Content',
-        description: 'The text displayed above the progress bar.',
+        description: 'The text above the bar.',
       },
       {
         name: 'value',
@@ -1571,22 +1587,22 @@ export const dataDisplayComponents: ComponentDef[] = [
         type: { kind: 'number', min: 0 },
         defaultValue: 0,
         group: 'Content',
-        description: 'The progress made so far.',
+        description: 'How far along it is, e.g. 3 (of a maximum of 5). Click fx to use a CRM property.',
       },
       {
         name: 'maxValue',
-        label: 'Max value',
+        label: 'Maximum',
         type: { kind: 'number', min: 0 },
         defaultValue: 100,
         group: 'Content',
-        description: 'The maximum value of the progress bar.',
+        description: 'The value that means complete (100%).',
       },
       {
         name: 'valueDescription',
-        label: 'Value description',
+        label: 'Value text',
         type: { kind: 'string', placeholder: 'e.g. 150 out of 250' },
         group: 'Content',
-        description: 'Text that explains the current value, such as "150 out of 250".',
+        description: 'Words that explain the value, e.g. “3 of 5 milestones”.',
       },
       {
         name: 'showPercentage',
@@ -1594,7 +1610,7 @@ export const dataDisplayComponents: ComponentDef[] = [
         type: { kind: 'boolean' },
         defaultValue: false,
         group: 'Appearance',
-        description: 'Display the completion percentage.',
+        description: 'Shows the percentage complete next to the title.',
       },
       {
         name: 'variant',
@@ -1602,15 +1618,14 @@ export const dataDisplayComponents: ComponentDef[] = [
         type: {
           kind: 'enum',
           options: [
-            { value: 'success', label: 'Green (success)' },
-            { value: 'warning', label: 'Yellow (warning)' },
-            { value: 'danger', label: 'Red (danger)' },
+            { value: 'success', label: 'Green (success)', swatch: HS_SWATCH.success },
+            { value: 'warning', label: 'Yellow (warning)', swatch: HS_SWATCH.warning },
+            { value: 'danger', label: 'Red (danger)', swatch: HS_SWATCH.danger },
           ],
         },
         defaultValue: 'success',
-        group: 'Appearance',
-        description:
-          'The bar’s color (HubSpot prop: variant). To change it by percentage — e.g. green at 80% or more, red below 40% — click the Rules button next to it.',
+        group: 'Content',
+        description: 'The bar’s color. To change it at different percentages (e.g. green from 80%, yellow from 40%, red below), click Rules next to it.',
       },
       {
         name: 'aria-label',
@@ -1629,6 +1644,7 @@ export const dataDisplayComponents: ComponentDef[] = [
     category: 'Data display',
     description: 'A 0-100 score shown as a color-coded circle: red up to 32, yellow up to 65, green above.',
     icon: CircleGaugeIcon,
+    tips: [{ text: 'Show a score from a CRM property, e.g. the lead score', action: { kind: 'data', prop: 'score' } }],
     docsUrl: `${STANDARD_DOCS}/scorecircle`,
     importFrom: '@hubspot/ui-extensions',
     keywords: ['score', 'rating', 'health', 'lead score', 'gauge', 'grade'],
@@ -1641,7 +1657,7 @@ export const dataDisplayComponents: ComponentDef[] = [
         type: { kind: 'number', min: 0, max: 100, step: 1, integer: true },
         required: true,
         group: 'Content',
-        description: 'The score to display, between 0 and 100. Decimals are rounded to the nearest integer.',
+        description: 'A number from 0 to 100. HubSpot colors it: red up to 32, yellow up to 65, green above.',
       },
       TEST_ID_PROP,
     ],
@@ -1668,22 +1684,22 @@ export const dataDisplayComponents: ComponentDef[] = [
         type: { kind: 'stringList', placeholder: 'Step name' },
         required: true,
         group: 'Content',
-        description: 'The name of each step, in order.',
+        description: 'The name of each step, in order. Type a name and press Enter to add it.',
       },
       {
         name: 'currentStep',
         label: 'Current step',
         type: { kind: 'number', min: 0, step: 1, integer: true },
         group: 'Content',
-        description: 'The active step. Steps are zero-based: the first step is 0.',
+        description: 'Which step is active. The first step is 0, the second 1, and so on.',
       },
       {
         name: 'direction',
-        label: 'Direction',
-        type: { kind: 'enum', options: enumOptions('horizontal', 'vertical') },
+        label: 'Arrange',
+        type: { kind: 'enum', options: [{ value: 'horizontal', label: 'In a row' }, { value: 'vertical', label: 'Stacked' }], display: 'direction' },
         defaultValue: 'horizontal',
         group: 'Layout',
-        description: 'The orientation of the indicator.',
+        description: 'Steps in a row, or one under the other.',
       },
       {
         name: 'circleSize',
@@ -1695,7 +1711,7 @@ export const dataDisplayComponents: ComponentDef[] = [
       },
       {
         name: 'variant',
-        label: 'Variant',
+        label: 'Style',
         type: {
           kind: 'enum',
           options: [
@@ -1706,7 +1722,7 @@ export const dataDisplayComponents: ComponentDef[] = [
         },
         defaultValue: 'default',
         group: 'Appearance',
-        description: 'Spacing: compact shows only the active step title; flush also removes left and right margins.',
+        description: 'Compact shows only the active step’s name; flush also removes the side margins.',
       },
       TEST_ID_PROP,
     ],
@@ -1738,18 +1754,18 @@ export const dataDisplayComponents: ComponentDef[] = [
         type: { kind: 'string' },
         required: true,
         group: 'Content',
-        description: 'The bold title of the alert.',
+        description: 'The bold first line of the alert.',
       },
       {
         name: 'variant',
-        label: 'Variant',
+        label: 'Color',
         type: {
           kind: 'enum',
-          options: ALERT_VARIANTS.map((o) => ({ ...o, label: humanize(String(o.value)) })),
+          options: ALERT_VARIANTS.map((o) => ({ ...o, label: ALERT_LABELS[String(o.value)] ?? humanize(String(o.value)), swatch: HS_SWATCH[o.value as keyof typeof HS_SWATCH] ?? (o.value === 'error' ? HS_SWATCH.danger : undefined) })),
         },
         defaultValue: 'info',
         group: 'Appearance',
-        description: 'The color of the alert.',
+        description: 'Blue for information, yellow for warnings, green for success, red for errors, purple for tips.',
       },
       TEST_ID_PROP,
     ],
@@ -1776,26 +1792,26 @@ export const dataDisplayComponents: ComponentDef[] = [
         label: 'Title',
         type: { kind: 'string' },
         group: 'Content',
-        description: 'The text of the title header.',
+        description: 'The heading, e.g. “No deals yet”.',
       },
       {
         name: 'imageName',
-        label: 'Image',
+        label: 'Picture',
         type: {
           kind: 'enum',
           options: EMPTY_STATE_IMAGE_NAMES.map((value) => ({ value, label: humanize(value) })),
         },
         defaultValue: 'emptyStateCharts',
         group: 'Appearance',
-        description: 'The illustration to display.',
+        description: 'Which HubSpot illustration to show.',
       },
       {
         name: 'imageWidth',
-        label: 'Image width',
+        label: 'Picture width (px)',
         type: { kind: 'number', min: 0, step: 1 },
         defaultValue: DEFAULT_IMAGE_WIDTH,
         group: 'Appearance',
-        description: 'The maximum width of the image container, in pixels.',
+        description: 'The largest width of the picture, in pixels.',
       },
       {
         name: 'layout',
@@ -1803,23 +1819,23 @@ export const dataDisplayComponents: ComponentDef[] = [
         type: { kind: 'enum', options: enumOptions('horizontal', 'vertical') },
         defaultValue: 'horizontal',
         group: 'Layout',
-        description: 'Lay out the image and text side by side or stacked.',
+        description: 'Picture and text side by side, or one above the other.',
       },
       {
         name: 'reverseOrder',
-        label: 'Reverse order',
+        label: 'Text first',
         type: { kind: 'boolean' },
         defaultValue: false,
         group: 'Layout',
-        description: 'Show the text before the image (also read first by screen readers).',
+        description: 'Shows the text before the picture (screen readers read it first too).',
       },
       {
         name: 'flush',
-        label: 'Flush',
+        label: 'No space around',
         type: { kind: 'boolean' },
         defaultValue: false,
         group: 'Layout',
-        description: 'Remove the default vertical margins.',
+        description: 'Removes the space above and below.',
       },
       TEST_ID_PROP,
     ],
@@ -1853,7 +1869,7 @@ export const dataDisplayComponents: ComponentDef[] = [
       },
       {
         name: 'type',
-        label: 'Image type',
+        label: 'Picture',
         type: {
           kind: 'enum',
           options: [
@@ -1864,7 +1880,7 @@ export const dataDisplayComponents: ComponentDef[] = [
         },
         defaultValue: 'error',
         group: 'Appearance',
-        description: 'The type of image to display.',
+        description: 'Which illustration to show: an error, support, or a lock (no access).',
       },
       TEST_ID_PROP,
     ],
@@ -1876,6 +1892,7 @@ export const dataDisplayComponents: ComponentDef[] = [
     category: 'Feedback & status',
     description: 'A spinner that shows the extension is loading or processing data.',
     icon: LoaderCircleIcon,
+    tips: [{ text: 'Show it only while data is loading', action: { kind: 'condition' } }],
     docsUrl: `${STANDARD_DOCS}/loading-spinner`,
     importFrom: '@hubspot/ui-extensions',
     keywords: ['loading', 'spinner', 'busy', 'wait', 'progress', 'pending'],
@@ -1888,7 +1905,7 @@ export const dataDisplayComponents: ComponentDef[] = [
         type: { kind: 'string' },
         required: true,
         group: 'Content',
-        description: 'The text shown next to the spinner (always available to screen readers).',
+        description: 'What is loading, e.g. “Loading deals…”. Screen readers always read it.',
       },
       {
         name: 'showLabel',
@@ -1896,7 +1913,7 @@ export const dataDisplayComponents: ComponentDef[] = [
         type: { kind: 'boolean' },
         defaultValue: false,
         group: 'Appearance',
-        description: 'Display the label next to the spinner.',
+        description: 'Shows the text next to the spinner.',
       },
       {
         name: 'size',
@@ -1912,7 +1929,7 @@ export const dataDisplayComponents: ComponentDef[] = [
         type: { kind: 'enum', options: enumOptions('inline', 'centered') },
         defaultValue: 'inline',
         group: 'Layout',
-        description: 'Show the spinner inline or centered in the available space.',
+        description: 'Next to other content, or centered in the space.',
       },
       TEST_ID_PROP,
     ],

@@ -144,6 +144,7 @@ function collectSites(ext: Extension, includeDetached: boolean): Site[] {
           code(s, 'value', 'code');
           break;
         case 'addAlert':
+          code(s, 'alertTypeExpr', 'code');
           code(s, 'title', 'template');
           code(s, 'message', 'template');
           break;

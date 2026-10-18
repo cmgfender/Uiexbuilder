@@ -505,3 +505,135 @@
   background: var(--ub-info-soft);
   color: var(--ub-info);
 }
+
+/* ---------- Key check (before uploading) ---------- */
+.ub-dp-keycheck {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0 0;
+  color: var(--ub-text-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.ub-dp-keycheck svg {
+  flex: none;
+  margin-top: 1px;
+}
+.ub-dp-keycheck--ok {
+  padding: 6px 8px;
+  border-radius: var(--ub-radius);
+  background: var(--ub-success-soft);
+  color: var(--ub-success);
+}
+.ub-dp-keycheck--ok strong {
+  font-weight: 600;
+}
+
+/* A problem with the key or its account, with the fix. */
+.ub-dp-problem {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--ub-border);
+  border-left: 4px solid var(--ub-warning);
+  border-radius: var(--ub-radius);
+  background: var(--ub-warning-soft);
+  color: var(--ub-text);
+  font-size: 13px;
+  line-height: 1.5;
+  scroll-margin: 12px 0 72px;
+}
+.ub-dp-problem p {
+  margin: 0;
+}
+.ub-dp-problem__title {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.35;
+}
+.ub-dp-problem__title svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--ub-warning);
+}
+.ub-dp-problem__account {
+  color: var(--ub-text-2);
+}
+.ub-dp-problem__said {
+  padding: 6px 8px;
+  border-radius: var(--ub-radius);
+  background: var(--ub-surface);
+  color: var(--ub-text-2);
+}
+.ub-dp-problem__steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ub-dp-problem__actions {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ub-dp-problem__anyway {
+  color: var(--ub-text-3);
+  font-size: 12px;
+}
+.ub-dp-accounts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+.ub-dp-accounts > div {
+  padding: 6px 10px;
+  border-radius: var(--ub-radius);
+  background: var(--ub-surface);
+  border: 1px solid var(--ub-border);
+}
+.ub-dp-accounts dt {
+  color: var(--ub-text-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.ub-dp-accounts dd {
+  margin: 1px 0 0;
+  font-weight: 600;
+}
+.ub-dp-keystate {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ub-text-2);
+  text-align: left;
+}
+.ub-dp-keystate--ok {
+  color: var(--ub-success);
+}
+.ub-dp-keystate--warn {
+  color: var(--ub-warning);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.ub-dp-keystate--warn:focus-visible {
+  outline: none;
+  box-shadow: var(--ub-focus);
+  border-radius: var(--ub-radius-sm);
+}

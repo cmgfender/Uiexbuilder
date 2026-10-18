@@ -28,6 +28,14 @@ export interface ServerConfig {
    * Optional for backwards compatibility; configFromEnv always sets it.
    */
   allowedPortals?: number[];
+  /**
+   * The status page (/status): signed-in HubSpot users whose email is in ADMIN_EMAILS, or who signed
+   * in to an account in ADMIN_PORTALS, may see it. Both empty = nobody. Optional (configFromEnv sets them).
+   */
+  adminEmails?: string[];
+  adminPortals?: number[];
+  /** Short git commit the host built the server from (RENDER_GIT_COMMIT …), shown on the status page. */
+  buildCommit?: string;
   /** Cookie `Secure` flag (false only for http://localhost development). */
   secureCookies: boolean;
   /** Injected fetch (tests use the fake HubSpot handler). Defaults to globalThis.fetch. */

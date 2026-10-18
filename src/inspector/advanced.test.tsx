@@ -22,6 +22,7 @@ describe('Advanced tab', () => {
   it('sets a condition with live result and presets', async () => {
     const node = selectTop();
     render(<Inspector />);
+    await userEvent.click(screen.getByRole('button', { name: 'Show when: edit as code' }));
     const input = screen.getByLabelText('Visibility condition');
     fireEvent.change(input, { target: { value: 'count > 0' } });
     expect(nodeById(node.id).condition).toBe('count > 0');

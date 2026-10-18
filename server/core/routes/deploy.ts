@@ -6,6 +6,9 @@
  *                                  the NEW deployId of each answer). The id travels in the body so
  *                                  it never shows up in access logs.
  *   GET    /api/deploy/:deployId   same as POST /api/deploy/status (older clients)
+ *   POST   /api/deploy/check-key   DeployKeyCheckRequest → DeployKeyCheck: which account the key
+ *                                  belongs to, whether it has "Developer projects", whether publishing
+ *                                  can go ahead (before uploading anything; see deploy/keyCheck.ts)
  *   GET    /api/deploy/key         → DeployKeyInfo — always { remembered: false }: keys are never stored
  *   DELETE /api/deploy/key         → { remembered: false } (kept for older clients)
  *
@@ -18,23 +21,32 @@
  * `uiex_deploy` cookie (`__Host-uiex_deploy` on https) and seals its hash into the job; polling
  * without that cookie answers 404 deploy_not_found.
  *
+ * Errors about the key or its account (missing_scope, forbidden, not_available, portal_mismatch,
+ * portal_not_allowed) carry `error.key`: the account the key belongs to and its key page.
+ *
  * All routes require the CSRF header (Route default). The connector answers 404 feature_disabled
  * for all of them when ENABLE_DEPLOY is false.
  */
 import { CONNECTOR_ROUTES, type ConnectorErrorBody, type DeployKeyInfo } from '../../../src/connect/types';
 import { HubSpotApiError, type RequestContext, type Route, type SessionData } from '../types';
-import { ConnectorError, json, readJsonBody } from '../http';
+import { ConnectorError, ERROR_CODE_HEADER, json, readJsonBody } from '../http';
 import { checkConfig } from '../config';
 import { randomToken } from '../crypto';
 import { CookieSession, cookieName } from '../session';
 import { DEPLOY_LIMITS } from '../deploy/paths';
-import { DEPLOY_BINDING_COOKIE, DEPLOY_BINDING_TTL_SECONDS, PortalMismatchError, advanceDeploy, bindingHash, startDeploy } from '../deploy/job';
+import { DEPLOY_BINDING_COOKIE, DEPLOY_BINDING_TTL_SECONDS, DeployKeyError, PortalMismatchError, advanceDeploy, bindingHash, startDeploy } from '../deploy/job';
+import { KEY_CHECK_MAX_BODY_BYTES, checkDeployKey } from '../deploy/keyCheck';
 
 const BINDING_RE = /^[A-Za-z0-9_-]{32,64}$/;
 
-function portalMismatch(err: PortalMismatchError): Response {
-  const body: ConnectorErrorBody = { error: { code: err.code, message: err.message, status: err.status, portalId: err.keyPortalId } };
-  return json(body, err.status);
+/** A refusal about the key or its account, with the account the key belongs to (`error.key`). */
+function keyErrorResponse(err: PortalMismatchError | DeployKeyError): Response {
+  const error: ConnectorErrorBody['error'] = { code: err.code, message: err.message, status: err.status };
+  if (err instanceof PortalMismatchError) error.portalId = err.keyPortalId;
+  if (err.extra.correlationId) error.correlationId = err.extra.correlationId;
+  if (err.extra.requiredScopes?.length) error.requiredScopes = err.extra.requiredScopes;
+  if (err.key) error.key = err.key;
+  return json({ error } satisfies ConnectorErrorBody, err.status, { [ERROR_CODE_HEADER]: err.code });
 }
 
 function cookieSession(ctx: RequestContext): CookieSession | null {
@@ -54,13 +66,16 @@ function ensureBinding(ctx: RequestContext): string {
   return value;
 }
 
-/** The signed-in session when HubSpot sign-in is set up (throws 401 when not signed in); null during setup. */
-async function deployer(ctx: RequestContext): Promise<SessionData | null> {
+/**
+ * The signed-in session when HubSpot sign-in is set up (throws 401 when not signed in); null during
+ * setup. `confirm` (deploys) re-checks the grant with HubSpot; a key check only needs a fresh session.
+ */
+async function deployer(ctx: RequestContext, confirm = true): Promise<SessionData | null> {
   if (!checkConfig(ctx.config).oauthConfigured) return null;
   try {
     // Confirms with HubSpot that the grant is still live (a refresh), so a copy of the cookie of a
     // session that has signed out (its refresh token revoked) can't deploy.
-    if (ctx.signedIn) return await ctx.signedIn({ confirm: true });
+    if (ctx.signedIn) return await ctx.signedIn({ confirm });
     await ctx.hubspot();
     const data = await ctx.session.get();
     if (data) return data;
@@ -90,7 +105,21 @@ export const deployRoutes: Route[] = [
         const { status } = await startDeploy(ctx.config, body, { signedIn, binding });
         return json(status);
       } catch (err) {
-        if (err instanceof PortalMismatchError) return portalMismatch(err);
+        if (err instanceof PortalMismatchError || err instanceof DeployKeyError) return keyErrorResponse(err);
+        throw err;
+      }
+    },
+  },
+  {
+    method: 'POST',
+    path: CONNECTOR_ROUTES.deployCheckKey,
+    handler: async (ctx) => {
+      const signedIn = await deployer(ctx, false);
+      const body = await readJsonBody(ctx.request, KEY_CHECK_MAX_BODY_BYTES);
+      try {
+        return json(await checkDeployKey(ctx.config, body, { signedIn }));
+      } catch (err) {
+        if (err instanceof DeployKeyError) return keyErrorResponse(err);
         throw err;
       }
     },

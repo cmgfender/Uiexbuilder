@@ -2,7 +2,7 @@
  * Inspector header for the selected component: icon, label, editable layer name, type, docs link,
  * status badges and the overflow menu (duplicate, copy JSX, copy, delete).
  */
-import { ArrowUpLeft, BookOpen, Code2, Copy, CopyPlus, Ellipsis, ExternalLink, Trash2 } from 'lucide-react';
+import { ArrowUpLeft, BookOpen, CircleHelp, Code2, Copy, CopyPlus, Ellipsis, ExternalLink, Trash2 } from 'lucide-react';
 import { useEditor } from '../model/store';
 import { findParent, nodeLabel } from '../model/tree';
 import type { Extension, Project, UINode } from '../model/types';
@@ -11,6 +11,7 @@ import type { ComponentDef } from '../registry/types';
 import { formatShortcut, shortcutLabel } from '../shell/shortcuts';
 import { Badge, IconButton, Menu, useMenu, useToast, type MenuItem } from '../ui';
 import { copyText, nodeJsx } from './clipboard';
+import { useInspectorPrefs } from './prefs';
 
 export interface NodeHeaderProps {
   node: UINode;
@@ -22,6 +23,7 @@ export interface NodeHeaderProps {
 export function NodeHeader({ node, def, ext, project }: NodeHeaderProps) {
   const toast = useToast();
   const menu = useMenu();
+  const showHelp = useInspectorPrefs((s) => s.showHelp);
   const updateNode = useEditor((s) => s.updateNode);
   const ref = findParent(ext, node.id);
   const parentId = ref && ref.parentId !== ext.rootId ? ref.parentId : null;
@@ -65,6 +67,11 @@ export function NodeHeader({ node, def, ext, project }: NodeHeaderProps) {
           },
         ]
       : []),
+    {
+      label: showHelp ? 'Hide help text under settings' : 'Show help text under settings',
+      icon: <CircleHelp size={14} />,
+      onSelect: () => useInspectorPrefs.getState().setShowHelp(!showHelp),
+    },
     { separator: true, label: '' },
     {
       label: node.locked ? 'Delete (unlock first)' : 'Delete',
@@ -103,7 +110,7 @@ export function NodeHeader({ node, def, ext, project }: NodeHeaderProps) {
         <div className="ub-insp-head__titles">
           <div className="ub-insp-head__title">
             <span className="ub-insp-head__label">{def.label}</span>
-            <code className="ub-insp-head__type" title="Component type in code">
+            <code className="ub-insp-head__type" title={`HubSpot component: <${node.type}>`}>
               {node.type}
             </code>
             {def.docsUrl && (
@@ -112,9 +119,10 @@ export function NodeHeader({ node, def, ext, project }: NodeHeaderProps) {
                 href={def.docsUrl}
                 target="_blank"
                 rel="noopener noreferrer"
+                aria-label={`${def.label} documentation (opens in a new tab)`}
                 title={`${def.label} documentation (opens in a new tab)`}
               >
-                <BookOpen size={12} aria-hidden /> Docs
+                <BookOpen size={13} aria-hidden />
               </a>
             )}
           </div>

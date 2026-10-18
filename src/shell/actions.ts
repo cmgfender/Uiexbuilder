@@ -167,6 +167,18 @@ export function removeNodeSafe(id: NodeId, notify: Notify = noop): boolean {
   return true;
 }
 
+/** Deletes a multi-selection in one undo step (locked components stay, with a note). */
+export function removeNodesSafe(ids: NodeId[], notify: Notify = noop): number {
+  const ext = activeExt();
+  const live = ids.filter((id) => !!ext.nodes[id] && id !== ext.rootId);
+  const locked = live.filter((id) => ext.nodes[id].locked);
+  const targets = live.filter((id) => !ext.nodes[id].locked);
+  if (targets.length) useEditor.getState().removeNodes(targets);
+  if (locked.length) notify(`${locked.length === 1 ? `“${displayName(ext, locked[0])}” is` : `${locked.length} components are`} locked — unlock to delete.`);
+  else if (targets.length > 1) notify(`Deleted ${targets.length} components`);
+  return targets.length;
+}
+
 export function cutNodeSafe(id: NodeId, notify: Notify = noop): boolean {
   const ext = activeExt();
   const node = ext.nodes[id];

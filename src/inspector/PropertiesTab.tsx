@@ -2,8 +2,24 @@
  * Properties tab: text content, props grouped by PropDef.group, value binding, overlay slots,
  * children and custom (unmodelled) props.
  */
-import { useMemo, useRef, useState } from 'react';
-import { ArrowDownToLine, Link2, ListFilter, MousePointerClick, Plus, ShieldAlert, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ArrowDownToLine,
+  ChevronRight,
+  Database,
+  Eye,
+  Link2,
+  ListFilter,
+  MousePointerClick,
+  PanelTop,
+  Plus,
+  Repeat,
+  Search,
+  ShieldAlert,
+  Trash2,
+  X,
+  Zap,
+} from 'lucide-react';
 import { newId, toIdentifier } from '../model/ids';
 import { canAccept } from '../model/rules';
 import { useEditor } from '../model/store';
@@ -19,20 +35,36 @@ import {
   type UINode,
 } from '../model/types';
 import { getComponent, listComponents } from '../registry';
-import type { ComponentDef, EventDef, PropDef, PropGroup } from '../registry/types';
+import type { ComponentDef, ComponentTip, EventDef, PropDef, PropGroup, SlotDef, TipAction } from '../registry/types';
 import { Badge, Button, cx, IconButton, Segmented, Select, Switch, TextInput } from '../ui';
 import { ComponentPicker } from './ComponentPicker';
 import { ExpressionInput, TemplateInput } from './controls';
 import { createdDefaultText } from './editors';
 import { asOneUndoStep } from './history';
+import { nodeHints } from './nodeHints';
 import { confirmModalTemplate } from './overlayPresets';
+import { useInspectorPrefs } from './prefs';
 import { PropRow } from './PropRow';
 import { isPropVisible } from './propValue';
+import { propSelector, revealInInspector, usePropRequests } from './requests';
 import { initialRules, parseRules, rulesToExpr, type RuleSet } from './rules';
 import { RulesEditor } from './RulesEditor';
-import { InspectorSection } from './Section';
+import { InspectorSection, useSectionStore } from './Section';
+import { elsewhereHint, FILTER_MIN_SETTINGS, matchesWords, propMatches, queryWords } from './settingsFilter';
+import { activeTipsFor, tipsFor } from './tips';
 
 export const GROUP_ORDER: PropGroup[] = ['Content', 'Appearance', 'Layout', 'Behavior', 'Validation', 'Data', 'Advanced'];
+
+/** The groups in the order the component wants them (most-used first), Content always first. */
+export function componentGroupOrder(def: ComponentDef): PropGroup[] {
+  const first: PropGroup[] = (def.groupOrder ?? []).filter((g) => g !== 'Content' && g !== 'Advanced');
+  return ['Content', ...first, ...GROUP_ORDER.filter((g) => g !== 'Content' && !first.includes(g))];
+}
+
+/** Containers whose children are what the person came to edit: their list comes first. */
+function childrenFirst(def: ComponentDef): boolean {
+  return def.children.mode === 'nodes' && def.category === 'Layout' && !def.props.some((p) => (p.group ?? 'Content') === 'Content');
+}
 
 export interface PropertiesTabProps {
   node: UINode;
@@ -41,50 +73,290 @@ export interface PropertiesTabProps {
 }
 
 export function PropertiesTab({ node, def, ext }: PropertiesTabProps) {
-  const groups = useMemo(() => {
+  const [query, setQuery] = useState('');
+  const words = useMemo(() => queryWords(query), [query]);
+  const filtering = words.length > 0;
+  const visible = useMemo(
     // Deprecated props only appear while set, so they can be removed.
-    const visible = def.props.filter((p) => isPropVisible(p, node.props) && (!p.deprecated || node.props[p.name] !== undefined));
-    return GROUP_ORDER.map((g) => ({ group: g, props: visible.filter((p) => (p.group ?? 'Content') === g) })).filter(
-      (g) => g.props.length > 0,
-    );
-  }, [def, node.props]);
+    () => def.props.filter((p) => isPropVisible(p, node.props) && (!p.deprecated || node.props[p.name] !== undefined)),
+    [def, node.props],
+  );
+  const groups = useMemo(() => {
+    const shown = filtering ? visible.filter((p) => propMatches(p, words)) : visible;
+    return componentGroupOrder(def)
+      .map((g) => ({ group: g, props: shown.filter((p) => (p.group ?? 'Content') === g) }))
+      .filter((g) => g.props.length > 0);
+  }, [def, visible, filtering, words]);
   const content = groups.find((g) => g.group === 'Content');
-  const rest = groups.filter((g) => g.group !== 'Content');
+  const advanced = groups.find((g) => g.group === 'Advanced');
+  const rest = groups.filter((g) => g.group !== 'Content' && g.group !== 'Advanced');
   const hasText = def.children.mode === 'text';
+  const isContainer = def.children.mode === 'nodes';
+  const inputBinding = !!def.valueBinding && def.category === 'Forms & inputs';
+
+  const showFilter = settingCount(def, visible) >= FILTER_MIN_SETTINGS || query !== '';
+
+  // What matches while filtering (sections without a match are left out).
+  const textShown = hasText && (!filtering || matchesWords(words, ['Text', 'content', 'words', 'label', node.text]));
+  const bindingShown =
+    !!def.valueBinding && (!filtering || matchesWords(words, ['Value binding', 'bind link variable state value', def.valueBinding.prop]));
+  const slotShown = (slot: SlotDef) =>
+    !filtering || matchesWords(words, [slot.label, slot.name, slot.description, 'modal panel tooltip pop-up popup confirmation overlay']);
+  const childrenShown =
+    isContainer &&
+    (!filtering ||
+      matchesWords(words, [
+        'inside children child components add',
+        ...node.children.map((id) => (ext.nodes[id] ? nodeLabel(ext.nodes[id], getComponent(ext.nodes[id].type)?.label) : '')),
+      ]));
+  const customShown = !filtering || matchesWords(words, ['custom props', ...Object.keys(node.props)]);
+  const tips = filtering ? [] : tipsFor(def, node);
+  const activeTips = filtering ? [] : activeTipsFor(def, node);
+
+  const contentSection = (textShown || content) && (
+    <InspectorSection
+      id="group:Content"
+      title="Content"
+      meta={<SetCount node={node} props={content?.props ?? []} />}
+      forceOpen={filtering}
+    >
+      {textShown && <TextContent node={node} ext={ext} />}
+      {content?.props.map((p) => (
+        <BoundPropRow key={`${node.id}:${p.name}`} node={node} def={def} prop={p} ext={ext} />
+      ))}
+    </InspectorSection>
+  );
+  const childrenSection = childrenShown && <ChildrenSection node={node} def={def} ext={ext} forceOpen={filtering} />;
+  const tipsSection = (tips.length > 0 || activeTips.length > 0) && <TipsSection node={node} def={def} tips={tips} active={activeTips} />;
+  const groupSection = (g: { group: PropGroup; props: PropDef[] }) => (
+    <InspectorSection
+      key={g.group}
+      id={`group:${g.group}`}
+      title={g.group}
+      defaultOpen={g.group !== 'Advanced'}
+      forceOpen={filtering}
+      meta={<SetCount node={node} props={g.props} />}
+    >
+      {g.props.map((p) => (
+        <BoundPropRow key={`${node.id}:${p.name}`} node={node} def={def} prop={p} ext={ext} />
+      ))}
+    </InspectorSection>
+  );
+  const nothing =
+    filtering &&
+    !textShown &&
+    groups.length === 0 &&
+    !bindingShown &&
+    !childrenShown &&
+    !(def.slots ?? []).some(slotShown) &&
+    !(customShown && Object.keys(node.props).some((k) => !def.props.some((p) => p.name === k)));
 
   return (
     <div className="ub-insp-tabpanel">
-      {(hasText || content) && (
-        <InspectorSection id="group:Content" title="Content" meta={<SetCount node={node} props={content?.props ?? []} />}>
-          {hasText && <TextContent node={node} ext={ext} />}
-          {content?.props.map((p) => (
-            <BoundPropRow key={`${node.id}:${p.name}`} node={node} def={def} prop={p} ext={ext} />
+      {showFilter && <SettingsFilter value={query} onChange={setQuery} />}
+      {nothing ? (
+        <NoMatch query={query} onClear={() => setQuery('')} />
+      ) : (
+        <>
+          {childrenFirst(def) && childrenSection}
+          {contentSection}
+          {inputBinding && bindingShown && <BindingSection node={node} def={def} ext={ext} forceOpen={filtering} />}
+          {!childrenFirst(def) && childrenSection}
+          {/* The tips follow the main settings: the Content section, else the first group. */}
+          {!contentSection && rest.slice(0, 1).map(groupSection)}
+          {tipsSection}
+          {(contentSection ? rest : rest.slice(1)).map(groupSection)}
+          {def.slots?.filter(slotShown).map((slot) => (
+            <SlotSection key={slot.name} node={node} slotName={slot.name} def={def} ext={ext} forceOpen={filtering} />
           ))}
-        </InspectorSection>
-      )}
-      {def.valueBinding && <BindingSection node={node} def={def} ext={ext} />}
-      {def.slots?.map((slot) => (
-        <SlotSection key={slot.name} node={node} slotName={slot.name} def={def} ext={ext} />
-      ))}
-      {def.children.mode === 'nodes' && <ChildrenSection node={node} def={def} ext={ext} />}
-      {rest.map((g) => (
-        <InspectorSection
-          key={g.group}
-          id={`group:${g.group}`}
-          title={g.group}
-          defaultOpen={g.group !== 'Advanced'}
-          meta={<SetCount node={node} props={g.props} />}
-        >
-          {g.props.map((p) => (
-            <BoundPropRow key={`${node.id}:${p.name}`} node={node} def={def} prop={p} ext={ext} />
-          ))}
-        </InspectorSection>
-      ))}
-      <CustomPropsSection node={node} def={def} ext={ext} />
-      {groups.length === 0 && !hasText && !def.valueBinding && !def.slots?.length && def.children.mode !== 'nodes' && (
-        <div className="ub-insp-note">This component has no properties.</div>
+          {!inputBinding && bindingShown && <BindingSection node={node} def={def} ext={ext} forceOpen={filtering} />}
+          {advanced && groupSection(advanced)}
+          {customShown && <CustomPropsSection node={node} def={def} ext={ext} forceOpen={filtering} />}
+          {!filtering && groups.length === 0 && !hasText && !def.valueBinding && !def.slots?.length && !isContainer && (
+            <div className="ub-insp-note">This component has no properties.</div>
+          )}
+        </>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Filter settings
+// ---------------------------------------------------------------------------
+
+function settingCount(def: ComponentDef, visible: PropDef[]): number {
+  return visible.length + (def.children.mode === 'text' ? 1 : 0) + (def.valueBinding ? 1 : 0) + (def.slots?.length ?? 0);
+}
+
+/** Whether the Properties tab shows "Filter settings" for this node (enough settings to need it). */
+export function hasSettingsFilter(def: ComponentDef, node: UINode): boolean {
+  const visible = def.props.filter((p) => isPropVisible(p, node.props) && (!p.deprecated || node.props[p.name] !== undefined));
+  return settingCount(def, visible) >= FILTER_MIN_SETTINGS;
+}
+
+/** Focuses the Properties tab's filter box (the `/` shortcut). Returns false when there is none. */
+export function focusSettingsFilter(): boolean {
+  const input = document.querySelector<HTMLInputElement>('.ub-insp [data-insp-filter]');
+  if (!input) return false;
+  input.focus();
+  input.select();
+  return true;
+}
+
+function SettingsFilter({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const ref = useRef<HTMLInputElement>(null);
+  return (
+    <div className="ub-insp-filter" role="search">
+      <Search size={13} aria-hidden className="ub-insp-filter__icon" />
+      <input
+        ref={ref}
+        type="text"
+        className="ub-insp-filter__input"
+        data-insp-filter=""
+        value={value}
+        placeholder="Filter settings"
+        aria-label="Filter settings"
+        aria-keyshortcuts="/"
+        autoComplete="off"
+        spellCheck={false}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape' && value) {
+            e.preventDefault();
+            e.stopPropagation();
+            onChange('');
+          }
+        }}
+      />
+      {value ? (
+        <IconButton
+          size="sm"
+          label="Clear filter"
+          onClick={() => {
+            onChange('');
+            ref.current?.focus();
+          }}
+        >
+          <X size={12} />
+        </IconButton>
+      ) : (
+        <kbd className="ub-insp-filter__key" title="Press / to filter settings" aria-hidden>
+          /
+        </kbd>
+      )}
+    </div>
+  );
+}
+
+function NoMatch({ query, onClear }: { query: string; onClear: () => void }) {
+  const hint = elsewhereHint(query);
+  const setTab = useEditor((s) => s.setRightPanel);
+  return (
+    <div className="ub-insp-nomatch" role="status">
+      <div>No settings match “{query.trim()}”.</div>
+      {hint && (
+        <div className="ub-insp-help">
+          {hint.label}{' '}
+          <button type="button" className="ub-insp-linkbtn" onClick={() => setTab(hint.tab)}>
+            Open {hint.tab === 'events' ? 'Events' : 'Advanced'}
+          </button>
+        </div>
+      )}
+      <div className="ub-insp-row-actions is-center">
+        <Button size="sm" variant="ghost" onClick={onClear}>
+          Clear filter
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// "You can also…" tips
+// ---------------------------------------------------------------------------
+
+const TIP_ICONS: Record<TipAction['kind'], typeof ListFilter> = {
+  rules: ListFilter,
+  data: Database,
+  event: Zap,
+  condition: Eye,
+  repeat: Repeat,
+  binding: Link2,
+  overlay: PanelTop,
+};
+
+/** Runs a tip: opens the place where that power lives and switches it on where it can. */
+export function runTip(node: UINode, def: ComponentDef, action: TipAction): void {
+  const editor = useEditor.getState();
+  switch (action.kind) {
+    case 'rules':
+    case 'data': {
+      editor.setRightPanel('properties');
+      if (action.prop !== '__text') {
+        const prop = def.props.find((p) => p.name === action.prop);
+        if (prop) useSectionStore.getState().setOpen(`group:${prop.group ?? 'Content'}`, true);
+      } else useSectionStore.getState().setOpen('group:Content', true);
+      usePropRequests.getState().request({ nodeId: node.id, prop: action.prop, action: action.kind });
+      return;
+    }
+    case 'event':
+      editor.setRightPanel('events');
+      revealInInspector(`[data-event="${action.event.replace(/["\\]/g, '\\$&')}"]`);
+      return;
+    case 'condition':
+    case 'repeat':
+      editor.setRightPanel('advanced');
+      useSectionStore.getState().setOpen(action.kind === 'condition' ? 'adv:condition' : 'adv:repeat', true);
+      revealInInspector(`[data-adv="${action.kind}"]`);
+      return;
+    case 'binding':
+      editor.setRightPanel('properties');
+      useSectionStore.getState().setOpen('binding', true);
+      revealInInspector('[data-section="binding"]', 'select');
+      return;
+    case 'overlay':
+      editor.setRightPanel('properties');
+      useSectionStore.getState().setOpen('slot:overlay', true);
+      revealInInspector('[data-section="slot:overlay"]', '.ub-insp-row-actions button');
+      return;
+    default:
+      return;
+  }
+}
+
+function TipsSection({ node, def, tips, active }: { node: UINode; def: ComponentDef; tips: ComponentTip[]; active: ComponentTip[] }) {
+  return (
+    <InspectorSection id="tips" title="You can also" className="ub-insp-tips">
+      <ul className="ub-insp-tips__list">
+        {active.map((tip) => {
+          const Icon = TIP_ICONS[tip.action.kind];
+          return (
+            <li key={`on:${JSON.stringify(tip.action)}`}>
+              <button type="button" className="ub-insp-tip is-on" onClick={() => runTip(node, def, tip.action)}>
+                <Icon size={13} aria-hidden />
+                <span>
+                  {tip.text} <span className="ub-insp-tip__on">On · edit</span>
+                </span>
+                <ChevronRight size={13} aria-hidden className="ub-insp-tip__go" />
+              </button>
+            </li>
+          );
+        })}
+        {tips.map((tip) => {
+          const Icon = TIP_ICONS[tip.action.kind];
+          return (
+            <li key={JSON.stringify(tip.action)}>
+              <button type="button" className="ub-insp-tip" onClick={() => runTip(node, def, tip.action)}>
+                <Icon size={13} aria-hidden />
+                <span>{tip.text}</span>
+                <ChevronRight size={13} aria-hidden className="ub-insp-tip__go" />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </InspectorSection>
   );
 }
 
@@ -120,12 +392,14 @@ function textRules(text: string): RuleSet | null {
 
 function TextContent({ node, ext }: { node: UINode; ext: Extension }) {
   const setText = useEditor((s) => s.setText);
+  const showHelp = useInspectorPrefs((s) => s.showHelp);
   const text = node.text ?? '';
   // Decide once per node so the field never swaps element (and loses focus) while typing.
   const [multiline] = useState(() => text.length > 48 || text.includes('\n'));
   const createdText = useMemo(() => createdDefaultText(node.type), [node.type]);
   const [draft, setDraft] = useState<RuleSet | null>(null);
   const rules = draft ?? textRules(text);
+  const helpId = `text-help-${node.id}`;
 
   const changeRules = (next: RuleSet) => {
     if (next.subject.trim() && next.cases.length > 0) {
@@ -143,6 +417,26 @@ function TextContent({ node, ext }: { node: UINode; ext: Extension }) {
     const current = hasTemplate(text) ? '' : text;
     changeRules({ ...start, cases: start.cases.map((c) => ({ ...c, then: current })), otherwise: current });
   };
+
+  // "You can also…" tips: switch on rules, or open the variable picker.
+  const latest = useRef({ rules, toggleRules });
+  latest.current = { rules, toggleRules };
+  useEffect(() => {
+    const check = () => {
+      const req = usePropRequests.getState().take(node.id, '__text');
+      if (!req) return;
+      if (req.action === 'rules') {
+        if (!latest.current.rules) latest.current.toggleRules();
+        revealInInspector(propSelector('__text'), 'select, input');
+      } else {
+        if (latest.current.rules) latest.current.toggleRules();
+        revealInInspector(propSelector('__text'), '.ub-insp-varbtn');
+        setTimeout(() => document.querySelector<HTMLElement>(`.ub-insp ${propSelector('__text')} .ub-insp-varbtn`)?.click(), 80);
+      }
+    };
+    check();
+    return usePropRequests.subscribe(check);
+  }, [node.id]);
 
   return (
     <div className="ub-insp-prop ub-insp-prop--block" data-prop="__text">
@@ -180,6 +474,11 @@ function TextContent({ node, ext }: { node: UINode; ext: Extension }) {
           />
         )}
       </div>
+      {showHelp && !rules && (
+        <div className="ub-insp-prop__desc" id={helpId}>
+          The words it shows. Click <span className="ub-insp-kbd">{'{ }'}</span> to show a CRM property or other data in them.
+        </div>
+      )}
     </div>
   );
 }
@@ -275,7 +574,7 @@ export function setBinding(node: UINode, def: ComponentDef, state: string | unde
   });
 }
 
-function BindingSection({ node, def, ext }: { node: UINode; def: ComponentDef; ext: Extension }) {
+function BindingSection({ node, def, ext, forceOpen }: { node: UINode; def: ComponentDef; ext: Extension; forceOpen?: boolean }) {
   const vb = def.valueBinding!;
   const current = node.binding?.state ?? '';
   const vars = ext.state.filter((s) => compatibleStateType(s.type, vb.stateType) || s.name === current);
@@ -294,10 +593,10 @@ function BindingSection({ node, def, ext }: { node: UINode; def: ComponentDef; e
         </>
       }
       meta={current ? <Badge tone="select">{current}</Badge> : null}
+      forceOpen={forceOpen}
     >
       <div className="ub-insp-help">
-        Keeps <strong>{propLabel}</strong> in sync with a state variable: when the user changes it the variable updates, and changing the
-        variable updates the component.
+        Links <strong>{propLabel}</strong> to a variable (state) so the rest of the card can use it, both ways.
       </div>
       <div className="ub-insp-field">
         <div className="ub-insp-field__label">
@@ -360,7 +659,19 @@ function BindingSection({ node, def, ext }: { node: UINode; def: ComponentDef; e
 
 const ADD_LABELS: Record<string, string> = { Modal: 'Add modal', Panel: 'Add panel', Tooltip: 'Add tooltip' };
 
-function SlotSection({ node, def, slotName, ext }: { node: UINode; def: ComponentDef; slotName: string; ext: Extension }) {
+function SlotSection({
+  node,
+  def,
+  slotName,
+  ext,
+  forceOpen,
+}: {
+  node: UINode;
+  def: ComponentDef;
+  slotName: string;
+  ext: Extension;
+  forceOpen?: boolean;
+}) {
   const slot = def.slots!.find((s) => s.name === slotName)!;
   const ids = node.slots?.[slot.name] ?? [];
   const full = slot.max !== undefined && ids.length >= slot.max;
@@ -388,6 +699,7 @@ function SlotSection({ node, def, slotName, ext }: { node: UINode; def: Componen
       id={`slot:${slot.name}`}
       title={slot.label}
       meta={ids.length ? <span className="ub-insp-setcount">{ids.length}</span> : null}
+      forceOpen={forceOpen}
     >
       {slot.description && <div className="ub-insp-help">{slot.description}</div>}
       {ids.map((cid) => {
@@ -445,33 +757,66 @@ export function addableChildTypes(ext: Extension, node: UINode, def: ComponentDe
   return pool.filter((t) => canAccept(ext, node.id, t).ok);
 }
 
-function ChildrenSection({ node, def, ext }: { node: UINode; def: ComponentDef; ext: Extension }) {
+/** "Inside this layout box", "Inside these tabs". */
+export function insideTitle(def: ComponentDef): string {
+  const label = def.label.toLowerCase();
+  return /[^s]s$/.test(label) ? `Inside these ${label}` : `Inside this ${label}`;
+}
+
+function ChildrenSection({ node, def, ext, forceOpen }: { node: UINode; def: ComponentDef; ext: Extension; forceOpen?: boolean }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const types = useMemo(() => addableChildTypes(ext, node, def), [ext, node, def]);
   const st = useEditor.getState;
   const count = node.children.length;
   return (
-    <InspectorSection id="children" title="Children" meta={<span className="ub-insp-setcount">{count}</span>}>
+    <InspectorSection
+      id="children"
+      title={insideTitle(def)}
+      meta={<span className="ub-insp-setcount">{count}</span>}
+      forceOpen={forceOpen}
+      className="ub-insp-inside"
+    >
       {count === 0 ? (
-        <div className="ub-insp-muted">{def.children.placeholder ?? 'Empty — add components here or drag them onto the canvas.'}</div>
-      ) : (
-        <div className="ub-insp-children">
-          {node.children.map((cid) => {
-            const child = ext.nodes[cid];
-            if (!child) return null;
-            const cdef = getComponent(child.type);
-            const Icon = cdef?.icon ?? MousePointerClick;
-            return (
-              <button key={cid} type="button" className="ub-insp-noderow is-button" onClick={() => st().select(cid)} title="Select">
-                <Icon size={14} aria-hidden />
-                <span className="ub-insp-noderow__label">{nodeLabel(child, cdef?.label)}</span>
-              </button>
-            );
-          })}
+        <div className="ub-insp-empty">
+          Nothing inside yet. Drag components here from the left, or click <strong>Add inside</strong>.
         </div>
+      ) : (
+        <>
+          <div className="ub-insp-help">Click one to change it.</div>
+          <ul className="ub-insp-children" aria-label={insideTitle(def)}>
+            {node.children.map((cid) => {
+              const child = ext.nodes[cid];
+              if (!child) return null;
+              const cdef = getComponent(child.type);
+              const Icon = cdef?.icon ?? MousePointerClick;
+              const hints = nodeHints(child, cdef).slice(0, 2);
+              return (
+                <li key={cid}>
+                  <button
+                    type="button"
+                    className="ub-insp-noderow is-button is-child"
+                    onClick={() => st().select(cid)}
+                    onMouseEnter={() => st().hover(cid)}
+                    onMouseLeave={() => st().hover(null)}
+                    onFocus={() => st().hover(cid)}
+                    onBlur={() => st().hover(null)}
+                    title={`Select ${nodeLabel(child, cdef?.label)}`}
+                  >
+                    <Icon size={14} aria-hidden />
+                    <span className="ub-insp-noderow__text">
+                      <span className="ub-insp-noderow__label">{nodeLabel(child, cdef?.label)}</span>
+                      {hints.length > 0 && <span className="ub-insp-noderow__hint">{hints.map((h) => h.text).join(' · ')}</span>}
+                    </span>
+                    <ChevronRight size={14} aria-hidden className="ub-insp-noderow__go" />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </>
       )}
-      {def.children.required && count === 0 && <div className="ub-field__error">{def.label} needs at least one child.</div>}
+      {def.children.required && count === 0 && <div className="ub-field__error">{def.label} needs at least one component inside.</div>}
       <div className="ub-insp-row-actions">
         <button
           ref={btnRef}
@@ -483,7 +828,7 @@ function ChildrenSection({ node, def, ext }: { node: UINode; def: ComponentDef; 
           onClick={() => setOpen((o) => !o)}
           title={types.length ? 'Add a component at the end' : 'No component can be added here'}
         >
-          <ArrowDownToLine size={13} aria-hidden /> Add child
+          <ArrowDownToLine size={13} aria-hidden /> Add inside
         </button>
       </div>
       <ComponentPicker
@@ -512,7 +857,7 @@ function ChildrenSection({ node, def, ext }: { node: UINode; def: ComponentDef; 
 
 const PROP_NAME_RE = /^[A-Za-z_$][\w$-]*$/;
 
-function CustomPropsSection({ node, def, ext }: { node: UINode; def: ComponentDef; ext: Extension }) {
+function CustomPropsSection({ node, def, ext, forceOpen }: { node: UINode; def: ComponentDef; ext: Extension; forceOpen?: boolean }) {
   const known = useMemo(() => new Set(def.props.map((p) => p.name)), [def]);
   const custom = Object.keys(node.props).filter((k) => !known.has(k));
   const [key, setKey] = useState('');
@@ -547,6 +892,7 @@ function CustomPropsSection({ node, def, ext }: { node: UINode; def: ComponentDe
       title="Custom props"
       defaultOpen={custom.length > 0}
       meta={custom.length ? <span className="ub-insp-setcount">{custom.length}</span> : null}
+      forceOpen={forceOpen && custom.length > 0}
     >
       <div className="ub-insp-help">Props the builder doesn’t model yet. They are passed to the component as-is.</div>
       {custom.map((k) => (

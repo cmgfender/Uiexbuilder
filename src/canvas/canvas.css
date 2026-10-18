@@ -783,8 +783,20 @@
 .ub-cv-select--locked {
   outline-style: dashed;
 }
+/* The other components of a multi-selection (the primary one keeps its chip and toolbar). */
+.ub-cv-select.is-multi {
+  outline-width: 2px;
+  outline-color: rgba(47, 107, 255, 0.6);
+  background: rgba(47, 107, 255, 0.05);
+}
 .ub-cv-clone-outline {
   border: 1px dashed rgba(47, 107, 255, 0.5);
+}
+/* Direct children of the selected container: what is inside, each one click away. */
+.ub-cv-child-outline {
+  border: 1px dashed rgba(47, 107, 255, 0.55);
+  border-radius: 2px;
+  background: rgba(47, 107, 255, 0.03);
 }
 .ub-cv-moving {
   border: 1px dashed var(--ub-select);

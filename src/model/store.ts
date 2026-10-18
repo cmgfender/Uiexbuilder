@@ -11,6 +11,7 @@ import {
   detach,
   duplicateNode as duplicateNodeOp,
   findParent,
+  nodeLabel,
   insertSubtree,
   instantiateTemplate,
   moveNode as moveNodeOp,
@@ -26,6 +27,7 @@ import { getComponent } from '../registry';
 import { uniqueComputedName } from '../power/computed';
 import { validateDeclaredName } from '../panels/names';
 import { setActiveCodeProject } from './trust';
+import { applySettings, canPasteSettings, settingsOf, type SettingsClipboard } from './settings';
 import type {
   ActionStep,
   AppConfig,
@@ -62,6 +64,13 @@ export interface EditorState {
   project: Project;
   activeExtensionId: string;
   selectedNodeId: NodeId | null;
+  /**
+   * Multi-selection: every selected node of the active extension while more than one is selected
+   * (it includes `selectedNodeId`, the primary one); empty otherwise. `select` clears it.
+   */
+  selectedNodeIds: NodeId[];
+  /** Settings copied with "Copy settings" (props and text of one component, see model/settings). */
+  settingsClipboard: SettingsClipboard | null;
   hoveredNodeId: NodeId | null;
   mode: EditorMode;
   leftPanel: LeftPanelTab;
@@ -91,6 +100,10 @@ export interface EditorState {
   setRightPanel: (tab: RightPanelTab) => void;
   setBottomPanel: (tab: BottomPanelTab) => void;
   select: (id: NodeId | null) => void;
+  /** Adds a node to the selection, or removes it (Shift / Cmd-click). It becomes the primary one when added. */
+  toggleSelection: (id: NodeId) => void;
+  /** Selects several nodes (the last one is the primary selection). */
+  selectMany: (ids: NodeId[]) => void;
   hover: (id: NodeId | null) => void;
   resetPreview: () => void;
 
@@ -111,12 +124,22 @@ export interface EditorState {
   insertNode: (what: string | NodeTemplate, target: InsertTarget, opts?: { select?: boolean; force?: boolean }) => NodeId | null;
   moveNode: (id: NodeId, target: InsertTarget) => boolean;
   removeNode: (id: NodeId) => void;
+  /** Removes several nodes (a multi-selection) in one undo step; nothing stays selected. */
+  removeNodes: (ids: NodeId[]) => void;
   duplicateNode: (id: NodeId) => NodeId | null;
   setProp: (id: NodeId, name: string, value: PropValue | undefined) => void;
   setProps: (id: NodeId, patch: Record<string, PropValue | undefined>) => void;
   setText: (id: NodeId, text: string) => void;
   updateNode: (id: NodeId, patch: Partial<Pick<UINode, 'name' | 'condition' | 'repeat' | 'binding' | 'locked' | 'hiddenInDesigner'>>) => void;
   setEvent: (id: NodeId, eventName: string, steps: ActionStep[] | undefined) => void;
+  /** Sets props on several nodes at once (multi-edit; one undo step while typing). */
+  setPropsMany: (ids: NodeId[], patch: Record<string, PropValue | undefined>) => void;
+  /** Sets the text of several nodes at once (multi-edit). */
+  setTextMany: (ids: NodeId[], text: string) => void;
+  /** Copies a node's settings (props and text, not ids). Returns them, or null. */
+  copySettings: (id: NodeId) => SettingsClipboard | null;
+  /** Pastes the copied settings onto every node of the same type in `ids` (one undo step); returns how many changed. */
+  pasteSettings: (ids: NodeId[]) => number;
   wrapNode: (id: NodeId, wrapperType: string) => NodeId | null;
   copyNode: (id: NodeId) => void;
   cutNode: (id: NodeId) => void;
@@ -209,11 +232,22 @@ export const useEditor = create<EditorState>()((set, get) => {
     const activeId = get().activeExtensionId;
     get().commit((draft) => recipe(activeDraft(draft, activeId), draft), opts);
   };
+  /** Drops multi-selected nodes that no longer exist (after delete / undo). */
+  const pruneSelection = () => {
+    const { selectedNodeIds, selectedNodeId } = get();
+    if (!selectedNodeIds.length) return;
+    const ext = selectActiveExtension(get());
+    const left = selectedNodeIds.filter((id) => !!ext.nodes[id]);
+    if (left.length === selectedNodeIds.length) return;
+    set({ selectedNodeIds: left.length > 1 ? left : [], selectedNodeId: selectedNodeId && ext.nodes[selectedNodeId] ? selectedNodeId : (left[left.length - 1] ?? null) });
+  };
 
   return {
     project: initialProject,
     activeExtensionId: initialProject.extensions[0].id,
     selectedNodeId: null,
+    selectedNodeIds: [],
+    settingsClipboard: null,
     hoveredNodeId: null,
     mode: 'design',
     leftPanel: 'components',
@@ -233,6 +267,7 @@ export const useEditor = create<EditorState>()((set, get) => {
         project,
         activeExtensionId: project.extensions[0]?.id ?? '',
         selectedNodeId: null,
+        selectedNodeIds: [],
         hoveredNodeId: null,
         past: [],
         future: [],
@@ -278,6 +313,7 @@ export const useEditor = create<EditorState>()((set, get) => {
         lastCommitKey: null,
         ...historyFocus(project, prev, activeExtensionId, get().selectedNodeId),
       });
+      pruneSelection();
     },
     redo: () => {
       const { past, project, future, activeExtensionId } = get();
@@ -290,6 +326,7 @@ export const useEditor = create<EditorState>()((set, get) => {
         lastCommitKey: null,
         ...historyFocus(project, next, activeExtensionId, get().selectedNodeId),
       });
+      pruneSelection();
     },
     canUndo: () => get().past.length > 0,
     canRedo: () => get().future.length > 0,
@@ -298,7 +335,21 @@ export const useEditor = create<EditorState>()((set, get) => {
     setLeftPanel: (leftPanel) => set({ leftPanel }),
     setRightPanel: (rightPanel) => set({ rightPanel }),
     setBottomPanel: (bottomPanel) => set({ bottomPanel }),
-    select: (selectedNodeId) => set({ selectedNodeId }),
+    select: (selectedNodeId) => set({ selectedNodeId, selectedNodeIds: [] }),
+    toggleSelection: (id) => {
+      const ext = selectActiveExtension(get());
+      if (!ext.nodes[id] || id === ext.rootId) return;
+      const { selectedNodeId, selectedNodeIds } = get();
+      const current = selectedNodeIds.length ? selectedNodeIds : selectedNodeId && ext.nodes[selectedNodeId] ? [selectedNodeId] : [];
+      const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
+      const primary = current.includes(id) ? (selectedNodeId === id ? (next[next.length - 1] ?? null) : selectedNodeId) : id;
+      set({ selectedNodeId: primary, selectedNodeIds: next.length > 1 ? next : [] });
+    },
+    selectMany: (ids) => {
+      const ext = selectActiveExtension(get());
+      const list = [...new Set(ids)].filter((id) => !!ext.nodes[id] && id !== ext.rootId);
+      set({ selectedNodeId: list[list.length - 1] ?? null, selectedNodeIds: list.length > 1 ? list : [] });
+    },
     hover: (hoveredNodeId) => {
       if (get().hoveredNodeId !== hoveredNodeId) set({ hoveredNodeId });
     },
@@ -313,20 +364,20 @@ export const useEditor = create<EditorState>()((set, get) => {
         Object.assign(d.app, patch);
       }, { coalesceKey: coalesceKey ?? `app:${Object.keys(patch).join(',')}` }),
 
-    setActiveExtension: (id) => set({ activeExtensionId: id, selectedNodeId: null, hoveredNodeId: null }),
+    setActiveExtension: (id) => set({ activeExtensionId: id, selectedNodeId: null, selectedNodeIds: [], hoveredNodeId: null }),
     addExtension: (opts = {}) => {
       const ext = createExtension({ ...opts, existing: get().project.extensions });
       get().commit((d) => {
         d.extensions.push(ext as Draft<Extension>);
       });
-      set({ activeExtensionId: ext.id, selectedNodeId: null });
+      set({ activeExtensionId: ext.id, selectedNodeId: null, selectedNodeIds: [] });
       return ext.id;
     },
     addExtensionFromObject: (ext) => {
       get().commit((d) => {
         d.extensions.push(ext as Draft<Extension>);
       });
-      set({ activeExtensionId: ext.id, selectedNodeId: null });
+      set({ activeExtensionId: ext.id, selectedNodeId: null, selectedNodeIds: [] });
       return ext.id;
     },
     updateExtension: (id, patch, coalesceKey) =>
@@ -341,7 +392,7 @@ export const useEditor = create<EditorState>()((set, get) => {
         d.extensions = d.extensions.filter((e) => e.id !== id);
       });
       if (activeExtensionId === id) {
-        set({ activeExtensionId: get().project.extensions[0].id, selectedNodeId: null });
+        set({ activeExtensionId: get().project.extensions[0].id, selectedNodeId: null, selectedNodeIds: [] });
       }
     },
     duplicateExtension: (id) => {
@@ -384,7 +435,7 @@ export const useEditor = create<EditorState>()((set, get) => {
       }
       const sub = instantiateTemplate(tpl);
       mutateActive((d) => insertSubtree(d as Extension, sub, target));
-      if (opts.select !== false) set({ selectedNodeId: sub.rootId });
+      if (opts.select !== false) set({ selectedNodeId: sub.rootId, selectedNodeIds: [] });
       return sub.rootId;
     },
     moveNode: (id, target) => {
@@ -414,13 +465,24 @@ export const useEditor = create<EditorState>()((set, get) => {
         }
         set({ selectedNodeId: nextSel });
       }
+      pruneSelection();
+    },
+    removeNodes: (ids) => {
+      const ext = selectActiveExtension(get());
+      const targets = ids.filter((id) => id !== ext.rootId && !!ext.nodes[id]);
+      if (!targets.length) return;
+      mutateActive((d) => {
+        // A node inside another removed one is already gone.
+        for (const id of targets) if ((d as Extension).nodes[id]) removeSubtree(d as Extension, id);
+      });
+      set({ selectedNodeId: null, selectedNodeIds: [] });
     },
     duplicateNode: (id) => {
       let newRoot: NodeId | null = null;
       mutateActive((d) => {
         newRoot = duplicateNodeOp(d as Extension, id, overlayIdPropOf);
       });
-      if (newRoot) set({ selectedNodeId: newRoot });
+      if (newRoot) set({ selectedNodeId: newRoot, selectedNodeIds: [] });
       return newRoot;
     },
     setProp: (id, name, value) =>
@@ -482,6 +544,55 @@ export const useEditor = create<EditorState>()((set, get) => {
         },
         { coalesceKey: `event:${id}:${eventName}` },
       ),
+    setPropsMany: (ids, patch) =>
+      mutateActive(
+        (d) => {
+          for (const id of ids) {
+            const node = d.nodes[id];
+            if (!node) continue;
+            for (const [k, v] of Object.entries(patch)) {
+              if (v === undefined) delete node.props[k];
+              else node.props[k] = JSON.parse(JSON.stringify(v)) as Draft<PropValue>;
+            }
+          }
+        },
+        { coalesceKey: `propsMany:${ids.join(',')}:${Object.keys(patch).join(',')}` },
+      ),
+    setTextMany: (ids, text) =>
+      mutateActive(
+        (d) => {
+          for (const id of ids) {
+            const node = d.nodes[id];
+            if (node) node.text = text;
+          }
+        },
+        { coalesceKey: `textMany:${ids.join(',')}` },
+      ),
+    copySettings: (id) => {
+      const ext = selectActiveExtension(get());
+      const node = ext.nodes[id];
+      if (!node || id === ext.rootId) return null;
+      const clip = settingsOf(node, nodeLabel(node, getComponent(node.type)?.label));
+      set({ settingsClipboard: clip });
+      return clip;
+    },
+    pasteSettings: (ids) => {
+      const clip = get().settingsClipboard;
+      const ext = selectActiveExtension(get());
+      const targets = ids.filter((id) => canPasteSettings(clip, ext.nodes[id]));
+      if (!clip || !targets.length) return 0;
+      let changed = 0;
+      mutateActive((d) => {
+        for (const id of targets) {
+          const node = d.nodes[id] as UINode | undefined;
+          if (!node) continue;
+          const before = JSON.stringify([node.props, node.text]);
+          applySettings(node, clip);
+          if (JSON.stringify([node.props, node.text]) !== before) changed++;
+        }
+      });
+      return changed;
+    },
     wrapNode: (id, wrapperType) => {
       const ext = selectActiveExtension(get());
       const ref = findParent(ext, id);
@@ -499,7 +610,7 @@ export const useEditor = create<EditorState>()((set, get) => {
         insertSubtree(dext, sub, { parentId: ref.parentId, index: ref.index });
         dext.nodes[sub.rootId].children.push(id);
       });
-      set({ selectedNodeId: sub.rootId });
+      set({ selectedNodeId: sub.rootId, selectedNodeIds: [] });
       return sub.rootId;
     },
     copyNode: (id) => {

@@ -134,7 +134,10 @@ Your **redirect URL** is your address followed by `/api/auth/callback`, for exam
 3. Open your builder (`https://<your address>`). In the top bar click **Project** →
    **Import .uiex.json…** and choose the downloaded file.
 4. Click **Publish** (top right). The **Publish to HubSpot** tab opens (beta). Paste the personal
-   access key and click **Publish to HubSpot**. Wait until it says it is published.
+   access key - the builder checks it with HubSpot right away and says which account it belongs to
+   and whether it has **Developer projects** (if not, it links to that account's key page; add the
+   permission and click **Check again**). Click **Publish to HubSpot** and wait until it says it is
+   published.
    - The tab says it **needs SESSION_SECRET**? Do Step 1 → Vercel → step 6, then try again.
    - Deploying again later, once sign-in works? Click **Connect HubSpot** first - deploys then go
      to the account you are connected to.
@@ -158,15 +161,22 @@ Next: [Accept HubSpot's Acceptable Use Policy](#accept-hubspots-acceptable-use-p
 
 ### Accept HubSpot's Acceptable Use Policy (once)
 
-HubSpot will not install a public (OAuth) app until its developer has signed the **Acceptable Use
-Policy**. Until then, **Connect HubSpot** opens a HubSpot window that says *"The app could not be
-installed because the app developer has not signed the acceptable use policy"*.
+**Do not skip this step.** HubSpot will not install a public (OAuth) app in *any* account - not even
+your own - until the app's **developer** (you: the HubSpot account that owns the app) has signed the
+**Acceptable Use Policy**. Until then, **Connect HubSpot** opens a HubSpot window that says *"The app
+could not be installed because the app developer has not signed the acceptable use policy"*. HubSpot
+shows this inside its own window and never sends the person back to the builder, so your server logs
+only show sign-ins that start (`/api/auth/start`) and never finish (`/api/auth/callback`). The
+builder then asks the person **What did HubSpot show?**; when they pick this message it explains
+that you need to sign the policy and gives them a note to copy and send you.
 
 1. In HubSpot go to **Development** → **Projects** → **uiex-builder-connector** → click the app →
    **Distribution** tab.
 2. Click **Begin publishing**, review the Acceptable Use Policy and **sign** it. You do **not** have to
-   finish a Marketplace listing: once the policy is signed the app can be installed in up to 25
+   finish a Marketplace listing: once the policy is signed the app can be installed in up to **25**
    HubSpot accounts without being listed.
+3. Check it: open the builder in a private window and click **Connect HubSpot**. You should see
+   HubSpot's permission screen, not the message above.
 
 ### Copy the Client ID and Client secret
 
@@ -182,8 +192,15 @@ the app's settings in the builder: **App** settings → **Redirect URLs**) and d
 ### Who can connect?
 
 The app uses `"distribution": "marketplace"` without a Marketplace listing: once the Acceptable Use
-Policy is signed, **up to 25 HubSpot accounts** can install it (more needs a Marketplace listing).
-Nobody finds it on the Marketplace.
+Policy is signed, **up to 25 HubSpot accounts** can install it (more needs a Marketplace listing;
+after that HubSpot refuses new installs with an install-limit message in its window). Nobody finds it
+on the Marketplace.
+
+The **first person to connect from each HubSpot account installs the app** for that account, and
+HubSpot only lets **Super Admins** (or users with **App Marketplace access**) install apps. Anyone
+else sees a HubSpot message that they don't have permission; the builder tells them to ask a Super
+Admin to connect once (and gives them a note to send). After that, everyone in that account can
+connect.
 
 **Recommended:** limit sign-in (and Deploy to HubSpot) to your own accounts with the server setting
 `ALLOWED_PORTALS` - a comma-separated list of HubSpot account ids, for example `12345678,87654321`
@@ -270,10 +287,20 @@ Send admins the address, for example:
    - The first person in each HubSpot account installs the app for that account. HubSpot only lets
      **Super Admins** or users with **App Marketplace access** do that; if someone sees a permission
      message, ask a Super Admin to connect first (or to grant that permission).
+   - If the browser blocks the HubSpot window, the builder says so and offers **Continue in this
+     tab** (one click: HubSpot opens in the same tab and comes back to the builder; their work is
+     saved).
 3. The window closes, a message says they are connected, and the top bar shows the account's
    domain (for example `acme.com`). Clicking it opens the account menu: account number, what the
-   builder can see, **Switch account**, **Disconnect**. If the HubSpot window is closed or stuck,
-   the builder offers **Start again** / **Cancel** after a few seconds.
+   builder can see, **Switch account**, **Disconnect**.
+   - While the HubSpot window stays open, the builder shows **Waiting for HubSpot…** with **Show
+     HubSpot window** / **Start again** / **Cancel** and **Having trouble?**; after half a minute it
+     says **Still waiting for HubSpot…** and asks what the window shows.
+   - If the window closes without connecting, the builder asks **What did HubSpot show?** - a
+     message about the *acceptable use policy*, *not allowed to install apps*, *I closed it*, *it
+     closed by itself*, or *something else* - and gives the exact fix for each: the steps, the
+     right links, **Continue in this tab**, and for problems only you (or a Super Admin) can fix, a
+     **Copy a note for whoever set up this builder** / **for your Super Admin** button.
 4. Above the card they choose **Live data** and **Pick a sample record** (search by name, email
    or ID); the preview shows its real values, associations and search results. Property, object
    and pipeline pickers list the account's real properties (including custom ones, marked
@@ -286,7 +313,11 @@ Send admins the address, for example:
    account they are connected to, using a personal access key they create in HubSpot
    ([app.hubspot.com/l/personal-access-key](https://app.hubspot.com/l/personal-access-key), with the
    **Developer projects** permission). They paste the key for every deploy - it is never saved. No
-   terminal needed.
+   terminal needed. The builder checks the key with HubSpot **before uploading anything**: which
+   account it belongs to and whether it has **Developer projects**. A key without the permission, a
+   key from another account than the connected one, or an account HubSpot or `ALLOWED_PORTALS`
+   refuses each get a box that says what to do, with a link to the right account's key page and
+   **Check again** / **Try again** (the key and the project stay as they are).
 6. A project imported from a file keeps its code paused until they trust it; while HubSpot is
    connected the builder warns that trusted code can read their HubSpot data.
 7. **Disconnect** signs them out of HubSpot in the builder.
@@ -307,17 +338,24 @@ Send admins the address, for example:
 | **EU accounts**: the HubSpot window keeps loading, or says the account cannot be found | The account is hosted in HubSpot's EU data centre | Add the setting `HUBSPOT_APP_BASE` = `https://app-eu1.hubspot.com` and redeploy. |
 | Connect works, but the builder immediately shows **not connected** again | The browser is not keeping the builder's cookie | Allow cookies for the builder's address (strict privacy settings or extensions can block them). Use the exact address in `APP_URL`, over `https://`. On Vercel, use the production address, not a preview address. |
 | **This website is not allowed to use the HubSpot connector** | The builder was opened on a different address than `APP_URL` | Open the builder on its `APP_URL` address, or add the other address to `ALLOWED_ORIGINS`. |
-| The HubSpot window does not open | The browser blocked the pop-up | Allow pop-ups for the builder's address and click **Connect HubSpot** again. |
+| The HubSpot window does not open | The browser blocked the pop-up | The builder offers **Continue in this tab**. Or allow pop-ups for the builder's address and click **Connect HubSpot** again. |
 | HubSpot says the app **could not be installed because the app developer has not signed the acceptable use policy** | The HubSpot account that owns the app has not accepted HubSpot's Acceptable Use Policy yet | Step 2 → [Accept HubSpot's Acceptable Use Policy](#accept-hubspots-acceptable-use-policy-once): **Development → Projects → your project → app → Distribution → Begin publishing**, then sign. No Marketplace listing is needed. |
+| Your logs show sign-ins that start (`GET /api/auth/start`) but never come back (`/api/auth/callback`), and people say "it just closed" | HubSpot showed a message inside its window instead of connecting: usually the Acceptable Use Policy (row above), or the person may not install apps (Super Admin needed), or the pop-up was blocked | Sign the policy first - it is the most common cause. Ask the person what the builder's **What did HubSpot show?** box says; its notes tell you what they saw. |
+| HubSpot says the app has reached its **install limit** | An app without a Marketplace listing can be installed in up to **25** HubSpot accounts | Uninstall it from accounts that no longer use it (**Settings → Integrations → Connected apps**), or publish a Marketplace listing. `ALLOWED_PORTALS` keeps strangers from using up installs. |
 | The first visit is very slow (Render) | The free plan sleeps after 15 minutes | Choose the **Starter** plan, or wait up to a minute. |
 | **Publish to HubSpot** says the key is not valid | Wrong, deleted, or another account's personal access key | Create a new key in the account you are deploying to and paste it again. |
 | **Publish to HubSpot** says the key *looks like a private app access token* | A `pat-…` token from a private app was pasted | Open the **Personal access key** page (not Private apps) and copy that key - a much longer code. |
-| **Publish to HubSpot** says the key needs the **Developer projects** permission | The key was created without it | On the personal access key page, add **Developer projects** to the key (or create a new one with it) and paste the new key. |
+| **Publish to HubSpot** says *This key can't publish yet: it's missing the "Developer projects" permission* | The key was created without it (the builder reads the key's permissions from HubSpot before uploading). Seen in real logs as `POST /api/deploy` refused with **403** again and again | Click **Open the key page for …** in that box, add **Developer projects** to the key (or create a new one with it), then **Check again** (or paste the new key). |
+| **Publish to HubSpot** says *This key is for a different HubSpot account* | The key belongs to another account than the one you're connected to | Use the box's link to the connected account's key page and paste that key, or **Switch HubSpot account** to the key's account. |
+| **Publish to HubSpot** says *HubSpot refused to take the project* (with HubSpot's words) | HubSpot answered 403 for another reason - usually the key's user may not use developer tools in that account | A Super Admin allows it (**Settings → Users & Teams** → the user's permissions) or publishes with their own key. The box has a note to send them. |
+| **Publish to HubSpot** says *HubSpot doesn't allow developer projects in this account* | The account has no access to developer projects | Publish to an account that shows **Development** in HubSpot's main menu (a developer test account works). |
+| **Publish to HubSpot** says *This builder doesn't publish to account …* | `ALLOWED_PORTALS` doesn't list that account | Add the account id to `ALLOWED_PORTALS` and redeploy (the person can copy you a note with the id). |
 | The **Publish to HubSpot** tab says it **needs one more server setting (SESSION_SECRET)** | `SESSION_SECRET` is missing, too short or still `later` | Make one at `/secret.html`, add it to your host's settings and redeploy (Step 1 → Vercel → step 6). |
 | The **Publish to HubSpot** tab says deploying **is turned off** | `ENABLE_DEPLOY=false` is set | Remove the setting (or set it to `true`) and redeploy, or use the HubSpot CLI. |
 | **Publish to HubSpot** asks to **Connect HubSpot first** | Sign-in is set up, and deploys only go to the connected account | Click **Connect HubSpot**, then deploy. To deploy to another account, use **Switch account**. |
 | **This deploy can't be followed any more** | The status link expired (after an hour) or was opened in another browser | Open the project in HubSpot to see how it went, or deploy again. |
 | HubSpot window says **This HubSpot account can't be used here** | `ALLOWED_PORTALS` doesn't list that account | Add the account id to `ALLOWED_PORTALS` and redeploy, or connect a listed account. |
+| The builder says **Your browser blocked the HubSpot window** | A pop-up blocker stopped the sign-in window | Click **Continue in this tab** (signs in in the same tab and comes back), or allow pop-ups for the builder's address. |
 | **Too many sign-in attempts** / **Too many deploys** | The server limits how often these can happen | Wait a minute and try again. |
 | Render's deploy fails with a **health check** error | The server did not start | Open **Logs** in Render. The start-up message lists what is set and what is missing (never the secret values). |
 
@@ -457,7 +495,7 @@ Placeholder values such as `later`, `todo` or `-` count as "not set".
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | Builder on http://localhost:5173 (this computer only; `npm run dev -- --host` opens it to your network) plus the connector. Without settings, Connect HubSpot shows as not set up - everything else works. To sign in to a real account, create a **separate development app** with the redirect URL `http://localhost:5173/api/auth/callback` (never add localhost to the app people use) and put its settings in `.env.local` (see `.env.example`). |
-| `npm run dev:full` | Same, plus a **fake HubSpot** with demo data on port 4010: try the whole Connect flow, sample records and Deploy to HubSpot without a HubSpot account. The demo personal access key is on the fake's personal access key page (Publish → Publish to HubSpot → **Open HubSpot’s key page**) and printed in the terminal. |
+| `npm run dev:full` | Same, plus a **fake HubSpot** with demo data on port 4010: try the whole Connect flow, sample records and Deploy to HubSpot without a HubSpot account. The demo personal access key is on the fake's personal access key page (Publish → Publish to HubSpot → **Open HubSpot’s key page**) and printed in the terminal. The fake can also play HubSpot saying no: its consent page links to the install refusals (Acceptable Use Policy, no permission, install limit), and its key page removes / adds back the key's **Developer projects** permission. |
 | `npm run build` then `npm start` | Production server on http://localhost:3000 |
 | `npm run start:demo` | Production build + fake HubSpot on http://localhost:4174 (used for demos and end-to-end tests; run `npm run build` first) |
 | `npm run secret` | Print a new `SESSION_SECRET` |

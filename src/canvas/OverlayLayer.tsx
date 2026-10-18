@@ -25,7 +25,7 @@ import { selectActiveExtension, useEditor, type EditorState } from '../model/sto
 import { getComponent } from '../registry';
 import { endDrag, startDrag, useDragStore } from '../dnd/dragState';
 import { IconButton, cx } from '../ui';
-import { NODE_SELECTOR, OBSTACLE_ATTR, findNodeElement, findNodeElements } from './domHit';
+import { NODE_SELECTOR, OBSTACLE_ATTR, childNodeElements, findNodeElement, findNodeElements, nodeIdOf } from './domHit';
 import { TOOLBAR_H, boxesIntersect, placeSelectionChrome, type ChromePlacement } from './chromePlacement';
 import { componentLabel, deleteNode, displayLabel, duplicateNode, moveSibling, nodeCapabilities, selectParent } from './nodeActions';
 import { useCanvasView } from './stores';
@@ -52,6 +52,10 @@ interface Measured {
   /** Content around the selection that its chrome should not cover. */
   obstacles: Box[];
   clones: Box[];
+  /** Direct children of the selected container (dashed, so what is inside is obvious). */
+  kids: Box[];
+  /** The other components of a multi-selection (Shift/Cmd/Ctrl-click), besides the primary one. */
+  multi: Box[];
   moving: Box | null;
   flags: Flag[];
   clipRight: number;
@@ -67,6 +71,8 @@ const EMPTY: Measured = {
   select: null,
   obstacles: [],
   clones: [],
+  kids: [],
+  multi: [],
   moving: null,
   flags: [],
   clipRight: 0,
@@ -75,6 +81,7 @@ const EMPTY: Measured = {
   height: 0,
 };
 const MAX_CLONES = 50;
+const MAX_KIDS = 60;
 const MAX_FLAGS = 120;
 const MAX_OBSTACLES = 200;
 const OBSTACLE_SELECTOR = `${NODE_SELECTOR}, [${OBSTACLE_ATTR}]`;
@@ -99,6 +106,8 @@ interface SelectionInfo {
   events: boolean;
   locked: boolean;
   hasParentNode: boolean;
+  /** Components directly inside (containers). */
+  childCount: number;
   canMoveUp: boolean;
   canMoveDown: boolean;
   canDuplicate: boolean;
@@ -126,6 +135,7 @@ function selectionKey(s: EditorState): string {
     events: !!node.events && Object.values(node.events).some((steps) => steps.length > 0),
     locked: caps.locked,
     hasParentNode: caps.hasParentNode,
+    childCount: node.children.length,
     canMoveUp: caps.canMoveUp,
     canMoveDown: caps.canMoveDown,
     canDuplicate: caps.canDuplicate,
@@ -184,6 +194,7 @@ export const OverlayLayer = memo(function OverlayLayer({ viewportRef, stageRef, 
   const mode = useEditor((s) => s.mode);
   const hoveredId = useEditor((s) => s.hoveredNodeId);
   const selectedId = useEditor((s) => s.selectedNodeId);
+  const multiIds = useEditor((s) => s.selectedNodeIds);
   const hoverText = useEditor(hoverLabel);
   const selKey = useEditor(selectionKey);
   const indicator = useDragStore((s) => (s.indicator && s.indicator.source === CANVAS_INDICATOR_SOURCE ? s.indicator : null));
@@ -215,6 +226,8 @@ export const OverlayLayer = memo(function OverlayLayer({ viewportRef, stageRef, 
       ...EMPTY,
       obstacles: [],
       clones: [],
+      kids: [],
+      multi: [],
       flags: [],
       clipRight,
       clipBottom,
@@ -231,6 +244,24 @@ export const OverlayLayer = memo(function OverlayLayer({ viewportRef, stageRef, 
         for (const el of els.slice(1, MAX_CLONES + 1)) {
           const b = toBox(el);
           if (b) next.clones.push(b);
+        }
+      }
+      for (const id of st.selectedNodeIds) {
+        if (id === sel) continue;
+        const el = findNodeElement(surface, id);
+        const b = el ? toBox(el) : null;
+        if (b) next.multi.push(b);
+      }
+      if (selEl && !st.selectedNodeIds.length) {
+        // What is inside the selected container: one dashed box per child (repeat copies once).
+        const seen = new Set<string>();
+        for (const el of childNodeElements(selEl)) {
+          const id = nodeIdOf(el);
+          if (seen.has(id) || el.hasAttribute('data-uiex-clone')) continue;
+          seen.add(id);
+          const b = toBox(el);
+          if (b) next.kids.push(b);
+          if (next.kids.length >= MAX_KIDS) break;
         }
       }
       const box = next.select;
@@ -288,7 +319,7 @@ export const OverlayLayer = memo(function OverlayLayer({ viewportRef, stageRef, 
   // Synchronous re-measure when what we outline changes (no one-frame lag).
   useLayoutEffect(() => {
     measure();
-  }, [measure, mode, hoveredId, selectedId, selKey, movingId]);
+  }, [measure, mode, hoveredId, selectedId, multiIds, selKey, movingId]);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -335,6 +366,11 @@ export const OverlayLayer = memo(function OverlayLayer({ viewportRef, stageRef, 
       ))}
       {m.clones.map((b, i) => (
         <div key={`c${i}`} className="ub-cv-clone-outline" style={px(b)} />
+      ))}
+      {!dragging &&
+        m.kids.map((b, i) => <div key={`k${i}`} className="ub-cv-child-outline" style={px(b)} data-testid="canvas-child-outline" />)}
+      {m.multi.map((b, i) => (
+        <div key={`m${i}`} className="ub-cv-select is-multi" style={px(b)} data-testid="canvas-multi-outline" />
       ))}
       {m.hover && (
         <div className="ub-cv-hover" style={px(m.hover)}>
@@ -454,6 +490,11 @@ function SelectionChrome({ box, info, viewport, obstacles, peek, dragging, focus
         {Icon && <Icon size={11} aria-hidden />}
         <span className="ub-cv-chip__label">{info.name || info.label}</span>
         {info.name && <span className="ub-cv-chip__type">{info.label}</span>}
+        {info.childCount > 0 && (
+          <span className="ub-cv-chip__type" title="Click a component inside to change it">
+            · {info.childCount} inside
+          </span>
+        )}
         {info.condition && (
           <span className="ub-cv-chip__badge" title="Shown only when its condition is true">
             <GitBranch size={10} aria-label="Condition" />

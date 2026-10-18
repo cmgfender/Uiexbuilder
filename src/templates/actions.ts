@@ -4,14 +4,15 @@
  * project, replace the active extension with a starter, and create a project from a starter.
  */
 import type { Draft } from 'immer';
-import { smartInsertTarget } from '../dnd/dragState';
+import { setBlockAnchor, smartInsertTarget } from '../dnd/dragState';
 import { createProject } from '../model/factory';
 import { newId } from '../model/ids';
 import { canAccept } from '../model/rules';
 import { selectActiveExtension, unavailableComponents, useEditor } from '../model/store';
 import { insertSubtree, instantiateTemplate, type InsertTarget } from '../model/tree';
-import type { AppFunction, DataSource, Extension, NodeId, NodeTemplate, Project, StateVar } from '../model/types';
+import type { AppFunction, DataSource, Extension, NodeId, NodeTemplate, Project, StateVar, UINode } from '../model/types';
 import { appFunctionsUnsupported } from '../model/validate';
+import { getComponent } from '../registry';
 import { freshBlockTemplate, instantiateExtensionTemplate, templateConflict, type BlockTemplate, type ExtensionTemplate } from './catalog';
 
 export type FlowResult<T = undefined> = { ok: true; value: T; message: string } | { ok: false; message: string };
@@ -98,9 +99,58 @@ export function insertBlock(
     for (const ds of sources) draft.dataSources.push(JSON.parse(JSON.stringify(ds)) as Draft<DataSource>);
     insertSubtree(draft as Extension, sub, target);
   });
-  useEditor.getState().select(sub.rootId);
+  const live = selectActiveExtension(useEditor.getState());
+  const main = live ? mainComponentOf(live, sub.rootId) : sub.rootId;
+  useEditor.getState().select(main);
+  if (main !== sub.rootId) anchorAfterBlock(main, sub.rootId);
   const added = missing.length ? ` and state ${missing.map((v) => `“${v.name}”`).join(', ')}` : '';
-  return { ok: true, value: sub.rootId, message: `Added “${label}”${added}.` };
+  const mainNode = main !== sub.rootId && live ? live.nodes[main] : undefined;
+  const editing = mainNode ? ` Its ${(getComponent(mainNode.type)?.label ?? mainNode.type).toLowerCase()} is selected: change it on the right.` : '';
+  return { ok: true, value: sub.rootId, message: `Added “${label}”${added}.${editing}` };
+}
+
+/** Layout wrappers and plain text: never the "main" component of a block. */
+const WRAPPER_TYPES = new Set(['Flex', 'Box', 'Inline', 'AutoGrid', 'Text', 'Heading', 'Divider', 'Spacer']);
+/** Loading / error / empty placeholders: the main component only when nothing else is there. */
+const STATE_TYPES = new Set(['LoadingSpinner', 'ErrorState', 'EmptyState']);
+
+/** Lower is more likely what the person wants to edit: content, then actions, then placeholders. */
+function mainRank(n: UINode): number {
+  // A conditional alert is an error / status message, like the placeholders.
+  if (STATE_TYPES.has(n.type) || (n.type === 'Alert' && !!n.condition)) return 3;
+  return getComponent(n.type)?.category === 'Buttons & links' ? 2 : 1;
+}
+
+/**
+ * The component a person most likely wants to edit after inserting a block: the block itself
+ * unless it is a plain layout wrapper; inside a wrapper, its first real content (e.g. the progress
+ * bar of "Progress tracker", the table of "Associated records"), else its first button, else a
+ * loading / error / empty placeholder. A wrapper of only layout and text stays selected.
+ */
+export function mainComponentOf(ext: Extension, rootId: NodeId): NodeId {
+  const root = ext.nodes[rootId];
+  if (!root || !WRAPPER_TYPES.has(root.type)) return rootId;
+  let best: UINode | null = null;
+  for (const id of root.children) {
+    const n = ext.nodes[id];
+    if (!n || WRAPPER_TYPES.has(n.type)) continue;
+    if (!best || mainRank(n) < mainRank(best)) best = n;
+  }
+  return best?.id ?? rootId;
+}
+
+let anchorUnsubscribe: (() => void) | null = null;
+
+/** The next click-to-add goes after the whole block until the selection changes. */
+function anchorAfterBlock(selectedId: NodeId, blockId: NodeId): void {
+  anchorUnsubscribe?.();
+  setBlockAnchor({ selectedId, blockId });
+  anchorUnsubscribe = useEditor.subscribe((s, prev) => {
+    if (s.selectedNodeId === prev.selectedNodeId && s.activeExtensionId === prev.activeExtensionId) return;
+    setBlockAnchor(null);
+    anchorUnsubscribe?.();
+    anchorUnsubscribe = null;
+  });
 }
 
 /** Adds a starter extension (and the app functions it needs) to the project and opens it. */

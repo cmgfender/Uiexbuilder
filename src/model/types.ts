@@ -128,6 +128,11 @@ export interface SetStateAction extends ActionBase {
 export interface AddAlertAction extends ActionBase {
   type: 'addAlert';
   alertType: AlertType;
+  /**
+   * Optional expression that picks the type (Rules, e.g. `(score) >= 80 ? "success" : "warning"`).
+   * When set it replaces `alertType`, which keeps the fallback shown when rules are switched off.
+   */
+  alertTypeExpr?: string;
   title: string;
   message: string;
 }

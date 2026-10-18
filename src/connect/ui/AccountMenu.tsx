@@ -1,14 +1,17 @@
 /**
  * Account popover of the connected HubSpot account: which account and user, what the builder may
- * see (granted permissions, expandable), Open HubSpot, Switch account and Disconnect.
+ * see (granted permissions, expandable), Open HubSpot, Status page (admins of this builder only),
+ * Switch account and Disconnect.
  */
 import { useState } from 'react';
-import { Check, ChevronDown, ChevronRight, ExternalLink, LogOut, Minus, RefreshCw, Repeat } from 'lucide-react';
+import { Activity, Check, ChevronDown, ChevronRight, ExternalLink, LogOut, Minus, RefreshCw, Repeat } from 'lucide-react';
 import { Button } from '../../ui';
 import type { ConnectionInfo } from '../types';
 import { scopeLabel } from '../describe';
 import { useConnection } from '../store';
 import { connectedAppsUrl, portalHomeUrl } from './links';
+import { useStatusAdmin } from '../../status/useStatusAdmin';
+import { STATUS_PAGE_PATH } from '../../status/paths';
 
 export interface AccountMenuProps {
   info: Extract<ConnectionInfo, { connected: true }>;
@@ -24,6 +27,7 @@ export function AccountMenu({ info, onDone }: AccountMenuProps) {
   const health = useConnection((s) => s.health);
   const error = useConnection((s) => s.error);
   const [showScopes, setShowScopes] = useState(false);
+  const statusAdmin = useStatusAdmin();
   const granted = info.scopes;
   const missingOptional = (health?.scopes.optional ?? []).filter((s) => !granted.includes(s));
 
@@ -96,6 +100,11 @@ export function AccountMenu({ info, onDone }: AccountMenuProps) {
         <a className="ub-btn ub-btn--sm ub-cn-account__action" href={portalHomeUrl(info)} target="_blank" rel="noopener noreferrer" onClick={onDone}>
           <ExternalLink size={13} aria-hidden /> Open HubSpot
         </a>
+        {statusAdmin && (
+          <a className="ub-btn ub-btn--sm ub-cn-account__action" href={STATUS_PAGE_PATH} title="Sign-ins, publishes and errors on this builder, with fixes" onClick={onDone}>
+            <Activity size={13} aria-hidden /> Status page
+          </a>
+        )}
         <Button
           size="sm"
           className="ub-cn-account__action"

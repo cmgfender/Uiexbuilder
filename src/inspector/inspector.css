@@ -67,7 +67,7 @@
 .ub-insp-head__label {
   /* Never squeezed by the code name; truncates only when it alone is too long (room for Docs). */
   flex: 0 0 auto;
-  max-width: calc(100% - 64px);
+  max-width: calc(100% - 28px);
   font-weight: 600;
   font-size: 13px;
   white-space: nowrap;
@@ -139,7 +139,7 @@
   font-weight: 500;
   color: var(--ub-select);
   text-decoration: none;
-  padding: 1px 4px;
+  padding: 2px 3px;
   border-radius: var(--ub-radius-sm);
 }
 .ub-insp-docs:hover {
@@ -212,6 +212,9 @@
 .ub-insp-sec__toggle:hover > svg:first-child {
   color: var(--ub-text);
 }
+.ub-insp-sec__toggle:disabled {
+  cursor: default;
+}
 .ub-insp-sec__toggle:focus-visible {
   outline: none;
   box-shadow: var(--ub-focus-inset);
@@ -249,8 +252,10 @@
 }
 .ub-insp-prop--inline {
   display: grid;
-  grid-template-columns: 92px minmax(0, 1fr) auto;
-  grid-template-areas: 'label editor tools';
+  grid-template-columns: 96px minmax(0, 1fr) auto;
+  grid-template-areas:
+    'label editor tools'
+    'desc desc desc';
   align-items: center;
   column-gap: 8px;
   min-height: 30px;
@@ -260,7 +265,8 @@
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
     'label tools'
-    'editor editor';
+    'editor editor'
+    'desc desc';
   align-items: center;
   column-gap: 8px;
   row-gap: 4px;
@@ -274,15 +280,68 @@
 .ub-insp-prop > .ub-insp-prop__tools {
   grid-area: tools;
 }
+.ub-insp-prop > .ub-insp-prop__desc {
+  grid-area: desc;
+}
 .ub-insp-prop__label {
   display: flex;
   align-items: center;
-  gap: 4px;
+  flex-wrap: wrap;
+  column-gap: 6px;
+  row-gap: 0;
   min-width: 0;
   min-height: 22px;
   font-size: 12px;
   font-weight: 500;
   color: var(--ub-text-2);
+}
+/* The exact HubSpot prop name next to a plain label, e.g. Color · variant. */
+.ub-insp-propname {
+  font-family: var(--ub-mono);
+  font-size: 10.5px;
+  font-weight: 400;
+  line-height: 1.3;
+  color: var(--ub-text-3);
+  overflow-wrap: anywhere;
+}
+.ub-insp-prop--inline .ub-insp-propname {
+  flex-basis: 100%;
+}
+/* Help text: what visibly changes. */
+.ub-insp-prop__desc {
+  margin-top: 1px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--ub-text-3);
+}
+.ub-insp-prop--inline > .ub-insp-prop__desc {
+  margin-top: 3px;
+}
+.ub-insp-kbd {
+  display: inline-block;
+  padding: 0 4px;
+  border: 1px solid var(--ub-border);
+  border-radius: 3px;
+  background: var(--ub-surface-2);
+  font-family: var(--ub-mono);
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--ub-text-2);
+}
+/* The fx / Rules / reset buttons stay quiet until the row is hovered or focused. */
+.ub-insp-prop__tools > :not(.is-on) {
+  opacity: 0.6;
+  transition: opacity 0.12s;
+}
+.ub-insp-prop:hover > .ub-insp-prop__tools > *,
+.ub-insp-prop:focus-within > .ub-insp-prop__tools > *,
+.ub-insp-prop__tools > :focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .ub-insp-prop__tools > :not(.is-on) {
+    opacity: 1;
+  }
 }
 .ub-insp-prop__label label {
   min-width: 0;
@@ -918,6 +977,127 @@ textarea.ub-insp-expr__input {
   opacity: 0.45;
   margin-left: 2px;
 }
+
+/* ---------- Visual choices (colors, spacing, direction) ---------- */
+.ub-insp-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ub-insp-choice {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 3px 8px 3px 6px;
+  border: 1px solid var(--ub-border-strong);
+  border-radius: var(--ub-radius-sm);
+  background: var(--ub-surface);
+  color: var(--ub-text-2);
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+  user-select: none;
+}
+.ub-insp-choice:hover {
+  border-color: var(--ub-text-3);
+  color: var(--ub-text);
+}
+.ub-insp-choice.is-on {
+  border-color: var(--ub-select);
+  background: var(--ub-select-soft);
+  color: var(--ub-text);
+  box-shadow: inset 0 0 0 1px var(--ub-select);
+  font-weight: 500;
+}
+.ub-insp-choice:has(.ub-insp-choice__input:focus-visible) {
+  box-shadow: var(--ub-focus);
+}
+/* The native radio stays in the page (keyboard: arrows move between choices) but is not drawn. */
+.ub-insp-choice__input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.ub-insp-choices.is-spacing .ub-insp-choice,
+.ub-insp-choices.is-direction .ub-insp-choice {
+  flex: 1 1 0;
+  justify-content: center;
+  min-width: 0;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+.ub-insp-choices.is-spacing .ub-insp-choice {
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 5px;
+  padding-bottom: 4px;
+}
+.ub-insp-swatch {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+.ub-insp-swatch.is-text {
+  width: auto;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent !important;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 14px;
+}
+.ub-insp-swatch.is-none {
+  border: 1px dashed var(--ub-border-strong);
+}
+.ub-insp-space {
+  display: inline-flex;
+  align-items: center;
+  height: 10px;
+}
+.ub-insp-space > i {
+  display: block;
+  width: 8px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--ub-text-3);
+  opacity: 0.55;
+}
+.ub-insp-choice.is-on .ub-insp-space > i {
+  background: var(--ub-select);
+  opacity: 0.85;
+}
+/* Inside Rules, colors are compact: the swatches, with the chosen one's name. */
+.ub-insp-rules .ub-insp-choices.is-swatch .ub-insp-choice:not(.is-on) {
+  padding: 3px 6px;
+}
+.ub-insp-rules .ub-insp-choices.is-swatch .ub-insp-choice:not(.is-on) .ub-insp-choice__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.ub-insp-rules .ub-insp-choice .ub-insp-defdot {
+  display: none;
+}
+.ub-insp-dir {
+  flex: none;
+  color: var(--ub-text-3);
+}
+.ub-insp-choice.is-on .ub-insp-dir {
+  color: var(--ub-select);
+}
 .ub-insp-num .ub-input,
 .ub-insp-native {
   height: 30px;
@@ -1023,8 +1203,181 @@ textarea.ub-insp-expr__input {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  max-height: 220px;
+  max-height: 260px;
   overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* "Inside this layout box": the children, each one click away. */
+.ub-insp-noderow.is-child {
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 6px 4px 8px;
+  border: 1px solid var(--ub-border);
+  background: var(--ub-surface);
+  text-align: left;
+  color: var(--ub-text);
+  font: inherit;
+  font-size: 12.5px;
+}
+.ub-insp-children > li + li {
+  margin-top: 4px;
+}
+.ub-insp-noderow.is-child:hover {
+  border-color: var(--ub-select);
+  background: var(--ub-select-soft);
+}
+.ub-insp-noderow__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ub-insp-noderow__hint {
+  font-size: 11px;
+  color: var(--ub-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ub-insp-noderow__go {
+  flex: none;
+  color: var(--ub-text-3);
+}
+.ub-insp-noderow.is-child:hover .ub-insp-noderow__go {
+  color: var(--ub-select);
+}
+.ub-insp-empty {
+  padding: 10px;
+  border: 1px dashed var(--ub-border-strong);
+  border-radius: var(--ub-radius);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ub-text-2);
+}
+
+/* ---------- Filter settings ---------- */
+.ub-insp-filter {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 12px;
+  background: var(--ub-surface);
+  border-bottom: 1px solid var(--ub-border);
+}
+.ub-insp-filter__icon {
+  flex: none;
+  color: var(--ub-text-3);
+}
+.ub-insp-filter__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--ub-border-input);
+  border-radius: var(--ub-radius-sm);
+  background: var(--ub-surface);
+  color: var(--ub-text);
+  font: inherit;
+  font-size: 12.5px;
+}
+.ub-insp-filter__input::placeholder {
+  color: var(--ub-text-3);
+}
+.ub-insp-filter__input:focus {
+  outline: none;
+  border-color: var(--ub-select);
+  box-shadow: var(--ub-focus);
+}
+.ub-insp-filter__key {
+  flex: none;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--ub-border-strong);
+  border-radius: 3px;
+  font-family: var(--ub-mono);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  color: var(--ub-text-3);
+}
+.ub-insp-nomatch {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 12px;
+  font-size: 12.5px;
+  color: var(--ub-text-2);
+}
+
+/* ---------- "You can also" tips ---------- */
+.ub-insp-tips__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ub-insp-tip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--ub-radius-sm);
+  background: transparent;
+  color: var(--ub-select);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+}
+.ub-insp-tip > svg:first-child {
+  flex: none;
+}
+.ub-insp-tip > span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ub-insp-tip__go {
+  flex: none;
+  opacity: 0.7;
+}
+.ub-insp-tip:hover {
+  background: var(--ub-select-soft);
+}
+.ub-insp-tip.is-on {
+  color: var(--ub-text);
+}
+.ub-insp-tip.is-on > svg:first-child {
+  color: var(--ub-success);
+}
+.ub-insp-tip__on {
+  display: inline-block;
+  margin-left: 2px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--ub-success-soft);
+  color: var(--ub-success);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.ub-insp-tip:focus-visible {
+  outline: none;
+  box-shadow: var(--ub-focus);
 }
 .ub-insp-customadd {
   display: flex;

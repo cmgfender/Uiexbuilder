@@ -19,6 +19,7 @@ import {
   FlaskConical,
   Handshake,
   LoaderCircle,
+  LogIn,
   MousePointerClick,
   PartyPopper,
   Play,
@@ -29,12 +30,14 @@ import {
 } from 'lucide-react';
 import type { CardLocation } from '../model/types';
 import { Badge, Button, cx, useToast } from '../ui';
-import { useConnection } from '../connect/store';
+import { CONNECT_TIMINGS, useConnection } from '../connect/store';
 import { useObjectTypes, usePropertyCatalog } from '../connect/catalog';
 import { describeAuthResult } from '../connect/describe';
 import { findObjectTypeInfo } from '../connect/objectTypes';
 import { ConsentDetails, markConnectExplained } from '../connect/ui/ConnectDialog';
+import { useWaitingLong } from '../connect/ui/ConnectButton';
 import { HubSpotMark } from '../connect/ui/HubSpotMark';
+import { SignInHelp } from '../connect/ui/SignInHelp';
 import { RecordSearch } from '../connect/ui/RecordPicker';
 import { getConnectorClient } from '../connect/client';
 import { setConnectResultsInline } from '../connect/ui/host';
@@ -371,6 +374,7 @@ function ConnectStep() {
   const errorCode = useConnection((s) => s.errorCode);
   const errorSource = useConnection((s) => s.errorSource);
   const choose = useOnboarding((s) => s.choosePath);
+  const stillWaiting = useWaitingLong(status === 'connecting', CONNECT_TIMINGS.stillWaitingMs);
 
   const connect = () => {
     markConnectExplained();
@@ -418,6 +422,9 @@ function ConnectStep() {
 
   const failed = !!error && errorSource === 'sign-in' && status !== 'connecting';
   const failure = failed ? describeAuthResult(errorCode ?? 'unknown_error', error ?? undefined) : null;
+  // The window closed or timed out: HubSpot showed its reason inside it, so ask what it showed.
+  const trouble = failed && (errorCode === 'popup_closed' || errorCode === 'timeout');
+  const blocked = failed && errorCode === 'popup_blocked';
 
   return (
     <div className="ub-ob-connect">
@@ -431,7 +438,7 @@ function ConnectStep() {
         {status === 'connecting' ? (
           <div className="ub-ob-waiting" role="status">
             <div className="ub-ob-waiting__title">
-              <LoaderCircle size={16} className="ub-ob-spin" aria-hidden /> Waiting for HubSpot…
+              <LoaderCircle size={16} className="ub-ob-spin" aria-hidden /> {stillWaiting ? 'Still waiting for HubSpot…' : 'Waiting for HubSpot…'}
             </div>
             <p>A HubSpot window is open. Choose your account there and approve — then come back here.</p>
             <div className="ub-ob-row">
@@ -445,6 +452,7 @@ function ConnectStep() {
                 Cancel
               </Button>
             </div>
+            {stillWaiting && <SignInHelp waiting question="What does the HubSpot window show?" className="ub-ob-signin-help" />}
           </div>
         ) : (
           <>
@@ -453,13 +461,25 @@ function ConnectStep() {
                 <CircleAlert size={16} aria-hidden />
                 <div>
                   <strong>{failure.title}</strong>
-                  <span>{error ?? failure.message}</span>
+                  {!trouble && <span>{error ?? failure.message}</span>}
                 </div>
               </div>
             )}
-            <Button variant="primary" className="ub-ob-connect__btn" icon={<HubSpotMark size={16} />} onClick={connect}>
-              {failure ? 'Try again' : 'Connect HubSpot'}
-            </Button>
+            {trouble && <SignInHelp className="ub-ob-signin-help" />}
+            {blocked ? (
+              <div className="ub-ob-row">
+                <Button variant="primary" className="ub-ob-connect__btn" icon={<LogIn size={16} aria-hidden />} onClick={() => void useConnection.getState().connectInThisTab()}>
+                  Continue in this tab
+                </Button>
+                <Button className="ub-ob-connect__btn" onClick={connect}>
+                  Try the window again
+                </Button>
+              </div>
+            ) : (
+              <Button variant="primary" className="ub-ob-connect__btn" icon={<HubSpotMark size={16} />} onClick={connect}>
+                {failure ? 'Try again' : 'Connect HubSpot'}
+              </Button>
+            )}
             <p className="ub-ob-muted">
               <ExternalLink size={12} aria-hidden /> A HubSpot window opens. Choose your account and approve — then come back here.
             </p>

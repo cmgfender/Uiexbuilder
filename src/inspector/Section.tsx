@@ -28,11 +28,13 @@ export interface InspectorSectionProps {
   /** Buttons on the right of the header. */
   actions?: ReactNode;
   className?: string;
+  /** Show the section open whatever was remembered (e.g. while filtering settings). */
+  forceOpen?: boolean;
 }
 
-export function InspectorSection({ id, title, children, defaultOpen = true, meta, actions, className }: InspectorSectionProps) {
+export function InspectorSection({ id, title, children, defaultOpen = true, meta, actions, className, forceOpen }: InspectorSectionProps) {
   const stored = useSectionStore((s) => s.open[id]);
-  const open = stored ?? defaultOpen;
+  const open = !!forceOpen || (stored ?? defaultOpen);
   const bodyId = useId();
   return (
     <section className={cx('ub-insp-sec', !open && 'is-collapsed', className)} data-section={id}>
@@ -42,6 +44,7 @@ export function InspectorSection({ id, title, children, defaultOpen = true, meta
           className="ub-insp-sec__toggle"
           aria-expanded={open}
           aria-controls={bodyId}
+          disabled={forceOpen}
           onClick={() => useSectionStore.getState().setOpen(id, !open)}
         >
           {open ? <ChevronDown size={13} aria-hidden /> : <ChevronRight size={13} aria-hidden />}

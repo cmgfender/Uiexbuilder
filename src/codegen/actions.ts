@@ -26,6 +26,7 @@ import {
   type JsNode,
 } from './printer';
 import { asString, templateText, templateValue, userExpr } from './templates';
+import { tokenize, type Token } from '../model/jsTokens';
 
 export interface HandlerScope {
   ctx: GenContext;
@@ -67,6 +68,7 @@ export function collectStepCode(steps: ActionStep[] | undefined): string[] {
         out.push(asString(step.value));
         break;
       case 'addAlert':
+        out.push(asString(step.alertTypeExpr));
         template(step.title);
         template(step.message);
         break;
@@ -131,7 +133,7 @@ function emitStep(w: CodeWriter, step: ActionStep, hs: HandlerScope): void {
       return;
     }
     case 'addAlert': {
-      const entries: Array<[string, JsNode]> = [['type', jsCode(quoteString(asString(step.alertType) || 'info'))]];
+      const entries: Array<[string, JsNode]> = [['type', jsCode(alertTypeCode(ctx, step))]];
       // Like the designer runtime: an empty title is omitted, anything else is passed through.
       if (asString(step.title) !== '') entries.push(['title', jsCode(templateText(ctx, step.title))]);
       entries.push(['message', jsCode(templateText(ctx, step.message))]);
@@ -228,6 +230,44 @@ function knownType(ctx: GenContext): (name: string) => InferredType {
     }
     return null;
   };
+}
+
+const ALERT_TYPE_VALUES = new Set(['info', 'warning', 'success', 'danger', 'tip']);
+
+/**
+ * The `type` of an addAlert call: the fixed type, or the rules expression that picks it. A chain
+ * of conditions whose results are all alert types (what Rules write) type-checks as it is;
+ * anything else is cast, as `actions.addAlert` only takes those literal types.
+ */
+function alertTypeCode(ctx: GenContext, step: { alertType: unknown; alertTypeExpr?: unknown }): string {
+  const expr = asString(step.alertTypeExpr);
+  if (normalizeExpression(expr) === '') return quoteString(asString(step.alertType) || 'info');
+  const code = userExpr(ctx, expr);
+  if (ternaryOfAlertTypes(code)) return code;
+  ctx.usesAny = true;
+  return `(${code}) as any`;
+}
+
+/** `c1 ? "success" : c2 ? "warning" : "danger"` (every result a string literal alert type). */
+function ternaryOfAlertTypes(code: string): boolean {
+  const toks = tokenize(code).filter((t) => t.kind !== 'whitespace' && t.kind !== 'comment');
+  // Top-level runs after each "?" and ":": result, condition, result, …, last result.
+  const runs: Token[][] = [];
+  let depth = 0;
+  for (const t of toks) {
+    const open = t.kind === 'punct' && (t.text === '(' || t.text === '[' || t.text === '{');
+    const close = t.kind === 'punct' && (t.text === ')' || t.text === ']' || t.text === '}');
+    if (depth === 0 && t.kind === 'punct' && (t.text === '?' || t.text === ':')) {
+      runs.push([]);
+      continue;
+    }
+    if (open) depth++;
+    else if (close) depth--;
+    if (runs.length) runs[runs.length - 1].push(t);
+  }
+  if (runs.length < 2 || runs.length % 2 !== 0) return false;
+  const results = runs.filter((_, i) => i % 2 === 0 || i === runs.length - 1);
+  return results.every((r) => r.length === 1 && r[0].kind === 'string' && ALERT_TYPE_VALUES.has(r[0].text.slice(1, -1)));
 }
 
 /**

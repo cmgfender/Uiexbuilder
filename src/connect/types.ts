@@ -31,6 +31,7 @@ export const CONNECTOR_ROUTES = {
   deployStatus: '/api/deploy/:deployId', // GET -> DeployStatus (older clients; prefer deployPoll)
   deployKey: '/api/deploy/key', // GET -> DeployKeyInfo (always { remembered: false }: keys are never stored); DELETE -> same
   deployPoll: '/api/deploy/status', // POST { deployId } -> DeployStatus (keeps the deployId out of URLs and access logs)
+  deployCheckKey: '/api/deploy/check-key', // POST DeployKeyCheckRequest -> DeployKeyCheck (before uploading anything)
 } as const;
 
 export const CSRF_HEADER = 'X-UIEX-Request';
@@ -251,6 +252,44 @@ export interface DeployStatus {
   installUrl?: string;
 }
 
+/** POST /api/deploy/check-key — what the builder learns about a key before it uploads anything. */
+export interface DeployKeyCheckRequest {
+  personalAccessKey: string;
+  /** Target portal before HubSpot sign-in is set up (ignored when signed in: the target is the connected account). */
+  portalId?: number;
+}
+
+/** The HubSpot account a personal access key belongs to, as HubSpot reported it when the key was exchanged. */
+export interface DeployKeyAccount {
+  portalId: number;
+  /** HubSpot's name for the account ("hubName"), when it sent one. */
+  name?: string;
+  /** HubSpot's account type (STANDARD, DEVELOPER_TEST, APP_DEVELOPER, SANDBOX …), when it sent one. */
+  accountType?: string;
+  /**
+   * Whether the key has the "Developer projects" permission, read from the scope groups HubSpot
+   * returned: 'unknown' when HubSpot listed none.
+   */
+  developerProjects: 'yes' | 'no' | 'unknown';
+  /** HubSpot's personal access key page of that account (where the key's permissions are changed). */
+  keyPageUrl: string;
+}
+
+/** Problems a key check can find (the key itself works). */
+export type DeployKeyProblem = 'missing_permission' | 'portal_mismatch' | 'portal_not_allowed';
+
+export interface DeployKeyCheck {
+  /** True when publishing with this key can go ahead. */
+  ok: boolean;
+  key: DeployKeyAccount;
+  /** Where publishing goes: the connected account when signed in (else the requested account, if any). */
+  target?: { portalId: number; name?: string };
+  /** The first thing to fix when !ok. */
+  problem?: DeployKeyProblem;
+  /** Plain-language explanation of `problem`. */
+  message?: string;
+}
+
 /** GET/DELETE /api/deploy/key — kept for older clients: keys are never remembered any more (always false). */
 export interface DeployKeyInfo {
   remembered: boolean;
@@ -270,5 +309,10 @@ export interface ConnectorErrorBody {
     requiredScopes?: string[];
     /** For 'portal_mismatch' (deploy): the HubSpot account the personal access key belongs to. */
     portalId?: number;
+    /**
+     * Deploy errors about the key or its account (missing_scope, forbidden, not_available,
+     * portal_mismatch, portal_not_allowed): the account the key belongs to, once HubSpot said.
+     */
+    key?: DeployKeyAccount;
   };
 }

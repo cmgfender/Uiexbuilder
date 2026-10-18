@@ -1,34 +1,33 @@
 /**
- * Rules editor for one prop (or a component's text): "Based on [this bar's percentage] — is at
- * least [80] → [Success] … Otherwise → [Danger]". Edits a RuleSet (see rules.ts); the parent
- * stores it as an expression. "Based on" lists the component's own values plus everything in scope
- * at the node (state, computed values, record properties, data, repeat item, context).
+ * Rules editor for one prop (or a component's text, or a value in an action): "Based on [this
+ * bar's percentage] — is at least [80] → [Success] … Otherwise → [Danger]". Edits a RuleSet (see
+ * rules.ts); the parent stores it as an expression. "Based on" (the shared SubjectPicker) lists the
+ * component's own values plus everything in scope at the node (event values, repeat item and its
+ * fields, state, computed values, record properties, data, context).
  */
-import { useId, useMemo, useState } from 'react';
+import { useId, useMemo } from 'react';
 import { ArrowRight, Plus, Trash2 } from 'lucide-react';
-import type { Extension, JsonValue, UINode } from '../model/types';
+import type { Extension, JsonValue, NodeId, UINode } from '../model/types';
 import type { PropDef } from '../registry/types';
 import { IconButton } from '../ui';
-import { ExpressionInput, usePreviewScope, useScopeVariables } from './controls';
+import { usePreviewScope } from './controls';
 import { LiteralEditor } from './editors';
+import { declaredSubjectType, parseValueText, type ConditionOp } from './power-conditions';
+import { SubjectPicker } from './power-SubjectPicker';
 import { isNumericOp, RULE_OPS, rulesToExpr, ruleSubjectsFor, toRuleLiteral, type RuleLiteral, type RuleOp, type RuleSet } from './rules';
-import { safeEvaluate, SCOPE_KIND_LABELS, type ScopeVariable, type ScopeVariableKind } from './scope';
+import { safeEvaluate } from './scope';
 
 export interface RulesEditorProps {
-  node: UINode;
+  /** The component whose value the rules pick (its own values are offered under "Based on"). */
+  node?: UINode | null;
+  /** Where the rules are evaluated (defaults to the node). */
+  nodeId?: NodeId | null;
+  /** Event values in scope (rules on an action's values). */
+  eventParams?: string[];
   def: PropDef;
   ext: Extension;
   value: RuleSet;
   onChange: (next: RuleSet) => void;
-}
-
-const CUSTOM = '__custom__';
-
-/** Scope variables worth comparing (not setters, helpers or whole objects). */
-const SUBJECT_KINDS: ScopeVariableKind[] = ['repeat', 'state', 'computed', 'property', 'dataSource', 'context'];
-
-function usableSubject(v: ScopeVariable): boolean {
-  return SUBJECT_KINDS.includes(v.kind) && (!v.members || v.kind === 'repeat');
 }
 
 function shortValue(v: unknown): string {
@@ -42,40 +41,38 @@ function whenText(v: RuleLiteral): string {
   return v === null ? '' : String(v);
 }
 
-function parseWhen(text: string, op: RuleOp): RuleLiteral {
-  const t = text.trim();
+const AS_CONDITION_OP: Record<RuleOp, ConditionOp> = { '>=': 'gte', '>': 'gt', '<=': 'lte', '<': 'lt', '===': 'eq', '!==': 'neq' };
+
+/**
+ * The threshold typed for a rule: numbers for "at least / more than…"; for "is / is not" a value of
+ * the subject's type — CRM values stay text ("true", "125000"), typed state and numbers follow
+ * their type.
+ */
+export function parseWhen(text: string, op: RuleOp, declared: ReturnType<typeof declaredSubjectType> = 'any', sample?: unknown): RuleLiteral {
   if (isNumericOp(op)) {
+    const t = text.trim();
     const n = Number(t);
     return t !== '' && Number.isFinite(n) ? n : t;
   }
-  if (t === 'true' || t === 'false') return t === 'true';
-  return text;
+  return parseValueText(text, AS_CONDITION_OP[op], declared, sample);
 }
 
-export function RulesEditor({ node, def, ext, value, onChange }: RulesEditorProps) {
+export function RulesEditor({ node, nodeId: at, eventParams, def, ext, value, onChange }: RulesEditorProps) {
   const id = useId();
-  const own = ruleSubjectsFor(node);
-  const scopeVars = useScopeVariables(ext, node.id);
-  const vars = useMemo(() => scopeVars.filter(usableSubject), [scopeVars]);
+  const nodeId = at ?? node?.id ?? null;
+  const own = node ? ruleSubjectsFor(node) : [];
   const subject = value.subject.trim();
-  const ownIndex = own.findIndex((s) => s.expr.trim() === subject);
-  const matchedKey = ownIndex >= 0 ? `own:${ownIndex}` : vars.some((v) => v.name === subject) ? `var:${subject}` : null;
-  const [custom, setCustom] = useState(!matchedKey && subject !== '');
-  const showCustom = custom || (!matchedKey && subject !== '') || (own.length === 0 && vars.length === 0);
-  const groups = SUBJECT_KINDS.map((kind) => ({
-    kind,
-    items: vars.filter((v) => v.kind === kind),
-  })).filter((g) => g.items.length > 0);
 
   // What the rules give right now in the preview (with mock or live data).
-  const scope = usePreviewScope(ext, node.id);
+  const scope = usePreviewScope(ext, nodeId);
+  const subjectNow = useMemo(() => (subject ? safeEvaluate(subject, scope) : null), [subject, scope]);
   const now = useMemo(() => {
-    if (!subject || value.cases.length === 0) return null;
-    const s = safeEvaluate(subject, scope);
+    if (!subjectNow?.ok || value.cases.length === 0) return null;
     const r = safeEvaluate(rulesToExpr(value), scope);
-    if (!s?.ok || !r?.ok) return null;
-    return { subject: s.value, result: r.value };
-  }, [subject, value, scope]);
+    if (!r?.ok) return null;
+    return { subject: subjectNow.value, result: r.value };
+  }, [subjectNow, value, scope]);
+  const sample = subjectNow?.ok ? subjectNow.value : undefined;
   const resultLabel = (v: unknown) => {
     if (def.type.kind === 'enum') {
       const o = def.type.options.find((x) => x.value === v);
@@ -84,6 +81,7 @@ export function RulesEditor({ node, def, ext, value, onChange }: RulesEditorProp
     return shortValue(v);
   };
 
+  const declared = declaredSubjectType(ext, subject);
   const update = (patch: Partial<RuleSet>) => onChange({ ...value, ...patch });
   const updateCase = (i: number, patch: Partial<RuleSet['cases'][number]>) =>
     update({
@@ -98,7 +96,7 @@ export function RulesEditor({ node, def, ext, value, onChange }: RulesEditorProp
       value={v as JsonValue}
       onChange={(next) => onValue(toRuleLiteral(next, def))}
       ext={ext}
-      nodeId={node.id}
+      nodeId={nodeId}
       required={false}
     />
   );
@@ -107,60 +105,16 @@ export function RulesEditor({ node, def, ext, value, onChange }: RulesEditorProp
     <div className="ub-insp-rules" role="group" aria-label={`${def.label} rules`}>
       <div className="ub-insp-rules__subject">
         <label htmlFor={`${id}-subject`}>Based on</label>
-        {(own.length > 0 || vars.length > 0) && (
-          <select
-            id={`${id}-subject`}
-            className="ub-select ub-insp-rules__select"
-            value={showCustom ? CUSTOM : (matchedKey ?? '')}
-            onChange={(e) => {
-              const key = e.target.value;
-              if (key === CUSTOM) {
-                setCustom(true);
-                return;
-              }
-              setCustom(false);
-              if (key.startsWith('own:')) update({ subject: own[Number(key.slice(4))].expr });
-              else if (key.startsWith('var:')) update({ subject: key.slice(4) });
-            }}
-          >
-            {!matchedKey && !showCustom && (
-              <option value="" disabled>
-                Choose what to compare…
-              </option>
-            )}
-            {own.length > 0 && (
-              <optgroup label="This component">
-                {own.map((s, i) => (
-                  <option key={s.label} value={`own:${i}`}>
-                    {s.label}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            {groups.map((g) => (
-              <optgroup key={g.kind} label={SCOPE_KIND_LABELS[g.kind]}>
-                {g.items.map((v) => (
-                  <option key={v.name} value={`var:${v.name}`}>
-                    {v.name}
-                    {v.detail ? ` — ${v.detail}` : ''}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-            <option value={CUSTOM}>Something else (expression)…</option>
-          </select>
-        )}
-        {showCustom && (
-          <ExpressionInput
-            id={own.length > 0 || vars.length > 0 ? undefined : `${id}-subject`}
-            value={value.subject}
-            onChange={(text) => update({ subject: text })}
-            ext={ext}
-            nodeId={node.id}
-            placeholder="e.g. properties.amount"
-            aria-label={`${def.label}: what the rules compare`}
-          />
-        )}
+        <SubjectPicker
+          id={`${id}-subject`}
+          ext={ext}
+          nodeId={nodeId}
+          eventParams={eventParams}
+          own={own}
+          value={value.subject}
+          onChange={(subject) => update({ subject })}
+          exprLabel={`${def.label}: what the rules compare`}
+        />
         {now && (
           <p className="ub-insp-rules__now" aria-live="polite">
             Right now: {shortValue(now.subject)} → <strong>{resultLabel(now.result)}</strong>
@@ -179,7 +133,7 @@ export function RulesEditor({ node, def, ext, value, onChange }: RulesEditorProp
                 value={c.op}
                 onChange={(e) => {
                   const op = e.target.value as RuleOp;
-                  updateCase(i, { op, when: parseWhen(whenText(c.when), op) });
+                  updateCase(i, { op, when: parseWhen(whenText(c.when), op, declared, sample) });
                 }}
               >
                 {RULE_OPS.map((o) => (
@@ -193,7 +147,7 @@ export function RulesEditor({ node, def, ext, value, onChange }: RulesEditorProp
                 aria-label={`Rule ${i + 1} value to compare with`}
                 inputMode={isNumericOp(c.op) ? 'decimal' : undefined}
                 value={whenText(c.when)}
-                onChange={(e) => updateCase(i, { when: parseWhen(e.target.value, c.op) })}
+                onChange={(e) => updateCase(i, { when: parseWhen(e.target.value, c.op, declared, sample) })}
               />
               <IconButton
                 size="sm"

@@ -8,8 +8,9 @@
  */
 import { openBottomTab, showLeftTab } from '../shell/shellStore';
 import { selectActiveExtension, useEditor, type BottomPanelTab, type LeftPanelTab } from '../model/store';
-import type { Extension, NodeId } from '../model/types';
+import type { ComputedValue, Extension, NodeId } from '../model/types';
 import { renameReferences } from '../panels/findUsages';
+import { shapeToExpr } from './shape';
 
 export type Notify = (message: string) => void;
 
@@ -39,6 +40,32 @@ export function renameComputed(id: string, name: string): number {
     changed = renameReferences(e as Extension, old, name);
   });
   return changed;
+}
+
+/** `deals` for `deals`, `deals ?? []`, `weather.items` → `weatherItems`. */
+function listBaseName(source: string): string {
+  const s = source.replace(/\s*\?\?\s*\[\s*\]\s*$/, '').trim();
+  const parts = s.split(/[^A-Za-z0-9_$]+/).filter(Boolean);
+  if (!parts.length) return 'list';
+  return parts.map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1))).join('');
+}
+
+/** The list a repeat / source expression stands for (`deals ?? []` → `deals`). */
+export function listSourceOf(expr: string): string {
+  return expr.replace(/\s*\?\?\s*\[\s*\]\s*$/, '').trim();
+}
+
+/**
+ * Adds a shaped list (filter / sort / limit / format, see shape.ts) of `source` as a computed
+ * value at the end of the list — after everything it can read — named like `dealsView`.
+ */
+export function addShapedList(source: string): ComputedValue {
+  const src = listSourceOf(source);
+  return useEditor.getState().addComputed({
+    name: `${listBaseName(src)}View`,
+    expr: shapeToExpr({ source: src }),
+    description: `${src}, filtered and sorted`,
+  });
 }
 
 // ---------------------------------------------------------------------------

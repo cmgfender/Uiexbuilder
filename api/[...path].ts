@@ -5,7 +5,8 @@
  * Settings (Vercel → Project → Settings → Environment Variables): HUBSPOT_CLIENT_ID,
  * HUBSPOT_CLIENT_SECRET, SESSION_SECRET and APP_URL (optional on Vercel: defaults to the project's
  * production address). Placeholders such as "later" count as not set (server/hosting.ts). Optional: HUBSPOT_SCOPES, HUBSPOT_OPTIONAL_SCOPES, HUBSPOT_API_BASE,
- * HUBSPOT_APP_BASE, ENABLE_FETCH_PROXY, ENABLE_DEPLOY, ALLOWED_ORIGINS, ALLOWED_PORTALS.
+ * HUBSPOT_APP_BASE, ENABLE_FETCH_PROXY, ENABLE_DEPLOY, ALLOWED_ORIGINS, ALLOWED_PORTALS, and
+ * ADMIN_EMAILS / ADMIN_PORTALS (who may open the /status page; VERCEL_GIT_COMMIT_SHA is shown there).
  *
  * vercel.json rewrites /api/:path* here with `__uiex_path=:path*` so deep paths work whether or not
  * the platform matches this catch-all file directly; the original path is restored before routing.
@@ -37,6 +38,9 @@ export function vercelEnv(): Record<string, string | undefined> {
     ENABLE_DEPLOY: e.ENABLE_DEPLOY,
     ALLOWED_ORIGINS: e.ALLOWED_ORIGINS,
     ALLOWED_PORTALS: e.ALLOWED_PORTALS,
+    ADMIN_EMAILS: e.ADMIN_EMAILS,
+    ADMIN_PORTALS: e.ADMIN_PORTALS,
+    VERCEL_GIT_COMMIT_SHA: e.VERCEL_GIT_COMMIT_SHA,
     NODE_ENV: e.NODE_ENV ?? 'production',
     VERCEL_PROJECT_PRODUCTION_URL: e.VERCEL_PROJECT_PRODUCTION_URL,
     VERCEL_URL: e.VERCEL_URL,

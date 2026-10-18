@@ -12,16 +12,18 @@
  * to the same store value, for code that does not fit the sidebar.
  */
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, CircleAlert, Maximize2, Plus, Sigma, SquareFunction, Trash2, WandSparkles } from 'lucide-react';
+import { ArrowDown, ArrowUp, Braces, ChevronDown, ChevronRight, CircleAlert, ListFilter, Maximize2, Plus, Sigma, SquareFunction, Trash2, WandSparkles } from 'lucide-react';
 import { selectActiveExtension, useActiveExtension, useEditor } from '../model/store';
 import type { ComputedValue, Extension } from '../model/types';
 import { findUsages, renameConflictMessage } from '../panels/findUsages';
 import { buildScopeWithDiagnostics, initialStateValues, resolveDataSources, useOptionalRuntime, type Scope, type ScopeDiagnostics } from '../runtime';
 import { ExpressionInput } from '../inspector/controls';
-import { Badge, Button, Field, IconButton, Section, TextInput, cx, useToast } from '../ui';
-import { renameComputed } from './actions';
+import { Badge, Button, Field, IconButton, Menu, Section, TextInput, cx, useMenu, useToast } from '../ui';
+import { addShapedList, renameComputed } from './actions';
 import { CodeEditor, CodeEditorDialog, handleCodeKeyDown } from './CodeEditor';
 import { usableComputed, validateComputedName } from './computed';
+import { describeShape, listChoices, parseShape, shapeToExpr } from './shape';
+import { ShapeEditor } from './ShapeEditor';
 import { appendHelperExamples, checkHelpersSyntax, compileHelpers, helperNames } from './helpers';
 import { codeExecutionAllowed } from '../model/trust';
 import { guardLoops } from '../runtime/loopGuard';
@@ -233,6 +235,18 @@ export function ComputedSection() {
     setOpenId(c.id);
     setFocusId(c.id);
   };
+  // "Filter or sort a list": a computed value shaped with the list editor (shape.ts).
+  const listMenu = useMenu();
+  const lists = useMemo(() => listChoices(ext, scope), [ext, scope]);
+  const addList = (source: string) => {
+    const c = addShapedList(source);
+    setOpenId(c.id);
+    setFocusId(null);
+  };
+  const openListMenu = (anchor: HTMLElement) => {
+    if (lists.length === 1) addList(lists[0].expr);
+    else listMenu.openAt(anchor);
+  };
   const toggle = useCallback((id: string) => {
     setOpenId((cur) => (cur === id ? null : id));
     setFocusId(null);
@@ -252,9 +266,20 @@ export function ComputedSection() {
         </span>
       }
       actions={
-        <IconButton label="Add computed value" size="sm" className="ub-pw-icon" onClick={add}>
-          <Plus size={14} aria-hidden />
-        </IconButton>
+        <>
+          <IconButton
+            label="Filter or sort a list"
+            size="sm"
+            className="ub-pw-icon"
+            aria-haspopup={lists.length === 1 ? undefined : 'menu'}
+            onClick={(e) => openListMenu(e.currentTarget)}
+          >
+            <ListFilter size={14} aria-hidden />
+          </IconButton>
+          <IconButton label="Add computed value" size="sm" className="ub-pw-icon" onClick={add}>
+            <Plus size={14} aria-hidden />
+          </IconButton>
+        </>
       }
     >
       {list.length === 0 ? (
@@ -269,6 +294,11 @@ export function ComputedSection() {
           <button type="button" className="ub-pw-link" onClick={add}>
             Add a computed value
           </button>
+          {lists.length > 0 && (
+            <button type="button" className="ub-pw-link" aria-haspopup={lists.length === 1 ? undefined : 'menu'} onClick={(e) => openListMenu(e.currentTarget)}>
+              Filter or sort a list
+            </button>
+          )}
         </div>
       ) : (
         <div className="ub-pw-items" role="list" aria-label="Computed values">
@@ -289,6 +319,18 @@ export function ComputedSection() {
             />
           ))}
         </div>
+      )}
+      {listMenu.position && (
+        <Menu
+          x={listMenu.position.x}
+          y={listMenu.position.y}
+          onClose={listMenu.close}
+          items={
+            lists.length
+              ? lists.map((l) => ({ label: `${l.label} — ${l.detail}`, icon: <ListFilter size={14} />, onSelect: () => addList(l.expr) }))
+              : [{ label: 'No lists yet — add a data source or a list variable first', disabled: true, onSelect: () => {} }]
+          }
+        />
       )}
     </Section>
   );
@@ -337,10 +379,17 @@ const ComputedRow = memo(function ComputedRow({
 
   const store = useEditor.getState;
   const empty = !c.expr || !c.expr.trim();
+  const shape = useMemo(() => parseShape(c.expr), [c.expr]);
   let status: ReactNode;
   if (inactive) status = <Badge tone="warning">inactive</Badge>;
   else if (error) status = <Badge tone="danger" title={error}>error</Badge>;
   else if (empty) status = <span className="ub-pw-item__meta ub-pw-item__meta--empty">no expression</span>;
+  else if (shape && Array.isArray(value))
+    status = (
+      <span className="ub-pw-item__meta" title={describeShape(shape)}>
+        <ListFilter size={11} aria-hidden /> {value.length} row{value.length === 1 ? '' : 's'}
+      </span>
+    );
   else
     status = (
       <span className="ub-pw-item__meta" title={formatValue(value, 400)}>
@@ -349,6 +398,7 @@ const ComputedRow = memo(function ComputedRow({
     );
 
   const [bigEditor, setBigEditor] = useState(false);
+  const [asCode, setAsCode] = useState(false);
   const valueLine = (
     <div className={cx('ub-pw-value', error && 'ub-pw-value--error')} role="status" aria-live="polite">
       {inactive ? (
@@ -417,13 +467,44 @@ const ComputedRow = memo(function ComputedRow({
               onCommit={(name) => onRenamed(renameComputed(c.id, name), name)}
             />
           </Field>
+          {shape && !asCode ? (
+            <div className="ub-pw-shapebox">
+              <div className="ub-pw-shape__mode">
+                <span className="ub-pw-strong">Filter &amp; sort rows</span>
+                <button
+                  type="button"
+                  className="ub-pw-cond__code"
+                  onClick={() => setAsCode(true)}
+                  title="Edit the list as a JavaScript expression"
+                  aria-label={`${c.name}: edit as code`}
+                >
+                  <Braces size={12} aria-hidden /> Code
+                </button>
+              </div>
+              <ShapeEditor
+                ext={ext}
+                shape={shape}
+                computedId={c.id}
+                name={c.name}
+                onChange={(next) => store().updateComputed(c.id, { expr: shapeToExpr(next) })}
+              />
+              {(inactive || error) && valueLine}
+            </div>
+          ) : (
           <Field
             label="Expression"
             htmlFor={`${uid}-expr`}
             actions={
-              <IconButton label={`Open ${c.name || 'the expression'} in a large editor`} size="sm" className="ub-pw-icon" onClick={() => setBigEditor(true)}>
-                <Maximize2 size={13} aria-hidden />
-              </IconButton>
+              <>
+                {shape && (
+                  <button type="button" className="ub-pw-link" onClick={() => setAsCode(false)}>
+                    Use the list editor
+                  </button>
+                )}
+                <IconButton label={`Open ${c.name || 'the expression'} in a large editor`} size="sm" className="ub-pw-icon" onClick={() => setBigEditor(true)}>
+                  <Maximize2 size={13} aria-hidden />
+                </IconButton>
+              </>
             }
           >
             <ExpressionInput
@@ -438,6 +519,7 @@ const ComputedRow = memo(function ComputedRow({
             />
             {valueLine}
           </Field>
+          )}
           <Field label="Description" htmlFor={`${uid}-desc`} hint="Optional — shown as a comment in the generated code.">
             <TextInput
               id={`${uid}-desc`}

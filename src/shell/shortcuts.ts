@@ -23,6 +23,7 @@ import {
   moveSelectedAmongSiblings,
   pasteAt,
   removeNodeSafe,
+  removeNodesSafe,
   selectFirstChild,
   selectParent,
   selectParentStrict,
@@ -53,23 +54,27 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: 'undo', keys: 'Cmd+Z', description: 'Undo', group: 'Edit' },
   { id: 'redo', keys: 'Shift+Cmd+Z', description: 'Redo', group: 'Edit' },
   { id: 'redoAlt', keys: 'Cmd+Y', description: 'Redo (alternative)', group: 'Edit' },
-  { id: 'delete', keys: 'Delete', description: 'Delete the selected component', group: 'Edit' },
+  { id: 'delete', keys: 'Delete', description: 'Delete the selected component(s)', group: 'Edit' },
   { id: 'duplicate', keys: 'Cmd+D', description: 'Duplicate the selected component', group: 'Edit' },
   { id: 'copy', keys: 'Cmd+C', description: 'Copy the selected component', group: 'Edit' },
   { id: 'cut', keys: 'Cmd+X', description: 'Cut the selected component', group: 'Edit' },
   { id: 'paste', keys: 'Cmd+V', description: 'Paste after the selection (or inside a selected container)', group: 'Edit' },
-  { id: 'wrap', keys: 'Cmd+G', description: 'Wrap the selection in a Flex', group: 'Edit' },
+  { id: 'copySettings', keys: 'Alt+Cmd+C', description: 'Copy the selected component’s settings (look, text, rules — not its id)', group: 'Edit' },
+  { id: 'pasteSettings', keys: 'Alt+Cmd+V', description: 'Paste settings onto the selected component(s) of the same type', group: 'Edit' },
+  { id: 'wrap', keys: 'Cmd+G', description: 'Wrap the selection in a layout box (Flex)', group: 'Edit' },
   { id: 'moveUp', keys: 'Alt+ArrowUp', description: 'Move the selection up among its siblings', group: 'Edit' },
   { id: 'moveDown', keys: 'Alt+ArrowDown', description: 'Move the selection down among its siblings', group: 'Edit' },
   { id: 'rename', keys: 'F2', description: 'Rename the selected layer (in Layers)', group: 'Edit' },
 
-  { id: 'selectParent', keys: 'Escape', description: 'Select the parent (deselect at the top level)', group: 'Selection' },
+  { id: 'multiSelect', keys: 'Shift+Click', description: 'Add a component to the selection, or take it out (also Cmd+Click)', group: 'Selection' },
+  { id: 'selectParent', keys: 'Escape', description: 'Select the parent (deselect at the top level; with several selected, keep one)', group: 'Selection' },
   { id: 'prevSibling', keys: 'ArrowUp', description: 'Select the previous sibling', group: 'Selection' },
   { id: 'nextSibling', keys: 'ArrowDown', description: 'Select the next sibling', group: 'Selection' },
   { id: 'parent', keys: 'ArrowLeft', description: 'Select the parent', group: 'Selection' },
   { id: 'firstChild', keys: 'ArrowRight', description: 'Select the first child', group: 'Selection' },
 
   { id: 'focusSearch', keys: 'Cmd+/', description: 'Search components', group: 'View' },
+  { id: 'filterSettings', keys: '/', description: 'Filter settings (with focus in the inspector)', group: 'View' },
   { id: 'tabComponents', keys: 'Cmd+1', description: 'Show Components', group: 'View' },
   { id: 'tabLayers', keys: 'Cmd+2', description: 'Show Layers', group: 'View' },
   { id: 'tabTemplates', keys: 'Cmd+3', description: 'Show Templates', group: 'View' },
@@ -292,6 +297,22 @@ export function handleGlobalKeyDown(e: KeyboardEvent, notify: Notify): boolean {
     }
   }
 
+  // Alt+Cmd+C / Alt+Cmd+V: copy / paste settings. `e.code`, because Alt changes `e.key` on macOS.
+  if (mod && e.altKey && !e.shiftKey && designing && (e.code === 'KeyC' || e.code === 'KeyV')) {
+    if (e.code === 'KeyC') {
+      if (!hasSelection) return false;
+      const copied = editor.copySettings(selected);
+      if (copied) notify(`Copied the settings of ${copied.label}`);
+      return true;
+    }
+    const ids = editor.selectedNodeIds.length > 1 ? editor.selectedNodeIds : hasSelection ? [selected] : [];
+    const clip = editor.settingsClipboard;
+    if (!clip || !ids.length) return false;
+    const n = editor.pasteSettings(ids);
+    notify(n ? `Pasted the settings of ${clip.label} onto ${n} component${n === 1 ? '' : 's'}` : 'They already have these settings');
+    return true;
+  }
+
   if (e.ctrlKey || e.metaKey) return false;
 
   if (!e.altKey && key === '?') {
@@ -313,10 +334,19 @@ export function handleGlobalKeyDown(e: KeyboardEvent, notify: Notify): boolean {
   switch (key) {
     case 'Delete':
     case 'Backspace':
+      if (editor.selectedNodeIds.length > 1) {
+        removeNodesSafe(editor.selectedNodeIds, notify);
+        return true;
+      }
       if (!hasSelection) return false;
       removeNodeSafe(selected, notify);
       return true;
     case 'Escape':
+      if (editor.selectedNodeIds.length > 1) {
+        // Several selected: keep only the primary one.
+        editor.select(selected);
+        return true;
+      }
       if (!selected) return false;
       selectParent();
       return true;

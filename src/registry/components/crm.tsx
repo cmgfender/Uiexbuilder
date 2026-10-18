@@ -48,7 +48,7 @@ import {
 } from 'lucide-react';
 import type { ExtensionLocation, JsonValue } from '../../model/types';
 import type { ComponentDef, EnumOption, EventDef, PreviewProps, PropDef } from '../types';
-import { CRM_ACTION_DOCS, CRM_DOCS, CRM_OBJECT_TYPES } from '../constants';
+import { CRM_ACTION_DOCS, CRM_DOCS, CRM_OBJECT_TYPES, HS_SWATCH } from '../constants';
 import { cx, normalizeSize, str } from '../../preview/util';
 import '../../preview/styles/crm.css';
 import { useLiveCrm, useLiveLoad, useLivePropertyLabels, type LiveCrmSource } from '../../preview/liveCrm';
@@ -416,7 +416,7 @@ const TEST_ID_PROP: PropDef = {
   description: 'Used by findByTestId() to locate this component in tests.',
 };
 
-const OBJECT_TYPE_HELP = 'e.g. 0-1 (contacts), 0-2 (companies), 0-3 (deals), 0-5 (tickets), or 2-… for custom objects.';
+const OBJECT_TYPE_HELP = 'Pick it from the list (HubSpot ids: 0-1 contacts, 0-2 companies, 0-3 deals, 0-5 tickets, 2-… custom objects).';
 
 function objectTypeIdProp(description: string, required: boolean, label = 'Record type'): PropDef {
   return {
@@ -430,7 +430,7 @@ function objectTypeIdProp(description: string, required: boolean, label = 'Recor
 }
 
 const RECORD_OBJECT_TYPE_ID_PROP = objectTypeIdProp(
-  'Object type of a specific record to display instead of the current record (use together with Record ID).',
+  'Leave empty to show the record being viewed. To show one specific record instead, set its type here and its ID below.',
   false,
 );
 const RECORD_OBJECT_ID_PROP: PropDef = {
@@ -438,7 +438,7 @@ const RECORD_OBJECT_ID_PROP: PropDef = {
   label: 'Record ID',
   type: { kind: 'number', min: 1, step: 1, integer: true },
   group: 'Data',
-  description: 'ID of a specific CRM record to display instead of the current record (use together with Record type).',
+  description: 'The ID of one specific record to show instead of the record being viewed (set its record type too).',
 };
 
 function propertiesProp(description: string, label = 'Properties', name = 'properties'): PropDef {
@@ -1810,6 +1810,7 @@ export const crmComponents: ComponentDef[] = [
     category: 'CRM data',
     description: 'Lists up to 24 properties of the current record (or a specific record) with inline editing.',
     icon: TableProperties,
+    groupOrder: ['Data'],
     docsUrl: `${CRM_DOCS}/crm-property-list`,
     importFrom: '@hubspot/ui-extensions/crm',
     locations: CRM_DATA_LOCATIONS,
@@ -1820,21 +1821,22 @@ export const crmComponents: ComponentDef[] = [
       props: { properties: ['firstname', 'lastname', 'email', 'phone', 'lifecyclestage', 'hubspot_owner_id'] },
     }),
     props: [
-      propertiesProp('Internal names of the properties to display, up to 24. Shows the current record unless Object type ID and Record ID are set.'),
+      propertiesProp('The properties to show, in order (up to 24). People can edit them right in the card.'),
       {
         // TS type is `string`; HubSpot documents "column" (default) and "row".
         name: 'direction',
-        label: 'Direction',
+        label: 'Arrange',
         type: {
           kind: 'enum',
           options: [
-            { value: 'column', label: 'Column (stacked)' },
-            { value: 'row', label: 'Row (side by side)' },
+            { value: 'column', label: 'Stacked' },
+            { value: 'row', label: 'Side by side' },
           ],
+          display: 'direction',
         },
         defaultValue: 'column',
         group: 'Appearance',
-        description: 'The layout direction of the list.',
+        description: 'Properties one under the other, or side by side.',
       },
       RECORD_OBJECT_TYPE_ID_PROP,
       RECORD_OBJECT_ID_PROP,
@@ -1848,6 +1850,7 @@ export const crmComponents: ComponentDef[] = [
     category: 'CRM data',
     description: 'A searchable, paginated table of records associated with the current record. HubSpot shows the loading and “none yet” states for you.',
     icon: Table2,
+    groupOrder: ['Data'],
     docsUrl: `${CRM_DOCS}/crm-association-table`,
     importFrom: '@hubspot/ui-extensions/crm',
     locations: CRM_DATA_LOCATIONS,
@@ -1864,7 +1867,7 @@ export const crmComponents: ComponentDef[] = [
     }),
     props: [
       objectTypeIdProp('Which associated records to list (deals, contacts, companies…).', true, 'Associated records'),
-      propertiesProp('Internal names of the properties to show as table columns.', 'Property columns', 'propertyColumns'),
+      propertiesProp('The properties shown as the table’s columns, in order.', 'Property columns', 'propertyColumns'),
       {
         name: 'quickFilterProperties',
         label: 'Quick filter properties',
@@ -1917,6 +1920,7 @@ export const crmComponents: ComponentDef[] = [
     category: 'CRM data',
     description: 'Highlights up to four property values of the current record (or a specific record) side by side.',
     icon: Gauge,
+    groupOrder: ['Data'],
     docsUrl: `${CRM_DOCS}/crm-data-highlight`,
     importFrom: '@hubspot/ui-extensions/crm',
     locations: CRM_DATA_LOCATIONS,
@@ -1927,7 +1931,7 @@ export const crmComponents: ComponentDef[] = [
       props: { properties: ['lifecyclestage', 'hs_lead_status', 'notes_last_contacted', 'num_associated_deals'] },
     }),
     props: [
-      propertiesProp('Internal names of the properties to display, up to four. Shows the current record unless Object type ID and Record ID are set.'),
+      propertiesProp('The properties to highlight side by side (up to four).'),
       RECORD_OBJECT_TYPE_ID_PROP,
       RECORD_OBJECT_ID_PROP,
       TEST_ID_PROP,
@@ -1940,6 +1944,7 @@ export const crmComponents: ComponentDef[] = [
     category: 'CRM data',
     description: 'Embeds an existing single object report, optionally filtered to the current record.',
     icon: FileChartColumn,
+    groupOrder: ['Data'],
     docsUrl: `${CRM_DOCS}/crm-report`,
     importFrom: '@hubspot/ui-extensions/crm',
     locations: CRM_DATA_LOCATIONS,
@@ -1981,6 +1986,7 @@ export const crmComponents: ComponentDef[] = [
     category: 'CRM data',
     description: 'Lists associated records grouped by association label.',
     icon: Network,
+    groupOrder: ['Data'],
     docsUrl: `${CRM_DOCS}/crm-association-pivot`,
     importFrom: '@hubspot/ui-extensions/crm',
     locations: CRM_DATA_LOCATIONS,
@@ -2011,6 +2017,7 @@ export const crmComponents: ComponentDef[] = [
     category: 'CRM data',
     description: 'Lists up to 24 properties of a record associated with the current record.',
     icon: ListTree,
+    groupOrder: ['Data'],
     docsUrl: `${CRM_DOCS}/crm-association-property-list`,
     importFrom: '@hubspot/ui-extensions/crm',
     locations: CRM_DATA_LOCATIONS,
@@ -2022,7 +2029,7 @@ export const crmComponents: ComponentDef[] = [
     }),
     props: [
       objectTypeIdProp('Object type of the associated record.', true),
-      propertiesProp('Internal names of the associated record’s properties to display, up to 24.'),
+      propertiesProp('The associated record’s properties to show, in order (up to 24).'),
       associationLabelsProp('Only use an associated record that has all of these labels.'),
       filtersProp('filters', 'Only use an associated record whose property values match these filters.', [
         { property: 'domain', operator: 'HAS_PROPERTY' },
@@ -2038,6 +2045,7 @@ export const crmComponents: ComponentDef[] = [
     category: 'CRM data',
     description: 'Shows the pipeline or lifecycle stage progress of associated records, with up to four properties.',
     icon: Route,
+    groupOrder: ['Data'],
     docsUrl: `${CRM_DOCS}/crm-association-stage-tracker`,
     importFrom: '@hubspot/ui-extensions/crm',
     locations: CRM_DATA_LOCATIONS,
@@ -2049,7 +2057,7 @@ export const crmComponents: ComponentDef[] = [
     }),
     props: [
       objectTypeIdProp('Object type of the associated records.', true),
-      propertiesProp('Internal names of the associated records’ properties to display, up to four.'),
+      propertiesProp('The associated records’ properties to show (up to four).'),
       associationLabelsProp('Only include associated records with these labels (case sensitive).'),
       filtersProp('filters', 'Only include associated records whose property values match these filters.', [
         { property: 'dealstage', operator: 'NEQ', value: 'closedlost' },
@@ -2066,6 +2074,7 @@ export const crmComponents: ComponentDef[] = [
     category: 'CRM data',
     description: 'A progress bar from a start date property to a deadline date property, with optional properties below.',
     icon: Hourglass,
+    groupOrder: ['Data'],
     docsUrl: `${CRM_DOCS}/overview`,
     importFrom: '@hubspot/ui-extensions/crm',
     locations: CRM_DATA_LOCATIONS,
@@ -2082,7 +2091,7 @@ export const crmComponents: ComponentDef[] = [
         type: { kind: 'string', placeholder: 'createdate' },
         group: 'Data',
         required: true,
-        description: 'Internal name of the property holding the start date.',
+        description: 'The date property where the bar starts.',
       },
       {
         name: 'endDatePropertyName',
@@ -2090,9 +2099,9 @@ export const crmComponents: ComponentDef[] = [
         type: { kind: 'string', placeholder: 'closedate' },
         group: 'Data',
         required: true,
-        description: 'Internal name of the property holding the deadline date.',
+        description: 'The date property where the bar ends (the deadline).',
       },
-      propertiesProp('Internal names of the properties to display below the progress bar.'),
+      propertiesProp('Properties shown under the progress bar.'),
       showPropertiesProp('Show the properties below the progress bar.'),
       {
         name: 'progressTheme',
@@ -2142,6 +2151,7 @@ export const crmComponents: ComponentDef[] = [
     category: 'CRM data',
     description: 'Shows the pipeline or lifecycle stage progress of the current record (or a specific record), with up to four properties.',
     icon: Milestone,
+    groupOrder: ['Data'],
     docsUrl: `${CRM_DOCS}/crm-stage-tracker`,
     importFrom: '@hubspot/ui-extensions/crm',
     locations: CRM_DATA_LOCATIONS,
@@ -2152,7 +2162,7 @@ export const crmComponents: ComponentDef[] = [
       props: { properties: ['dealname', 'amount', 'closedate', 'hubspot_owner_id'] },
     }),
     props: [
-      propertiesProp('Internal names of the properties to display, up to four.'),
+      propertiesProp('Properties shown under the stages (up to four).'),
       showPropertiesProp('Show the properties below the progress indicator.'),
       RECORD_OBJECT_TYPE_ID_PROP,
       RECORD_OBJECT_ID_PROP,
@@ -2166,6 +2176,7 @@ export const crmComponents: ComponentDef[] = [
     category: 'CRM data',
     description: 'Calculates statistics (sum, average, min, max, count, percentiles) over CRM records.',
     icon: Sigma,
+    groupOrder: ['Data'],
     docsUrl: `${CRM_DOCS}/crm-statistics`,
     importFrom: '@hubspot/ui-extensions/crm',
     locations: CRM_DATA_LOCATIONS,
@@ -2214,18 +2225,18 @@ export const crmComponents: ComponentDef[] = [
       actionContextProp(),
       {
         name: 'variant',
-        label: 'Variant',
+        label: 'Style',
         type: {
           kind: 'enum',
           options: [
-            { value: 'primary', label: 'Primary' },
-            { value: 'secondary', label: 'Secondary' },
-            { value: 'destructive', label: 'Destructive' },
+            { value: 'primary', label: 'Primary', swatch: HS_SWATCH.primary },
+            { value: 'secondary', label: 'Secondary', swatch: HS_SWATCH.secondary },
+            { value: 'destructive', label: 'Destructive', swatch: HS_SWATCH.destructive },
           ],
         },
         defaultValue: 'secondary',
         group: 'Appearance',
-        description: 'The color variation of the button.',
+        description: 'Primary is the main (orange) button, secondary is outlined, destructive (red) is for deleting.',
       },
       {
         name: 'size',
@@ -2244,11 +2255,11 @@ export const crmComponents: ComponentDef[] = [
       },
       {
         name: 'type',
-        label: 'HTML type',
+        label: 'Button type',
         type: { kind: 'enum', options: [{ value: 'button' }, { value: 'reset' }, { value: 'submit' }] },
         defaultValue: 'button',
         group: 'Behavior',
-        description: 'The button’s HTML type attribute.',
+        description: 'Leave it on button unless it sits in a form (submit sends the form, reset empties it).',
       },
       {
         name: 'disabled',
@@ -2256,7 +2267,7 @@ export const crmComponents: ComponentDef[] = [
         type: { kind: 'boolean' },
         defaultValue: false,
         group: 'Behavior',
-        description: 'Render the button greyed out so it cannot be clicked.',
+        description: 'Greys the button out so it can’t be clicked.',
       },
       TEST_ID_PROP,
     ],
@@ -2284,19 +2295,19 @@ export const crmComponents: ComponentDef[] = [
       actionContextProp(),
       {
         name: 'variant',
-        label: 'Variant',
+        label: 'Color',
         type: {
           kind: 'enum',
           options: [
-            { value: 'primary', label: 'Primary' },
-            { value: 'light', label: 'Light' },
-            { value: 'dark', label: 'Dark' },
-            { value: 'destructive', label: 'Destructive' },
+            { value: 'primary', label: 'Blue (primary)', swatch: HS_SWATCH.link },
+            { value: 'light', label: 'Light', swatch: HS_SWATCH.light },
+            { value: 'dark', label: 'Dark', swatch: HS_SWATCH.dark },
+            { value: 'destructive', label: 'Red (destructive)', swatch: { fill: 'transparent', text: '#f2545b' } },
           ],
         },
         defaultValue: 'primary',
         group: 'Appearance',
-        description: 'The color variation of the link.',
+        description: 'The link’s color. Light is for dark backgrounds.',
       },
       TEST_ID_PROP,
     ],

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { allowPlainHealthCheck, isPlaceholder, normalizeHostingEnv } from './hosting';
 import cloudflareWorker, { stringBindings, withStaticHeaders, type CloudflareEnv } from './cloudflare';
-import vercelHandler, { PATH_PARAM, restoreOriginalPath, vercelAppUrl } from '../api/[...path]';
+import vercelHandler, { PATH_PARAM, restoreOriginalPath, vercelAppUrl, vercelEnv } from '../api/[...path]';
 import { DEFAULT_OPTIONAL_SCOPES, DEFAULT_REQUIRED_SCOPES } from './core/index';
 import type { ConnectorHealth } from '../src/connect/types';
 
@@ -136,6 +136,14 @@ describe('Vercel adapter', () => {
     expect(vercelAppUrl({ APP_URL: 'https://b.example.com/' }, 'https://x.vercel.app')).toBe('https://b.example.com');
     expect(vercelAppUrl({ VERCEL_PROJECT_PRODUCTION_URL: 'uiex.vercel.app' }, 'https://uiex-git-x.vercel.app')).toBe('https://uiex.vercel.app');
     expect(vercelAppUrl({}, 'https://preview.vercel.app')).toBe('https://preview.vercel.app');
+  });
+
+  it('passes the status page settings on (Edge Functions only see variables read by name)', () => {
+    vi.stubEnv('ADMIN_EMAILS', 'owner@example.com');
+    vi.stubEnv('ADMIN_PORTALS', '12345678');
+    vi.stubEnv('VERCEL_GIT_COMMIT_SHA', 'abc1234def');
+    expect(vercelEnv()).toMatchObject({ ADMIN_EMAILS: 'owner@example.com', ADMIN_PORTALS: '12345678', VERCEL_GIT_COMMIT_SHA: 'abc1234def' });
+    vi.unstubAllEnvs();
   });
 
   it('serves the connector health check through the rewrite', async () => {

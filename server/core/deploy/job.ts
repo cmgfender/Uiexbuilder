@@ -27,7 +27,7 @@
  * has automatic deploys turned off, the job queues the deploy itself, like `hs project deploy`,
  * because the admin has no terminal to run it.
  */
-import type { DeployPhase, DeployRequest, DeployStatus } from '../../../src/connect/types';
+import type { DeployKeyAccount, DeployPhase, DeployRequest, DeployStatus } from '../../../src/connect/types';
 import { HubSpotApiError, type ServerConfig, type SessionData } from '../types';
 import { ConnectorError } from '../http';
 import { seal, timingSafeEqual, unseal } from '../crypto';
@@ -49,7 +49,7 @@ import {
   type PersonalAccessKeyToken,
 } from './api';
 import { isLegacyPlatformVersion, meetsMinimumPlatformVersion, translateProject, type IntermediateRepresentationNode } from './ir';
-import { readProjectConfig, uploadSourceFiles, validateDeployFiles } from './paths';
+import { readProjectConfig, uploadSourceFiles, validateDeployFiles, type DeployFile } from './paths';
 import { createZip } from './zip';
 
 export const JOB_TOKEN_PURPOSE = 'deploy-job';
@@ -123,6 +123,8 @@ export class PortalMismatchError extends ConnectorError {
     hubName?: string,
     /** The target is the account the browser is connected to (deploys only go there). */
     connected = false,
+    /** The account the key belongs to (for the builder's fix-it screen). */
+    public key?: DeployKeyAccount,
   ) {
     super(
       409,
@@ -132,6 +134,89 @@ export class PortalMismatchError extends ConnectorError {
         : `This personal access key belongs to HubSpot account ${keyPortalId}${hubName ? ` (${hubName})` : ''}, but the deploy is going to account ${targetPortalId}. Use a key from account ${targetPortalId}, or deploy to account ${keyPortalId} instead.`,
     );
   }
+}
+
+/**
+ * A deploy (or key check) refused because of the personal access key or its account — missing
+ * permission, an account HubSpot or ALLOWED_PORTALS refuses. Carries the account the key belongs to,
+ * so the builder can name it and link to that account's key page.
+ */
+export class DeployKeyError extends ConnectorError {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    public key: DeployKeyAccount,
+    extra: { correlationId?: string; requiredScopes?: string[] } = {},
+  ) {
+    super(status, code, message, extra);
+    this.name = 'DeployKeyError';
+  }
+}
+
+/** "Acme (account 123)" / "account 123" — how messages name the account a key belongs to. */
+export function accountLabel(account: { portalId: number; name?: string }): string {
+  return account.name ? `${account.name} (account ${account.portalId})` : `account ${account.portalId}`;
+}
+
+/** The scope group HubSpot names for the "Developer projects" permission (what the fake and the CLI use). */
+export const DEVELOPER_PROJECTS_SCOPE = 'developer.projects.write';
+
+export function missingPermissionMessage(account: { portalId: number; name?: string }): string {
+  return `Your personal access key for ${accountLabel(account)} doesn’t have the “Developer projects” permission, so HubSpot won’t accept projects from it. On HubSpot’s personal access key page, add Developer projects to the key (or create a new key with it ticked), then check the key again.`;
+}
+
+export function portalNotAllowedDeployMessage(portalId: number): string {
+  return `This builder only publishes to specific HubSpot accounts, and account ${portalId} isn't one of them. Ask the person who set up this builder to add it to ALLOWED_PORTALS, or use a key from an allowed account.`;
+}
+
+/** What the builder may show about the account a key belongs to (never the key or its token). */
+export function keyAccountOf(config: ServerConfig, key: string, token: PersonalAccessKeyToken, session: SessionData | null): DeployKeyAccount {
+  const host = appHostForKey(key, session, token.portalId);
+  const account: DeployKeyAccount = {
+    portalId: token.portalId,
+    developerProjects: token.scopeGroups.length === 0 ? 'unknown' : lacksDeveloperProjects(token.scopeGroups) ? 'no' : 'yes',
+    keyPageUrl: `${appOrigin(config, host)}/personal-access-key/${token.portalId}`,
+  };
+  const name = token.hubName?.replace(/\s+/g, ' ').trim();
+  if (name) account.name = name.slice(0, 120);
+  if (token.accountType && /^[A-Z0-9_]{1,40}$/.test(token.accountType)) account.accountType = token.accountType;
+  return account;
+}
+
+/**
+ * A 403 from HubSpot while uploading, explained for the account the key belongs to: the key lacks
+ * Developer projects (missing_scope), developer projects aren't available in the account
+ * (not_available), or HubSpot refused for another reason (forbidden, with HubSpot's words).
+ * Anything else is returned unchanged.
+ */
+export function keyRefusal(err: unknown, account: DeployKeyAccount): unknown {
+  if (!(err instanceof HubSpotApiError) || err.status !== 403) return err;
+  const extra = { correlationId: err.correlationId, requiredScopes: err.requiredScopes };
+  const label = accountLabel(account);
+  if (err.code === 'not_available') {
+    return new DeployKeyError(
+      403,
+      'not_available',
+      `HubSpot says developer projects aren't available in ${label}, so it can't take your cards there. Publish to an account that shows Development in HubSpot's main menu (a developer test account works too), or ask HubSpot support to turn on developer projects for this account.`,
+      account,
+      extra,
+    );
+  }
+  if (err.code === 'missing_scope') {
+    return new DeployKeyError(403, 'missing_scope', missingPermissionMessage(account), { ...account, developerProjects: 'no' }, {
+      ...extra,
+      requiredScopes: err.requiredScopes?.length ? err.requiredScopes : [DEVELOPER_PROJECTS_SCOPE],
+    });
+  }
+  const said = err instanceof DeployApiError && err.hubspotMessage ? ` HubSpot said: “${err.hubspotMessage}”` : '';
+  return new DeployKeyError(
+    403,
+    'forbidden',
+    `HubSpot refused to take the project into ${label}.${said} Usually the key's user isn't allowed to use developer tools in that account: a Super Admin can allow it (Settings → Users & Teams → the user's permissions), or publish with their own key.`,
+    account,
+    extra,
+  );
 }
 
 /** The browser-binding cookie of deploy jobs (`__Host-uiex_deploy` on https). */
@@ -395,6 +480,23 @@ export function looksLikePrivateAppToken(key: string): boolean {
 export const PRIVATE_APP_TOKEN_HELP =
   'This looks like a private app access token (it starts with “pat-”). Deploying needs your personal access key from the Personal access key page instead — a much longer code. Use the Copy button next to it.';
 
+/**
+ * Checks the key's shape, then exchanges it with HubSpot (invalid_key / missing_key otherwise; a
+ * private app token gets its own explanation). Shared by deploys and key checks.
+ */
+export async function exchangeDeployKey(config: ServerConfig, key: string): Promise<PersonalAccessKeyToken> {
+  const keyProblem = personalAccessKeyProblem(key);
+  if (keyProblem) throw bad(key ? 'invalid_key' : 'missing_key', keyProblem);
+  try {
+    return await exchangePersonalAccessKey(config, key);
+  } catch (err) {
+    if (err instanceof DeployApiError && err.code === 'invalid_key' && looksLikePrivateAppToken(key)) {
+      throw new DeployApiError(PRIVATE_APP_TOKEN_HELP, 400, 'invalid_key', [], err.correlationId);
+    }
+    throw err;
+  }
+}
+
 export async function startDeploy(config: ServerConfig, raw: unknown, opts: StartDeployOptions): Promise<StartResult> {
   if (!sessionSecretUsable(config)) {
     throw new ConnectorError(503, 'not_configured', 'Deploying from the builder needs SESSION_SECRET (at least 32 random characters) on the server. Ask whoever hosts the builder to set it.');
@@ -428,31 +530,26 @@ export async function startDeploy(config: ServerConfig, raw: unknown, opts: Star
   if (!key && req.useRememberedKey) {
     throw bad('no_remembered_key', "The builder doesn't save personal access keys. Paste your key to deploy.");
   }
-  const keyProblem = personalAccessKeyProblem(key);
-  if (keyProblem) throw bad(key ? 'invalid_key' : 'missing_key', keyProblem);
-  let token: PersonalAccessKeyToken;
-  try {
-    token = await exchangePersonalAccessKey(config, key);
-  } catch (err) {
-    if (err instanceof DeployApiError && err.code === 'invalid_key' && looksLikePrivateAppToken(key)) {
-      throw new DeployApiError(PRIVATE_APP_TOKEN_HELP, 400, 'invalid_key', [], err.correlationId);
-    }
-    throw err;
-  }
+  const token = await exchangeDeployKey(config, key);
+  const account = keyAccountOf(config, key, token, sessionData);
 
   if (sessionData) {
-    if (token.portalId !== sessionData.portalId) throw new PortalMismatchError(token.portalId, sessionData.portalId, token.hubName, true);
+    if (token.portalId !== sessionData.portalId) throw new PortalMismatchError(token.portalId, sessionData.portalId, token.hubName, true, account);
   } else if (req.portalId !== undefined && req.portalId !== token.portalId) {
-    throw new PortalMismatchError(token.portalId, req.portalId, token.hubName);
+    throw new PortalMismatchError(token.portalId, req.portalId, token.hubName, false, account);
   }
   if (!portalAllowed(config, token.portalId)) {
-    throw new ConnectorError(
-      403,
-      'portal_not_allowed',
-      `This builder only deploys to specific HubSpot accounts, and account ${token.portalId} isn't one of them. Ask the person who set up this builder to add it.`,
-    );
+    throw new DeployKeyError(403, 'portal_not_allowed', portalNotAllowedDeployMessage(token.portalId), account);
   }
+  try {
+    return await uploadProject(config, req, src, state0(config, req, token, key, sessionData, opts.binding), token);
+  } catch (err) {
+    // 403s while talking to HubSpot are about the key or its account: name the account and the fix.
+    throw keyRefusal(err, account);
+  }
+}
 
+function state0(config: ServerConfig, req: ParsedDeployRequest, token: PersonalAccessKeyToken, key: string, sessionData: SessionData | null, binding: string): JobState {
   const state: JobState = {
     v: 1,
     s: 'build',
@@ -467,11 +564,15 @@ export async function startDeploy(config: ServerConfig, raw: unknown, opts: Star
     e: 0,
     l: [],
     st: config.now(),
-    k: opts.binding,
+    k: binding,
   };
   pushLog(state, `Signed in to HubSpot account ${token.portalId}${token.hubName ? ` (${token.hubName})` : ''} with your personal access key.`);
   if (lacksDeveloperProjects(token.scopeGroups)) pushLog(state, 'Warning: this key may be missing the “Developer projects” permission.');
+  return state;
+}
 
+/** Steps 3-5 of a deploy: component schemas, the project (created when missing), the upload. */
+async function uploadProject(config: ServerConfig, req: ParsedDeployRequest, src: DeployFile[], state: JobState, token: PersonalAccessKeyToken): Promise<StartResult> {
   const client = new DeployHubSpotClient(config, token.accessToken, token.portalId);
 
   // 3. Component schemas for the platform version (project-parsing-lib fetches them to validate).
@@ -480,6 +581,11 @@ export async function startDeploy(config: ServerConfig, raw: unknown, opts: Star
     schemas = await projectsApi.fetchSchemas(client, req.platformVersion);
   } catch (err) {
     if (err instanceof HubSpotApiError && err.status === 403) {
+      // A bare 403 here means the key can't use developer projects (keyRefusal names the account) —
+      // unless HubSpot listed the key's scope groups with developer projects in them: then it is
+      // about something else (the account, the user), and HubSpot's own answer is kept.
+      const keyHasProjects = token.scopeGroups.length > 0 && !lacksDeveloperProjects(token.scopeGroups);
+      if (err.code === 'not_available' || (keyHasProjects && err.code === 'forbidden')) throw err;
       throw new DeployApiError(DEVELOPER_PROJECTS_PERMISSION_HELP, 403, 'missing_scope', errorLines(err), err.correlationId, err.requiredScopes);
     }
     if (!(err instanceof DeployApiError) || err.code !== 'not_found') throw err;

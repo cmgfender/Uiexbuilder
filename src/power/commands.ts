@@ -8,6 +8,9 @@ import {
   ArrowUpToLine,
   Blocks,
   ClipboardCopy,
+  ClipboardPaste,
+  ListFilter,
+  SlidersHorizontal,
   Code,
   CopyPlus,
   Database,
@@ -57,7 +60,7 @@ import { showRightTab } from '../shell/shellStore';
 import { formatShortcut, SHORTCUTS } from '../shell/shortcuts';
 import { insertBlock, prepareBlock } from '../templates/actions';
 import type { BlockTemplate } from '../templates/catalog';
-import { copyToClipboard, ensureDesignMode, goToNode, showBottomPanel, showLeftPanel, type Notify } from './actions';
+import { addShapedList, copyToClipboard, ensureDesignMode, goToNode, showBottomPanel, showLeftPanel, type Notify } from './actions';
 import { usePowerUi } from './uiStore';
 
 export type CommandGroup = 'Actions' | 'Events' | 'Insert' | 'Blocks' | 'Go to' | 'Extensions' | 'Data' | 'View' | 'Project';
@@ -232,6 +235,51 @@ function selectionCommands(ext: Extension, selected: NodeId | null): Command[] {
   ];
 }
 
+/**
+ * Copy settings / Paste settings (model/settings): the selected component's props, text and rules
+ * onto other components of the same type — the whole multi-selection when several are selected.
+ */
+function settingsCommands(ext: Extension, selected: NodeId | null): Command[] {
+  const { settingsClipboard: clip, selectedNodeIds } = useEditor.getState();
+  const node = selected ? ext.nodes[selected] : undefined;
+  const targets = (selectedNodeIds.length > 1 ? selectedNodeIds : selected ? [selected] : []).filter((id) => !!ext.nodes[id]);
+  const matching = clip ? targets.filter((id) => ext.nodes[id].type === clip.type) : [];
+  return [
+    {
+      id: 'action:copySettings',
+      title: 'Copy settings',
+      group: 'Actions',
+      icon: SlidersHorizontal,
+      subtitle: node ? `${nodeTitle(ext, node.id)} — look, text and rules (not its id)` : undefined,
+      keywords: ['copy style', 'copy properties', 'format painter', 'props', 'reuse'],
+      disabledReason: node ? undefined : 'Select a component on the canvas first',
+      run: ({ notify }) => {
+        const c = useEditor.getState().copySettings(selected!);
+        if (c) notify(`Copied the settings of ${c.label}`);
+      },
+    },
+    {
+      id: 'action:pasteSettings',
+      title: targets.length > 1 ? `Paste settings onto ${targets.length} components` : 'Paste settings',
+      group: 'Actions',
+      icon: ClipboardPaste,
+      subtitle: clip ? `From ${clip.label}` : undefined,
+      keywords: ['paste style', 'paste properties', 'format painter', 'apply', 'props'],
+      disabledReason: !clip
+        ? 'Copy the settings of a component first'
+        : !targets.length
+          ? 'Select a component on the canvas first'
+          : !matching.length
+            ? `The copied settings are for a ${typeLabel(clip.type)}`
+            : undefined,
+      run: ({ notify }) => {
+        const n = useEditor.getState().pasteSettings(matching);
+        notify(n ? `Pasted the settings of ${clip!.label} onto ${n} component${n === 1 ? '' : 's'}` : 'They already have these settings');
+      },
+    },
+  ];
+}
+
 function generalCommands(src: CommandSources, ext: Extension): Command[] {
   const { state } = src;
   const designing = state.mode === 'design';
@@ -270,6 +318,7 @@ function generalCommands(src: CommandSources, ext: Extension): Command[] {
       },
     },
     ...selectionCommands(ext, state.selectedNodeId && ext.nodes[state.selectedNodeId] ? state.selectedNodeId : null),
+    ...settingsCommands(ext, state.selectedNodeId && ext.nodes[state.selectedNodeId] ? state.selectedNodeId : null),
   ];
 }
 
@@ -445,6 +494,28 @@ const DATA_SOURCE_KEYWORDS: Partial<Record<DataSourceKind, string[]>> = {
   function: ['function', 'serverless', 'backend', 'server', 'hubspot.serverless'],
 };
 
+/** "Filter or sort <list>": a shaped list (power/shape) of each CRM list data source and list variable. */
+function listCommands(ext: Extension): Command[] {
+  const lists = [
+    ...ext.dataSources.filter((d) => d.kind === 'associations' || d.kind === 'crmSearch').map((d) => d.name),
+    ...ext.state.filter((v) => v.type === 'array').map((v) => v.name),
+  ];
+  return lists.map((name) => ({
+    id: `data:shape:${name}`,
+    title: `Filter or sort ${name}`,
+    group: 'Data' as const,
+    icon: ListFilter,
+    subtitle: 'Only some rows, in an order, the first few, formatted values — no code',
+    keywords: ['filter', 'sort', 'order', 'limit', 'top', 'format', 'currency', 'date', 'list', 'rows', 'view'],
+    run: ({ notify }: CommandEnv) => {
+      const c = addShapedList(name);
+      showLeftPanel('data');
+      usePowerUi.getState().revealComputed(c.id);
+      notify(`Added “${c.name}” — choose filters, sorting and formats under Computed`);
+    },
+  }));
+}
+
 function dataCommands(ext: Extension): Command[] {
   const crm = ext.kind === 'card';
   const out: Command[] = [
@@ -492,6 +563,7 @@ function dataCommands(ext: Extension): Command[] {
         usePowerUi.getState().revealComputed(c.id);
       },
     },
+    ...listCommands(ext),
     {
       id: 'data:helpers',
       title: 'Edit helper functions',
