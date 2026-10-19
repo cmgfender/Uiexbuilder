@@ -1,5 +1,92 @@
 # Project status log
 
+## 2026-10-19 — paused at the owner's request
+
+**Live:** https://uiex-builder.onrender.com runs commit `9cf7a55` on branch
+`claude/ui-extension-builder`. Its full gate passed: `tsc -b`, 2,886 unit tests, the build,
+Playwright ×2 and `e2e:connect` ×2.
+
+**Render** (service `srv-db8llg3bc2fs73frmrb0`):
+
+- `ADMIN_EMAILS` and `ADMIN_PORTALS=49452238` are set, so `/status` opens for the owner after
+  signing in with HubSpot.
+- Pushes do not auto-deploy. Trigger a deploy after pushing.
+
+**Shipped in this stretch (all live):**
+
+- **Rules:** set any simple setting or text by thresholds.
+- **Easier editor:**
+  - inserting a block selects its main component
+  - an "Inside this layout box" list
+  - plain labels showing the exact HubSpot prop name
+  - visual color, spacing and direction choices
+  - Filter settings (`/`) and "You can also" tips
+- **Guided sign-in and publish:**
+  - "What did HubSpot show?" when the sign-in window closes
+  - the personal access key is checked before upload, including the "Developer projects"
+    permission
+- **Private `/status` page:** the `[event]` log lines and the error code in the access log.
+- **Power-user tools:**
+  - a condition builder for Show when and If steps
+  - list shaping (filter, sort, limit, format)
+  - copy and paste settings, and multi-edit
+  - Rules in actions
+
+**Paused round.** The owner chose items 3, 5, 7, 8 and 9 from the suggestions. Three agents had
+just started on the first four when the owner paused. Their partial work is on branch
+`wip/next-round` (commit after `9cf7a55`). It is not wired in, and `tsc` fails on it until
+`src/inspector/actionModel.ts` handles `crmWrite`.
+
+1. **Write to HubSpot actions** (item 3):
+   - update properties, create a note, create a task, associate records
+   - generated app function and write scopes added automatically
+   - the preview only simulates writes
+   - one-click presets: "Mark as customer", "Move deal to next stage", "Log a note", "Follow-up
+     task in 3 days", "Set owner to me"
+   - done: the model types only (`CrmWriteOperation`, target, property assignments, task owner
+     and due settings) in `src/model/types.ts`
+2. **Table editor** (item 5):
+   - a grid for columns and rows
+   - columns chosen for you from the bound list (e.g. deals: name, amount as currency, stage,
+     close date)
+   - pagination, empty and loading states on by default
+   - goal: 1–3 clicks to a live table
+   - not started in code
+3. **Number filters on formatted values** (item 7): `src/power/numbers.ts` (`toNumber`) is written
+   but not yet used by the condition builder, the list shaper or codegen.
+4. **Multi-select actions** (item 8): duplicate, copy, cut, paste, move, drag and wrap on the whole
+   selection, a "3 selected" bar, and shift-range selection in the layers tree. Not started.
+5. **Real-world templates** (item 9): deal health, renewal risk, onboarding checklist and ticket
+   SLA, each one click to a working card with live data. Planned after items 3, 5, 7 and 8.
+
+**Owner's product principle (applies to all future work):** building a card here must be easier
+and quicker than typing a fresh prompt into an AI. That means:
+
+- one-click presets, no empty forms
+- defaults prefilled from the card's record and the real portal schema
+- instant live preview
+- plain words, advanced options folded away
+- click counts measured
+
+**Ideas offered and not yet decided:**
+
+- a "Describe it" box that builds a card from a sentence (needs an Anthropic API key on Render)
+- the Render Starter plan, to avoid free-plan cold starts and keep `/status` history
+- saved projects and sharing (needs a database)
+- a dark theme for the editor
+- a custom domain and `ALLOWED_PORTALS`
+- a Marketplace listing (more than 25 installs)
+
+**Still open from earlier:**
+
+- the key-permission check is untested against a real HubSpot key
+- the editor has no dark theme
+- `/status` history is lost when the free server sleeps
+
+**To resume:** `git checkout wip/next-round` (or cherry-pick it onto `claude/ui-extension-builder`)
+and continue items 3, 5, 7 and 8 with the UX principle above. Then items 9, the full gate,
+commit, push and a Render deploy.
+
 ## 2026-10-18 (later) — independent review: 7 findings checked, all real, all fixed
 
 An independent reviewer reported seven findings. Each was reproduced first (their scratch tests
