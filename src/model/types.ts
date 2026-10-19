@@ -214,6 +214,102 @@ export interface RunFunctionAction extends ActionBase {
   onError?: ActionStep[];
 }
 
+/**
+ * What a "Write to HubSpot" step does. Cards can't call HubSpot's CRM write APIs themselves, so
+ * the exported project gets one generated app function (codegen/crmWrite.ts) that makes the call
+ * with the app's access token; the card runs it with hubspot.serverless.
+ */
+export type CrmWriteOperation = 'updateRecord' | 'createNote' | 'createTask' | 'associateRecords';
+
+/** The record a write step changes: the card's own record, or another one by object type + id. */
+export interface CrmWriteTarget {
+  kind: 'current' | 'other';
+  /** kind 'other': object type name or id ('companies', '0-2', 'p_projects'). */
+  objectType?: string;
+  /** kind 'other': template string of the record id, e.g. "{{ companies[0].toObjectId }}". */
+  objectId?: string;
+}
+
+/** One property an "Update record" step sets. */
+export interface CrmPropertyAssignment {
+  /** Internal property name, e.g. `lifecyclestage`. */
+  name: string;
+  /**
+   * Template string: fixed text ("customer"), a value ("{{ stage }}", a single segment keeps the
+   * value's type, e.g. a DateInput date), or rules as one `{{ … }}` segment. Ignored with `special`.
+   */
+  value: string;
+  /**
+   * Values worked out when the step runs: 'nextStage' moves a pipeline stage property (dealstage,
+   * hs_pipeline_stage) to the next stage of the record's pipeline; 'currentUser' sets an owner
+   * property to the HubSpot owner of the person who clicks.
+   */
+  special?: 'nextStage' | 'currentUser';
+}
+
+/** Who a created task is assigned to. */
+export type CrmTaskOwner =
+  | { kind: 'none' }
+  /** The person who clicks (their HubSpot owner). */
+  | { kind: 'currentUser' }
+  /** The owner of the record the task is for. */
+  | { kind: 'recordOwner' }
+  /** A specific owner id (template string). */
+  | { kind: 'id'; value: string };
+
+/** When a created task is due. */
+export type CrmTaskDue =
+  /** This many days from when the button is clicked (0 = today). */
+  | { kind: 'inDays'; days: number }
+  /** A date (template): "2026-11-01", a timestamp or a DateInput value ("{{ dueDate }}"). */
+  | { kind: 'value'; value: string };
+
+export interface CrmTaskSettings {
+  /** Template string (required). */
+  title: string;
+  /** Template string. */
+  body?: string;
+  due: CrmTaskDue;
+  owner: CrmTaskOwner;
+  priority?: 'LOW' | 'MEDIUM' | 'HIGH';
+}
+
+/** Failures the preview can simulate for a write step (never in generated code). */
+export type CrmWriteFailure = 'permission' | 'notFound' | 'invalid' | 'busy';
+
+/**
+ * "Write to HubSpot": update the record's properties, log a note, create a task or associate the
+ * record with another one. Afterwards it can refresh the record's properties on the page, show a
+ * success / error alert and store the function's result; `onSuccess` / `onError` run further
+ * steps (`response` / `error` in scope, as for app functions).
+ */
+export interface CrmWriteAction extends ActionBase {
+  type: 'crmWrite';
+  operation: CrmWriteOperation;
+  /** The record that is updated / gets the note or task / is associated. */
+  target: CrmWriteTarget;
+  /** updateRecord */
+  properties?: CrmPropertyAssignment[];
+  /** createNote: the note text (template string). */
+  noteBody?: string;
+  /** createTask */
+  task?: CrmTaskSettings;
+  /** associateRecords: the record the target is associated with. */
+  associateWith?: { objectType: string; objectId: string };
+  /** Then: refresh the record's properties on the page (CRM cards). */
+  refresh?: boolean;
+  /** Then: a success alert with this message (template; `response` in scope). Empty = none. */
+  successMessage?: string;
+  /** Then: an error alert with this message (template; `error` in scope). Empty = none. */
+  errorMessage?: string;
+  /** Store the function's result ({ ok, id, … }) in this state variable. */
+  resultState?: string;
+  onSuccess?: ActionStep[];
+  onError?: ActionStep[];
+  /** Preview only: fail with this kind of error instead of succeeding (designer-only). */
+  previewFailure?: CrmWriteFailure;
+}
+
 /** logger.<level>(message). message is a template string. */
 export interface LogAction extends ActionBase {
   type: 'log';
@@ -246,6 +342,7 @@ export type ActionStep =
   | RunDataSourceAction
   | FetchAction
   | RunFunctionAction
+  | CrmWriteAction
   | LogAction
   | IfAction
   | CustomCodeAction;
